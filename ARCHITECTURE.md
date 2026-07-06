@@ -45,7 +45,7 @@ The backend is a Bun and TypeScript application compiled to a single native bina
 
 - `src/index.ts` registers the CLI commands and boots the process. Running `openscience` with no subcommand opens the workspace (`src/cli/cmd/web.ts`).
 - `src/server` is a Hono server. It serves the embedded workspace UI, exposes the session and tool APIs, and streams events back to the browser over SSE.
-- `src/session` is the agent runtime: the message loop, tool dispatch, compaction, and provenance.
+- `src/session` is the agent runtime: the message loop, tool dispatch, compaction, provenance, and an optional blind reviewer gate that runs at finalize.
 - `src/agent` holds the agent registry and prompts. The default agent is `research`; `biology`, `physics`, and `ml` are specialists; `plan` is a read-only mode.
 - `src/provider` routes each request to a model. Model definitions come from [models.dev](https://models.dev), cached locally with a bundled snapshot as a fallback.
 - `src/tool` and `src/science` implement the tools the agent can call, including the shell, editor, LSP bridge, MCP client, and the scientific database connectors.
