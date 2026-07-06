@@ -80,3 +80,5 @@ const bazFoo = 3
 
 You MUST avoid using `mocks` as much as possible.
 Tests MUST test actual implementation, do not duplicate logic into a test.
+
+Run the suite with `bun test` from `backend/cli`.
