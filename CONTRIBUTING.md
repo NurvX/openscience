@@ -81,6 +81,17 @@ The UI dev server prints its local URL (usually http://localhost:5173). The API 
 
 If you change the API or SDK (for example `backend/cli/src/server/server.ts`), run `./tooling/repo/generate.ts` to regenerate the SDK and related files.
 
+### Working on the docs or landing site
+
+The documentation site is `frontend/docs` and the marketing site is `frontend/landing`. Run either with its dev server:
+
+```bash
+bun run --cwd frontend/docs dev
+bun run --cwd frontend/landing dev
+```
+
+Docs pages live under `frontend/docs/src/content/openscience/` as MDX; keep them plain-markdown — the MDX parser is deprecated and those files are excluded from Prettier.
+
 Please follow the [style guide](./AGENTS.md).
 
 ## Pull requests
