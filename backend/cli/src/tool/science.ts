@@ -1,6 +1,7 @@
 import z from "zod"
 import { Tool } from "./tool"
 import { registry } from "../science/connectors"
+import type { ConnectorHit } from "../science/connectors"
 
 /**
  * Small, database-agnostic surface over the scientific connector registry.
@@ -81,11 +82,35 @@ export const ScienceSearchTool = Tool.define("science_search", {
     }
 
     const limit = Math.min(Math.max(params.limit, 1), 50)
-    const hits = await connector.search(params.query, {
-      limit,
-      organism: params.organism,
-      signal: ctx.abort,
-    })
+    let hits: ConnectorHit[]
+    try {
+      hits = await connector.search(params.query, {
+        limit,
+        organism: params.organism,
+        signal: ctx.abort,
+      })
+    } catch (err) {
+      // A source error is NOT the same as "no results" — surface it as an
+      // actionable, degraded result instead of throwing a raw `HTTP 429` string.
+      if (ctx.abort.aborted) throw err
+      const message = err instanceof Error ? err.message : String(err)
+      const rateLimited = /\b(429|503|408)\b/.test(message) || /rate.?limit/i.test(message)
+      const guidance = rateLimited
+        ? `${connector.name} is rate limiting requests. Wait a few seconds, then retry${
+            connector.id === "arxiv" ? " (arXiv allows ~1 request every 3s)" : ""
+          }.`
+        : `${connector.name} returned an error: ${message}`
+      return {
+        title: `${connector.name} temporarily unavailable — ${rateLimited ? "rate limited, retry shortly" : "source error"}`,
+        output: [`Could not complete the search for "${params.query}".`, guidance].join("\n"),
+        metadata: {
+          db: connector.id,
+          count: 0,
+          error: rateLimited ? "rate_limited" : "source_error",
+          message,
+        } as Record<string, unknown>,
+      }
+    }
 
     if (!hits.length) {
       return {
