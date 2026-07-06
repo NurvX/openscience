@@ -59,6 +59,20 @@ export interface FetchOptions {
   signal?: AbortSignal
 }
 
+/**
+ * Per-host politeness limits a connector can request for its HTTP calls.
+ *
+ * Applied per URL host by the shared http layer, so a multi-DB fan-out is never
+ * over-serialized. arXiv, for example, asks for ~1 request every 3s
+ * (`minIntervalMs: 3000`); keyless Semantic Scholar wants ~1000ms.
+ */
+export interface RateLimit {
+  /** Minimum spacing between the START of requests to the same host, in ms. */
+  minIntervalMs?: number
+  /** Max concurrent in-flight requests to the same host. */
+  maxConcurrent?: number
+}
+
 /** The uniform contract every scientific data source implements. */
 export interface Connector {
   /** Unique, stable, lowercase id used to route (e.g. "uniprot", "rcsb-pdb"). */
