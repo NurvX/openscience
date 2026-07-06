@@ -222,7 +222,7 @@ function resolveAtlasPackageDir(): string | null {
   for (const start of starts) {
     let dir = start
     while (true) {
-      const candidate = path.join(dir, "node_modules", "@openscience", "atlas", "package.json")
+      const candidate = path.join(dir, "node_modules", "@synsci", "atlas", "package.json")
       if (existsSync(candidate)) return path.dirname(candidate)
       const parent = path.dirname(dir)
       if (parent === dir) break
@@ -299,6 +299,15 @@ export namespace OpenScience {
       }
     })()
     return `openscience · ${process.platform} · ${host}`
+  }
+
+  // Bound every Atlas client call. A slow/unresponsive backend must never hang
+  // the caller: the per-command sync-version probe and `openscience project init`
+  // both go through Atlas fetches, and with the agent's bash tool also unbounded a
+  // hang wedged whole sessions for >60 min. Overridable via OPENSCIENCE_ATLAS_TIMEOUT_MS.
+  const ATLAS_FETCH_TIMEOUT_MS = Number(process.env["OPENSCIENCE_ATLAS_TIMEOUT_MS"]) || 60_000
+  function atlasFetch(input: string, init: RequestInit = {}, timeoutMs = ATLAS_FETCH_TIMEOUT_MS): Promise<Response> {
+    return fetch(input, { ...init, signal: init.signal ?? AbortSignal.timeout(timeoutMs) })
   }
 
   export async function getSession(): Promise<OpenScienceSession | null> {
@@ -395,7 +404,7 @@ export namespace OpenScience {
 
     let v: number | null = null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/sync/version`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/sync/version`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
       if (!res.ok) return // fail open — keep current env
@@ -632,7 +641,7 @@ export namespace OpenScience {
 
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      const startRes = await fetch(`${API_BASE}/api/v1/auth/cli/browser/start`, {
+      const startRes = await atlasFetch(`${API_BASE}/api/v1/auth/cli/browser/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ state, redirect_uri: redirectUri, name }),
@@ -652,7 +661,7 @@ export namespace OpenScience {
         }),
       ])
 
-      const redeemRes = await fetch(`${API_BASE}/api/v1/auth/cli/browser/redeem`, {
+      const redeemRes = await atlasFetch(`${API_BASE}/api/v1/auth/cli/browser/redeem`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({
@@ -686,7 +695,7 @@ export namespace OpenScience {
     if (!key.startsWith("thk_")) {
       throw new Error("Expected an API key starting with `thk_`.")
     }
-    const res = await fetch(`${API_BASE}/api/cli/balance`, {
+    const res = await atlasFetch(`${API_BASE}/api/cli/balance`, {
       headers: { Authorization: `Bearer ${key}` },
     })
     if (res.status === 401 || res.status === 403) {
@@ -704,6 +713,16 @@ export namespace OpenScience {
     return session
   }
 
+  /** Write a file atomically (temp + rename) so a crash mid-write can never
+   *  leave a torn file — a torn synced-env.json silently drops managed keys, and
+   *  a torn openscience-synced.json throws during config load and bricks the CLI
+   *  until it's removed by hand. */
+  async function atomicWrite(filepath: string, content: string, options?: { mode?: number }): Promise<void> {
+    const tmp = `${filepath}.${process.pid}.tmp`
+    await Bun.write(tmp, content, options)
+    await fs.rename(tmp, filepath)
+  }
+
   /** Fetch all connected service credentials and inject as env vars */
   export async function syncServices(): Promise<{
     user: SyncResponse["user"]
@@ -717,7 +736,7 @@ export namespace OpenScience {
     await ensureAtlasCliConfig(session)
 
     try {
-      const res = await fetch(`${API_BASE}/api/cli/sync`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/sync`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
 
@@ -782,12 +801,25 @@ export namespace OpenScience {
       }
       syncedSecretValues.clear()
       for (const [key, value] of fresh.entries()) {
-        try {
-          Env.set(key, value)
-        } catch {
-          /* Instance not initialized */
+        // Respect precedence: never clobber a user's own shell export or BYOK
+        // value. Only write the synced value when the slot is empty or already
+        // holds a previously-synced value — mirroring preload-env.ts's "shell
+        // exports win". Without this, a background sync could overwrite an
+        // exported ANTHROPIC_API_KEY with a managed thk_ key mid-session,
+        // silently turning a free BYOK call into a billed managed one.
+        const current = process.env[key]
+        const ownsSlot = !current || previous.get(key) === current || current === value
+        if (ownsSlot) {
+          try {
+            Env.set(key, value)
+          } catch {
+            /* Instance not initialized */
+          }
+          process.env[key] = value
         }
-        process.env[key] = value
+        // Track the synced value regardless (for redaction + later cleanup). A
+        // shadowing shell export is left untouched by the unset pass above, which
+        // only removes a var whose live value still equals the synced one.
         syncedSecretValues.set(key, value)
       }
 
@@ -796,7 +828,7 @@ export namespace OpenScience {
         try {
           const managedDir = getSyncedConfigDir()
           await fs.mkdir(managedDir, { recursive: true })
-          await Bun.write(
+          await atomicWrite(
             path.join(managedDir, "openscience-synced.json"),
             JSON.stringify({ $schema: "https://syntheticsciences.ai/config.json", ...data.config }, null, 2),
             { mode: 0o600 },
@@ -819,7 +851,9 @@ export namespace OpenScience {
         for (const [k, v] of fresh.entries()) {
           envSnapshot[k] = v
         }
-        await Bun.write(path.join(managedDir, "synced-env.json"), JSON.stringify(envSnapshot, null, 2), { mode: 0o600 })
+        await atomicWrite(path.join(managedDir, "synced-env.json"), JSON.stringify(envSnapshot, null, 2), {
+          mode: 0o600,
+        })
       } catch (e) {
         log.warn("failed to persist synced env", { error: e instanceof Error ? e.message : String(e) })
       }
@@ -1023,7 +1057,7 @@ export namespace OpenScience {
     if (!session) return null
 
     try {
-      const res = await fetch(`${API_BASE}/api/cli/skills`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/skills`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
 
@@ -1053,7 +1087,7 @@ export namespace OpenScience {
     if (!session) return null
 
     try {
-      const res = await fetch(`${API_BASE}/api/cli/skills/${encodeURIComponent(name)}`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/skills/${encodeURIComponent(name)}`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
 
@@ -1122,7 +1156,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/balance`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/balance`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
       if (!res.ok) return null
@@ -1173,7 +1207,7 @@ export namespace OpenScience {
     session: OpenScienceSession,
   ): Promise<{ ok: boolean; permanent: boolean; data?: any; modelBlocked?: boolean }> {
     try {
-      const res = await fetch(`${API_BASE}/api/cli/usage`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/usage`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.api_key}`,
@@ -1341,7 +1375,7 @@ export namespace OpenScience {
     if (!session) return null
 
     try {
-      const res = await fetch(`${API_BASE}/api/cli/learned-skills`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/learned-skills`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
 
@@ -1372,7 +1406,7 @@ export namespace OpenScience {
     if (!session) return null
 
     try {
-      const res = await fetch(`${API_BASE}/api/cli/learned-skills/${encodeURIComponent(name)}`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/learned-skills/${encodeURIComponent(name)}`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
 
@@ -1407,7 +1441,7 @@ export namespace OpenScience {
     if (!session) return false
 
     try {
-      const res = await fetch(`${API_BASE}/api/cli/learned-skills`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/learned-skills`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.api_key}`,
@@ -1445,7 +1479,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/devices`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/devices`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
       if (!res.ok) {
@@ -1464,7 +1498,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return false
     try {
-      const res = await fetch(`${API_BASE}/api/cli/devices/${encodeURIComponent(keyId)}`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/devices/${encodeURIComponent(keyId)}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
@@ -1472,6 +1506,88 @@ export namespace OpenScience {
     } catch (e) {
       log.warn("revoke device error", { error: e instanceof Error ? e.message : String(e) })
       return false
+    }
+  }
+
+  // === Wallet / credits ===
+
+  export interface Credits {
+    balanceUsd: number
+    cliBalanceCents: number
+    cycleCreditsRemainingCents: number
+    lifetimeSpentCents: number
+  }
+
+  export async function getCredits(): Promise<Credits | null> {
+    const session = await getSession()
+    if (!session) return null
+    try {
+      const res = await atlasFetch(`${API_BASE}/api/credits`, {
+        headers: { Authorization: `Bearer ${session.api_key}` },
+      })
+      if (!res.ok) return null
+      const d = (await res.json()) as {
+        unified_balance_cents?: number
+        balance_cents?: number
+        cli_balance_cents?: number
+        cycle_credits_remaining_cents?: number
+        lifetime_spent_cents?: number
+      }
+      const cents = d.unified_balance_cents ?? d.balance_cents ?? 0
+      return {
+        balanceUsd: cents / 100,
+        cliBalanceCents: d.cli_balance_cents ?? d.balance_cents ?? 0,
+        cycleCreditsRemainingCents: d.cycle_credits_remaining_cents ?? 0,
+        lifetimeSpentCents: d.lifetime_spent_cents ?? 0,
+      }
+    } catch (e) {
+      log.warn("getCredits error", { error: e instanceof Error ? e.message : String(e) })
+      return null
+    }
+  }
+
+  export interface Transaction {
+    id: string
+    amountCents: number
+    source: string
+    description: string
+    createdAt: string
+  }
+
+  export async function getTransactions(limit = 20): Promise<Transaction[] | null> {
+    const session = await getSession()
+    if (!session) return null
+    try {
+      const res = await atlasFetch(`${API_BASE}/api/credits/transactions`, {
+        headers: { Authorization: `Bearer ${session.api_key}` },
+      })
+      if (!res.ok) return null
+      const body = (await res.json()) as
+        | Array<Record<string, unknown>>
+        | { transactions?: Array<Record<string, unknown>> }
+      const rows = Array.isArray(body) ? body : (body.transactions ?? [])
+      return rows.slice(0, limit).map((r) => ({
+        id: String(r["id"] ?? ""),
+        amountCents: Number(r["amount_cents"] ?? 0),
+        source: String(r["source"] ?? ""),
+        description: String(r["description"] ?? ""),
+        createdAt: String(r["created_at"] ?? ""),
+      }))
+    } catch (e) {
+      log.warn("getTransactions error", { error: e instanceof Error ? e.message : String(e) })
+      return null
+    }
+  }
+
+  /** Version of the bundled @synsci/atlas companion CLI, or null if unresolved. */
+  export async function atlasCliVersion(): Promise<string | null> {
+    const dir = resolveAtlasPackageDir()
+    if (!dir) return null
+    try {
+      const pkg = (await Bun.file(path.join(dir, "package.json")).json()) as { version?: string }
+      return pkg.version ?? null
+    } catch {
+      return null
     }
   }
 
@@ -1488,7 +1604,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/billing-mode`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/billing-mode`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
       if (!res.ok) return null
@@ -1503,7 +1619,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/billing-mode`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/billing-mode`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.api_key}`,
@@ -1552,7 +1668,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/installed-skills`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/installed-skills`, {
         headers: { Authorization: `Bearer ${session.api_key}` },
       })
       if (!res.ok) {
@@ -1571,7 +1687,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(
+      const res = await atlasFetch(
         `${API_BASE}/api/cli/installed-skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
         { headers: { Authorization: `Bearer ${session.api_key}` } },
       )
@@ -1598,7 +1714,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/installed-skills`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/installed-skills`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1630,7 +1746,7 @@ export namespace OpenScience {
     const session = await getSession()
     if (!session) return null
     try {
-      const res = await fetch(`${API_BASE}/api/cli/skill-review`, {
+      const res = await atlasFetch(`${API_BASE}/api/cli/skill-review`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1652,7 +1768,7 @@ export namespace OpenScience {
   export async function deleteInstalledSkill(namespace: string, name: string): Promise<boolean> {
     const session = await getSession()
     if (!session) return false
-    const res = await fetch(
+    const res = await atlasFetch(
       `${API_BASE}/api/cli/installed-skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
       { method: "DELETE", headers: { Authorization: `Bearer ${session.api_key}` } },
     )
@@ -1662,7 +1778,7 @@ export namespace OpenScience {
   export async function deleteInstalledNamespace(namespace: string): Promise<{ archived: number } | null> {
     const session = await getSession()
     if (!session) return null
-    const res = await fetch(`${API_BASE}/api/cli/installed-skills/${encodeURIComponent(namespace)}`, {
+    const res = await atlasFetch(`${API_BASE}/api/cli/installed-skills/${encodeURIComponent(namespace)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${session.api_key}` },
     })

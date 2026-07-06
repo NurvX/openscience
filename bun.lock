@@ -118,7 +118,7 @@
         "zod-to-json-schema": "3.24.5",
       },
       "optionalDependencies": {
-        "@synsci/atlas": "^0.5.12",
+        "@synsci/atlas": "^0.13.2",
       },
     },
     "frontend/docs": {
@@ -840,7 +840,7 @@
 
     "@swc/helpers": ["@swc/helpers@0.5.23", "", { "dependencies": { "tslib": "^2.8.0" } }, "sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw=="],
 
-    "@synsci/atlas": ["@synsci/atlas@0.5.12", "", { "dependencies": { "commander": "^13.0.0", "inquirer": "^12.0.0", "js-yaml": "^4.1.0", "open": "^10.0.0", "ora": "^8.0.0", "picocolors": "^1.0.0" }, "bin": { "atlas": "bin/atlas.mjs" } }, "sha512-3Wqd8qu7pV0wAu4H6nJJyTE0m/WT7bWOX7Pb33F7tKwW8qLekDVTNj381jeP0ZMKhj34OFTXDLG3pyemkctk4A=="],
+    "@synsci/atlas": ["@synsci/atlas@0.13.2", "", { "dependencies": { "commander": "^13.0.0", "inquirer": "^12.0.0", "js-yaml": "^4.1.0", "open": "^10.0.0", "ora": "^8.0.0", "picocolors": "^1.0.0" }, "bin": { "atlas": "bin/atlas.mjs" } }, "sha512-+gryD2XsvKmOeDjz35DJ13b7jY8cPiUDJa1m/Q3qLF9BOC6yWJwollFDjg3FZ2ZWm77GMC2eGnLCc1RrGMUmtQ=="],
 
     "@synsci/docs": ["@synsci/docs@workspace:frontend/docs"],
 

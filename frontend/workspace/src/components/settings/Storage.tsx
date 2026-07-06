@@ -213,7 +213,8 @@ export const Storage: Component = () => {
           <div class="flex flex-col gap-1">
             <h3 class="text-13-medium text-text-weak tracking-wide">Cloud storage</h3>
             <p class="text-12-regular text-text-weak">
-              Object-storage buckets (S3, GCS, Azure) are configured through service credentials.
+              Object-storage buckets (S3 and GCS) are configured through service credentials — the matching CLI (aws /
+              gcloud / rclone) must be installed for the agent to use them.
             </p>
           </div>
           <button type="button" onClick={() => navigate("credentials")} style={linkRowStyle()}>

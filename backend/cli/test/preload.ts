@@ -26,10 +26,25 @@ process.env["XDG_CACHE_HOME"] = path.join(dir, "cache")
 process.env["XDG_CONFIG_HOME"] = path.join(dir, "config")
 process.env["XDG_STATE_HOME"] = path.join(dir, "state")
 
-// Write the cache version file to prevent global/index.ts from clearing the cache
+// Write the cache version file to prevent global/index.ts from wiping the cache
+// dir on import. MUST match CACHE_VERSION in src/global/index.ts — otherwise the
+// seeded models.json below is deleted before ModelsDev.Data reads it and every
+// provider test sees an empty catalog. (This was silently stale until the catalog
+// fixture started depending on the cache surviving.)
 const cacheDir = path.join(dir, "cache", "openscience")
 await fs.mkdir(cacheDir, { recursive: true })
-await fs.writeFile(path.join(cacheDir, "version"), "14")
+await fs.writeFile(path.join(cacheDir, "version"), "21")
+
+// Seed a committed models.dev catalog so provider-touching tests are deterministic
+// and never hit the network. With OPENSCIENCE_DISABLE_MODELS_FETCH set, ModelsDev.Data
+// returns this cached catalog (provider/models.ts) and the startup + hourly refresh is
+// skipped. Regenerate the fixture when the pinned test models change; a scheduled
+// live-catalog job catches upstream delistings instead of reddening PR CI.
+await Bun.write(
+  path.join(cacheDir, "models.json"),
+  Bun.gunzipSync(await Bun.file(path.join(import.meta.dir, "fixture", "models-catalog.json.gz")).arrayBuffer()),
+)
+process.env["OPENSCIENCE_DISABLE_MODELS_FETCH"] = "true"
 
 // Disable builtin plugins that aren't published to npm (@synsci/anthropic-auth, etc.)
 process.env["OPENSCIENCE_DISABLE_DEFAULT_PLUGINS"] = "true"

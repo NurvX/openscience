@@ -35,7 +35,7 @@ import { Env } from "../../src/env"
 const SONNET = "claude-sonnet-4-6"
 const OPUS = "claude-opus-4-5"
 
-test("pinned catalog models still exist upstream", async () => {
+test("pinned catalog models are present in the seeded test fixture", async () => {
   await using tmp = await tmpdir({})
   await Instance.provide({
     directory: tmp.path,
@@ -48,7 +48,7 @@ test("pinned catalog models still exist upstream", async () => {
       for (const id of [SONNET, OPUS]) {
         if (!models.includes(id))
           throw new Error(
-            `models.dev no longer lists anthropic/${id} — update the SONNET/OPUS pins at the top of this file`,
+            `test fixture is missing anthropic/${id} — regenerate test/fixture/models-catalog.json.gz or update the SONNET/OPUS pins here (a live models.dev delisting is caught separately by the scheduled catalog job)`,
           )
       }
     },

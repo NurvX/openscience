@@ -53,7 +53,16 @@ async function token(): Promise<string | null> {
   return session?.api_key ?? null
 }
 
-/** Call the Atlas backend with the user's key. Throws if unauthenticated. */
+// Bound every Atlas bridge call. Without this a slow/unresponsive backend hangs
+// the caller forever — and because `openscience project init` (run from the
+// research prompt on every session) goes through here, and the agent's bash tool
+// has no default timeout, a slow graph-create wedged a whole session for >60 min.
+// A timeout turns that into a fast, actionable "couldn't reach Atlas" instead.
+// Overridable for genuinely slow links via OPENSCIENCE_ATLAS_TIMEOUT_MS.
+const ATLAS_TIMEOUT_MS = Number(process.env["OPENSCIENCE_ATLAS_TIMEOUT_MS"]) || 60_000
+
+/** Call the Atlas backend with the user's key. Throws if unauthenticated, and
+ *  aborts (rejects) after ATLAS_TIMEOUT_MS so callers fail fast, never hang. */
 async function atlas(method: string, path: string, body?: unknown): Promise<Response> {
   const key = await token()
   if (!key) throw new Error("unauthenticated")
@@ -65,6 +74,7 @@ async function atlas(method: string, path: string, body?: unknown): Promise<Resp
       Accept: "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(ATLAS_TIMEOUT_MS),
   })
 }
 
