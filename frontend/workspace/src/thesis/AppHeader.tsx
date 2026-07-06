@@ -13,7 +13,7 @@ export function AppHeader(props: { children: JSX.Element }): JSX.Element {
         display: "flex",
         "align-items": "center",
         gap: "12px",
-        padding: "12px 24px",
+        padding: "10px 20px",
         "flex-shrink": 0,
         position: "relative",
         "z-index": 10,
