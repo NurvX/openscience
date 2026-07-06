@@ -394,6 +394,7 @@ function ProductShot() {
               alt="The OpenScience workspace: a research session with agent selector, model picker, files, terminal, and the research graph"
               className="block w-full h-auto select-none"
               draggable={false}
+              decoding="async"
             />
           </div>
         </Reveal>
