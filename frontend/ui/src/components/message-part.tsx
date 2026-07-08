@@ -720,9 +720,20 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
   )
 }
 
+// Providers that don't expose raw chain-of-thought — OpenAI's models, and
+// anything routed through OpenRouter — return the reasoning *encrypted*: the
+// real content lives in providerMetadata (for multi-turn continuation) and the
+// visible text is either empty or a literal "[REDACTED]" placeholder. Neither
+// is readable, so render nothing rather than walls of "[REDACTED]". Exact-match
+// only, so a genuine summary that happens to mention a redacted secret still shows.
+const ENCRYPTED_REASONING_PLACEHOLDER = "[REDACTED]"
+
 PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
   const part = props.part as ReasoningPart
-  const text = () => part.text.trim()
+  const text = () => {
+    const trimmed = part.text.trim()
+    return trimmed === ENCRYPTED_REASONING_PLACEHOLDER ? "" : trimmed
+  }
   const throttledText = createThrottledValue(text)
 
   return (
