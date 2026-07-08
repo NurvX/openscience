@@ -758,6 +758,7 @@ ToolRegistry.register({
             subtitle: props.input.filePath ? getFilename(props.input.filePath) : "",
             args,
           }}
+          onSubtitleClick={props.input.filePath ? () => data.openFile?.(props.input.filePath!) : undefined}
         />
         <For each={loaded()}>
           {(filepath) => (
@@ -1048,7 +1049,7 @@ ToolRegistry.register({
     const openInShellTab = (e: MouseEvent) => {
       e.stopPropagation()
       document.dispatchEvent(
-        new CustomEvent("open-shell-tab", { detail: { partId: props.partID } }),
+        new CustomEvent("open-shell-tab", { detail: { partId: props.partID, command: props.input.command } }),
       )
     }
     return (
@@ -1086,9 +1087,11 @@ ToolRegistry.register({
   name: "edit",
   render(props) {
     const i18n = useI18n()
+    const data = useData()
     const diffComponent = useDiffComponent()
     const diagnostics = createMemo(() => getDiagnostics(props.metadata.diagnostics, props.input.filePath))
     const filename = () => getFilename(props.input.filePath ?? "")
+    const canOpen = () => !!(data.openFile && props.input.filePath)
     return (
       <BasicTool
         {...props}
@@ -1098,7 +1101,17 @@ ToolRegistry.register({
             <div data-slot="message-part-title-area">
               <div data-slot="message-part-title">
                 <span data-slot="message-part-title-text">{i18n.t("ui.messagePart.title.edit")}</span>
-                <span data-slot="message-part-title-filename">{filename()}</span>
+                <span
+                  data-slot="message-part-title-filename"
+                  classList={{ clickable: canOpen() }}
+                  onClick={(e) => {
+                    if (!canOpen()) return
+                    e.stopPropagation()
+                    data.openFile!(props.input.filePath!)
+                  }}
+                >
+                  {filename()}
+                </span>
               </div>
               <Show when={props.input.filePath?.includes("/")}>
                 <div data-slot="message-part-path">
@@ -1139,9 +1152,11 @@ ToolRegistry.register({
   name: "write",
   render(props) {
     const i18n = useI18n()
+    const data = useData()
     const codeComponent = useCodeComponent()
     const diagnostics = createMemo(() => getDiagnostics(props.metadata.diagnostics, props.input.filePath))
     const filename = () => getFilename(props.input.filePath ?? "")
+    const canOpen = () => !!(data.openFile && props.input.filePath)
     const isNotebook = () => (props.input.filePath ?? "").endsWith(".ipynb")
 
     const notebookCells = createMemo((): NotebookCellProps[] => {
@@ -1175,7 +1190,17 @@ ToolRegistry.register({
             <div data-slot="message-part-title-area">
               <div data-slot="message-part-title">
                 <span data-slot="message-part-title-text">{i18n.t("ui.messagePart.title.write")}</span>
-                <span data-slot="message-part-title-filename">{filename()}</span>
+                <span
+                  data-slot="message-part-title-filename"
+                  classList={{ clickable: canOpen() }}
+                  onClick={(e) => {
+                    if (!canOpen()) return
+                    e.stopPropagation()
+                    data.openFile!(props.input.filePath!)
+                  }}
+                >
+                  {filename()}
+                </span>
               </div>
               <Show when={props.input.filePath?.includes("/")}>
                 <div data-slot="message-part-path">

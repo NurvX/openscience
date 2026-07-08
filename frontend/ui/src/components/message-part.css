@@ -146,7 +146,7 @@
 
   [data-component="markdown"] {
     margin-top: 24px;
-    font-style: italic !important;
+    font-style: normal;
 
     p:has(strong) {
       margin-top: 24px;
@@ -825,4 +825,17 @@
     flex-shrink: 0;
     color: var(--icon-weak);
   }
+}
+
+/* Clickable file references — read/write/edit tool cards expose their filename;
+   clicking it opens the file as a document tab (data.openFile). */
+[data-slot="basic-tool-tool-subtitle"].clickable,
+[data-slot="message-part-title-filename"].clickable {
+  cursor: pointer;
+}
+[data-slot="basic-tool-tool-subtitle"].clickable:hover,
+[data-slot="message-part-title-filename"].clickable:hover {
+  color: var(--text-interactive-base);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
