@@ -330,7 +330,6 @@ export function Composer(): JSX.Element {
     if (m) models.variant.set(m, value)
   }
 
-
   // Context tier (Cursor "MAX mode" analogue). Only meaningful when the model
   // prices the >200k window differently. This is a price-preview + intent signal;
   // the long-context request flag is threaded through submit in a later pass.

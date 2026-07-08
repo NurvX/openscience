@@ -236,9 +236,7 @@ export const DialogSelectModel: Component<{ provider?: string }> = (props) => {
   const language = useLanguage()
 
   return (
-    <Dialog
-      title={language.t("dialog.model.select.title")}
-    >
+    <Dialog title={language.t("dialog.model.select.title")}>
       <ModelList provider={props.provider} onSelect={() => dialog.close()} />
       <Button
         variant="ghost"
