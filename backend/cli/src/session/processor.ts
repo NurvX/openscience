@@ -46,6 +46,29 @@ export namespace SessionProcessor {
     )
   }
 
+  function sharedPrefixLen(a: string, b: string): number {
+    const n = Math.min(a.length, b.length)
+    let i = 0
+    while (i < n && a[i] === b[i]) i++
+    return i
+  }
+
+  /** True when the last 3 finished assistant turns are long AND share a large
+   *  identical leading block — the repeated "continuity summary" a weak/local
+   *  model emits instead of converging on a final answer (#176). The tool-call
+   *  isDoomLoop guard can't see this: the TEXT repeats, not the tool calls. Inputs
+   *  are already-normalized turn texts (lowercased, whitespace-collapsed). Kept
+   *  conservative — 3 substantial near-identical turns in a row is a signal that
+   *  legitimate progress does not produce. */
+  export function isTextLoop(turns: string[], minLen = 400, prefix = 300): boolean {
+    if (turns.length < 3) return false
+    const last = turns.slice(-3)
+    const lengths = last.map((t) => t.length)
+    if (Math.min(...lengths) < minLen) return false
+    if (Math.max(...lengths) / Math.max(1, Math.min(...lengths)) > 1.25) return false
+    return sharedPrefixLen(last[0], last[1]) >= prefix && sharedPrefixLen(last[1], last[2]) >= prefix
+  }
+
   export type Info = Awaited<ReturnType<typeof create>>
   export type Result = Awaited<ReturnType<Info["process"]>>
 

@@ -96,6 +96,19 @@ export namespace SessionPrompt {
     },
   )
 
+  // Decode the text payload of a data: URL (data:<mime>[;base64],<payload>) — an
+  // uploaded .txt/.md arrives this way. Only the part after the comma is the
+  // payload; base64url-decoding the whole URL left a ~12-byte garbage prefix from
+  // "data:text/plain," on the inlined text (#170). FileReader.readAsDataURL always
+  // emits the ;base64 form; a hand-written percent-encoded data URL is also handled.
+  export function decodeDataUrlText(url: string): string {
+    const comma = url.indexOf(",")
+    const payload = comma === -1 ? url : url.slice(comma + 1)
+    return url.slice(0, comma).includes(";base64")
+      ? Buffer.from(payload, "base64").toString()
+      : decodeURIComponent(payload)
+  }
+
   export function assertNotBusy(sessionID: string) {
     const match = state()[sessionID]
     if (match) throw new Session.BusyError(sessionID)
@@ -313,9 +326,8 @@ export namespace SessionPrompt {
     // Text doom-loop guard (#176): weak/local models sometimes emit a near-identical
     // "continuity summary" turn over and over instead of converging on an answer.
     // The processor's doom-loop guard can't catch it — the TOOL calls vary (or are
-    // absent), only the TEXT repeats. Normalize an assistant turn's own text and
-    // compare recent turns by shared leading content.
-    const MIN_LOOP_TEXT = 400
+    // absent), only the TEXT repeats. Normalize an assistant turn's own text;
+    // SessionProcessor.isTextLoop does the (unit-tested) detection.
     const turnText = (m: MessageV2.WithParts) =>
       m.parts
         .filter((p) => p.type === "text" && !p.synthetic && !p.ignored)
@@ -324,12 +336,6 @@ export namespace SessionPrompt {
         .toLowerCase()
         .replace(/\s+/g, " ")
         .trim()
-    const sharedPrefix = (a: string, b: string) => {
-      const n = Math.min(a.length, b.length)
-      let i = 0
-      while (i < n && a[i] === b[i]) i++
-      return i
-    }
     while (true) {
       SessionStatus.set(sessionID, { type: "busy" })
       log.info("loop", { step, sessionID })
@@ -414,14 +420,11 @@ export namespace SessionPrompt {
         return true
       }
       const bareMode = lastUser.tools?.["*"] === false
-      // A finish of "unknown" is only ambiguous — treated as "keep going" — when the
-      // turn actually made a tool call whose result must be fed back. A text-only
-      // turn that finished "unknown" (common with local Ollama models) produced no
-      // continuation signal; re-prompting the identical context just yields the same
-      // text forever (the #176 doom loop). Treat it as a completed turn instead.
+      // A text-only turn that finished "unknown" (no tool call to feed back) is a
+      // completed turn, not a continue — otherwise the loop re-prompts the identical
+      // context forever (the #176 doom loop). See MessageV2.isContinuingTurn.
       const lastAssistantHasTool = lastAssistantMsg?.parts.some((p) => p.type === "tool") ?? false
-      const continuing =
-        MessageV2.isContinuing(lastAssistant?.finish) && (lastAssistant?.finish !== "unknown" || lastAssistantHasTool)
+      const continuing = MessageV2.isContinuingTurn(lastAssistant?.finish, lastAssistantHasTool)
       if (lastAssistant?.finish && (!continuing || bareMode) && lastUser.id < lastAssistant.id) {
         log.info("exiting loop", { sessionID, bareMode })
         // RSI: capture trajectory from ultra agent sessions (async, non-blocking)
@@ -436,22 +439,12 @@ export namespace SessionPrompt {
       // summary"). Conservative on purpose — 3 substantial near-identical turns in a
       // row is a clear non-convergence signal that legitimate progress never produces.
       const finishedTurns = msgs.filter((m) => m.info.role === "assistant" && m.info.finish)
-      if (finishedTurns.length >= 3) {
-        const [t1, t2, t3] = finishedTurns.slice(-3).map(turnText)
-        const lengths = [t1.length, t2.length, t3.length]
-        const ratio = Math.max(...lengths) / Math.max(1, Math.min(...lengths))
-        if (
-          Math.min(...lengths) >= MIN_LOOP_TEXT &&
-          ratio <= 1.25 &&
-          sharedPrefix(t1, t2) >= 300 &&
-          sharedPrefix(t2, t3) >= 300
-        ) {
-          log.info("text doom-loop detected — stopping", { sessionID, step })
-          await failTooLarge(
-            "The model repeated nearly the same response several times without making progress — a known failure mode of smaller local models on multi-step research tasks. Stopping to avoid an endless loop. Try a larger or hosted model for this task, or break it into smaller steps.",
-          )
-          break
-        }
+      if (SessionProcessor.isTextLoop(finishedTurns.map(turnText))) {
+        log.info("text doom-loop detected — stopping", { sessionID, step })
+        await failTooLarge(
+          "The model repeated nearly the same response several times without making progress — a known failure mode of smaller local models on multi-step research tasks. Stopping to avoid an endless loop. Try a larger or hosted model for this task, or break it into smaller steps.",
+        )
+        break
       }
 
       step++
@@ -1253,16 +1246,8 @@ export namespace SessionPrompt {
                     sessionID: input.sessionID,
                     type: "text",
                     synthetic: true,
-                    // part.url is a full data: URL (data:text/plain[;base64],<payload>).
-                    // Decode only the payload after the comma; base64url-decoding the
-                    // whole URL left a ~12-byte garbage prefix from "data:text/plain,".
-                    text: iife(() => {
-                      const comma = part.url.indexOf(",")
-                      const payload = comma === -1 ? part.url : part.url.slice(comma + 1)
-                      return part.url.slice(0, comma).includes(";base64")
-                        ? Buffer.from(payload, "base64").toString()
-                        : decodeURIComponent(payload)
-                    }),
+                    // Decode only the payload after the comma — see decodeDataUrlText (#170).
+                    text: decodeDataUrlText(part.url),
                   },
                   {
                     ...part,
