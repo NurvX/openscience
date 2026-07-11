@@ -96,6 +96,19 @@ export namespace SessionPrompt {
     },
   )
 
+  // Decode the text payload of a data: URL (data:<mime>[;base64],<payload>) — an
+  // uploaded .txt/.md arrives this way. Only the part after the comma is the
+  // payload; base64url-decoding the whole URL left a ~12-byte garbage prefix from
+  // "data:text/plain," on the inlined text (#170). FileReader.readAsDataURL always
+  // emits the ;base64 form; a hand-written percent-encoded data URL is also handled.
+  export function decodeDataUrlText(url: string): string {
+    const comma = url.indexOf(",")
+    const payload = comma === -1 ? url : url.slice(comma + 1)
+    return url.slice(0, comma).includes(";base64")
+      ? Buffer.from(payload, "base64").toString()
+      : decodeURIComponent(payload)
+  }
+
   export function assertNotBusy(sessionID: string) {
     const match = state()[sessionID]
     if (match) throw new Session.BusyError(sessionID)
@@ -310,6 +323,19 @@ export namespace SessionPrompt {
     // summary overhead alone already exceeds the 0.75 threshold.
     let compactionArmed = true
     const session = await Session.get(sessionID)
+    // Text doom-loop guard (#176): weak/local models sometimes emit a near-identical
+    // "continuity summary" turn over and over instead of converging on an answer.
+    // The processor's doom-loop guard can't catch it — the TOOL calls vary (or are
+    // absent), only the TEXT repeats. Normalize an assistant turn's own text;
+    // SessionProcessor.isTextLoop does the (unit-tested) detection.
+    const turnText = (m: MessageV2.WithParts) =>
+      m.parts
+        .filter((p) => p.type === "text" && !p.synthetic && !p.ignored)
+        .map((p) => (p as MessageV2.TextPart).text)
+        .join("\n")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim()
     while (true) {
       SessionStatus.set(sessionID, { type: "busy" })
       log.info("loop", { step, sessionID })
@@ -318,12 +344,16 @@ export namespace SessionPrompt {
 
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
+      let lastAssistantMsg: MessageV2.WithParts | undefined
       let lastFinished: MessageV2.Assistant | undefined
       let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i]
         if (!lastUser && msg.info.role === "user") lastUser = msg.info as MessageV2.User
-        if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info as MessageV2.Assistant
+        if (!lastAssistant && msg.info.role === "assistant") {
+          lastAssistant = msg.info as MessageV2.Assistant
+          lastAssistantMsg = msg
+        }
         if (!lastFinished && msg.info.role === "assistant" && msg.info.finish)
           lastFinished = msg.info as MessageV2.Assistant
         if (lastUser && lastFinished) break
@@ -390,16 +420,30 @@ export namespace SessionPrompt {
         return true
       }
       const bareMode = lastUser.tools?.["*"] === false
-      if (
-        lastAssistant?.finish &&
-        (!MessageV2.isContinuing(lastAssistant.finish) || bareMode) &&
-        lastUser.id < lastAssistant.id
-      ) {
+      // A text-only turn that finished "unknown" (no tool call to feed back) is a
+      // completed turn, not a continue — otherwise the loop re-prompts the identical
+      // context forever (the #176 doom loop). See MessageV2.isContinuingTurn.
+      const lastAssistantHasTool = lastAssistantMsg?.parts.some((p) => p.type === "tool") ?? false
+      const continuing = MessageV2.isContinuingTurn(lastAssistant?.finish, lastAssistantHasTool)
+      if (lastAssistant?.finish && (!continuing || bareMode) && lastUser.id < lastAssistant.id) {
         log.info("exiting loop", { sessionID, bareMode })
         // RSI: capture trajectory from ultra agent sessions (async, non-blocking)
         if (lastUser.agent && RSITrajectory.ARTIFACT_AGENTS.includes(lastUser.agent as any)) {
           RSITrajectory.pipeline(sessionID).catch(() => {})
         }
+        break
+      }
+
+      // Trip the text doom-loop guard when the last 3 finished assistant turns are
+      // long AND share a large identical leading block (the repeated "continuity
+      // summary"). Conservative on purpose — 3 substantial near-identical turns in a
+      // row is a clear non-convergence signal that legitimate progress never produces.
+      const finishedTurns = msgs.filter((m) => m.info.role === "assistant" && m.info.finish)
+      if (SessionProcessor.isTextLoop(finishedTurns.map(turnText))) {
+        log.info("text doom-loop detected — stopping", { sessionID, step })
+        await failTooLarge(
+          "The model repeated nearly the same response several times without making progress — a known failure mode of smaller local models on multi-step research tasks. Stopping to avoid an endless loop. Try a larger or hosted model for this task, or break it into smaller steps.",
+        )
         break
       }
 
@@ -1202,7 +1246,8 @@ export namespace SessionPrompt {
                     sessionID: input.sessionID,
                     type: "text",
                     synthetic: true,
-                    text: Buffer.from(part.url, "base64url").toString(),
+                    // Decode only the payload after the comma — see decodeDataUrlText (#170).
+                    text: decodeDataUrlText(part.url),
                   },
                   {
                     ...part,

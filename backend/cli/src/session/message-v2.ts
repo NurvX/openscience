@@ -458,6 +458,17 @@ export namespace MessageV2 {
     return !!finish && CONTINUING_FINISH.includes(finish)
   }
 
+  // Whether a completed TURN should keep the agent loop running. Stricter than
+  // isContinuing for the ambiguous "unknown" reason: it only means "keep going"
+  // when the turn actually made a tool call whose result must be fed back. A
+  // text-only turn that finished "unknown" (common with local Ollama models that
+  // don't report a finish reason) produced no continuation signal — re-prompting
+  // the identical context just yields the same text forever (the #176 doom loop),
+  // so treat it as done. Used only by the loop; compaction keeps isContinuing.
+  export function isContinuingTurn(finish: string | undefined, hasToolCall: boolean): boolean {
+    return isContinuing(finish) && (finish !== "unknown" || hasToolCall)
+  }
+
   export function toModelMessages(
     input: WithParts[],
     model: Provider.Model,

@@ -1099,6 +1099,27 @@ export namespace OpenScience {
     return withAtlasOnPath(mergeByokEnv(base, auth))
   }
 
+  // Default thread/worker caps for scientific Python kernels. Without these,
+  // BLAS (OpenBLAS/MKL/Accelerate), numba, and joblib/loky each fan out to one
+  // worker PER CORE by default. On a large dataset a single densifying op (e.g.
+  // scanpy regress_out with n_jobs=-1) then spawns N full-dataset copies at once,
+  // each tens of GB — the machine swaps to death (#102). Cap each to a small,
+  // safe default and only fill a var the user/agent hasn't already set, so an
+  // explicit override still wins.
+  export function pythonThreadCapEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+    const cap = String(Math.max(1, Math.min(4, os.cpus().length)))
+    const vars = [
+      "OMP_NUM_THREADS",
+      "OPENBLAS_NUM_THREADS",
+      "MKL_NUM_THREADS",
+      "VECLIB_MAXIMUM_THREADS",
+      "NUMEXPR_NUM_THREADS",
+      "NUMBA_NUM_THREADS",
+      "LOKY_MAX_CPU_COUNT",
+    ]
+    return Object.fromEntries(vars.filter((v) => !env[v]).map((v) => [v, cap]))
+  }
+
   // === Server-side Skills ===
 
   const SKILLS_CACHE_TTL = 60 * 60 * 1000 // 1 hour

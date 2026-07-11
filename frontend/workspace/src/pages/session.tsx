@@ -549,10 +549,12 @@ export default function Page(): JSX.Element {
                         "overflow-x": "hidden",
                       }}
                     >
-                      {/* Sticky title + back-to-parent (sub-agent) header — kept
-                          outside contentRef so the ResizeObserver measures only
-                          the growing message list, not the sticky header. */}
-                      <Show when={activeSession()?.title || activeSession()?.parentID}>
+                      {/* Sub-agent back-to-parent header only. Normal chats render
+                          NO fixed header — the sticky session title used to sit on top
+                          of the conversation and block content. The title is still
+                          shown/renamable in the session list. Kept outside contentRef
+                          so the ResizeObserver measures only the growing message list. */}
+                      <Show when={activeSession()?.parentID}>
                         <div class="sticky top-0 z-30 bg-background-stronger w-full">
                           <div class="w-full px-4 md:px-6 md:max-w-200 md:mx-auto">
                             <div class="h-10 flex items-center gap-1.5">

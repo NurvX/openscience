@@ -46,6 +46,29 @@ export namespace SessionProcessor {
     )
   }
 
+  function sharedPrefixLen(a: string, b: string): number {
+    const n = Math.min(a.length, b.length)
+    let i = 0
+    while (i < n && a[i] === b[i]) i++
+    return i
+  }
+
+  /** True when the last 3 finished assistant turns are long AND share a large
+   *  identical leading block — the repeated "continuity summary" a weak/local
+   *  model emits instead of converging on a final answer (#176). The tool-call
+   *  isDoomLoop guard can't see this: the TEXT repeats, not the tool calls. Inputs
+   *  are already-normalized turn texts (lowercased, whitespace-collapsed). Kept
+   *  conservative — 3 substantial near-identical turns in a row is a signal that
+   *  legitimate progress does not produce. */
+  export function isTextLoop(turns: string[], minLen = 400, prefix = 300): boolean {
+    if (turns.length < 3) return false
+    const last = turns.slice(-3)
+    const lengths = last.map((t) => t.length)
+    if (Math.min(...lengths) < minLen) return false
+    if (Math.max(...lengths) / Math.max(1, Math.min(...lengths)) > 1.25) return false
+    return sharedPrefixLen(last[0], last[1]) >= prefix && sharedPrefixLen(last[1], last[2]) >= prefix
+  }
+
   export type Info = Awaited<ReturnType<typeof create>>
   export type Result = Awaited<ReturnType<Info["process"]>>
 
@@ -380,6 +403,23 @@ export namespace SessionProcessor {
                   ) {
                     needsCompaction = true
                   }
+                  // A "length" finish with an over-threshold token count is NOT a
+                  // finished answer — the turn was truncated mid-thought (often right
+                  // before a tool call, leaving a pending tool part). isContinuing()
+                  // excludes "length", so the block above skips it. Treat it as a
+                  // context overflow: compact history and re-run the SAME user message
+                  // against the summary, instead of exiting the loop as if the agent
+                  // was done (which strands the pending tool part → "Tool execution
+                  // aborted"). A genuine max-output truncation (small input) has
+                  // isOverflow=false and still falls through unchanged.
+                  if (
+                    !input.assistantMessage.summary &&
+                    value.finishReason === "length" &&
+                    (await SessionCompaction.isOverflow({ tokens: usage.tokens, model: input.model }))
+                  ) {
+                    overflow = true
+                    input.assistantMessage.finish = "compact"
+                  }
                   break
 
                 case "text-start":
@@ -440,7 +480,7 @@ export namespace SessionProcessor {
                   })
                   continue
               }
-              if (needsCompaction) break
+              if (needsCompaction || overflow) break
             }
           } catch (e: any) {
             log.error("process", {
@@ -507,7 +547,9 @@ export namespace SessionProcessor {
                 state: {
                   ...part.state,
                   status: "error",
-                  error: "Tool execution aborted",
+                  error: overflow
+                    ? "Model output was truncated before the tool call completed (context limit); no action was taken. Compacting and retrying."
+                    : "Tool execution aborted",
                   time: {
                     start: Date.now(),
                     end: Date.now(),
