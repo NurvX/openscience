@@ -1,16 +1,17 @@
 import { test, expect } from "./fixtures"
-import { terminalSelector, terminalToggleKey } from "./utils"
 
-test("terminal panel can be toggled", async ({ page, gotoSession }) => {
+test("terminal panel can be collapsed and reopened", async ({ page, gotoSession }) => {
   await gotoSession()
 
-  const terminal = page.locator(terminalSelector)
-  const initiallyOpen = await terminal.isVisible()
-  if (initiallyOpen) {
-    await page.keyboard.press(terminalToggleKey)
-    await expect(terminal).toHaveCount(0)
-  }
+  const terminalTab = page.getByRole("tab", { name: "terminal", exact: true })
+  await expect(terminalTab).toBeVisible()
+  await terminalTab.click()
+  await expect(terminalTab).toHaveAttribute("aria-selected", "true")
 
-  await page.keyboard.press(terminalToggleKey)
-  await expect(terminal).toBeVisible()
+  await page.getByTitle("hide panel", { exact: true }).click()
+  await expect(terminalTab).toHaveCount(0)
+
+  await page.getByRole("button", { name: "terminal", exact: true }).click()
+  await expect(terminalTab).toBeVisible()
+  await expect(terminalTab).toHaveAttribute("aria-selected", "true")
 })
