@@ -148,8 +148,18 @@ export function AtlasCanvas(): JSX.Element {
   const GRAPH_KEY = "thesis-graph-id-v1"
   // Root list — just the graph roots (fast, root_only=true). Powers the dropdown
   // and default-selection logic without loading every node in the account.
+  const [graphListError, setGraphListError] = createSignal<Error>()
   const [graphList, { refetch: refetchGraphs }] = createResource(() =>
-    atlas.listGraphs().then((r) => r.nodes ?? []),
+    atlas
+      .listGraphs()
+      .then((r) => {
+        setGraphListError(undefined)
+        return r.nodes ?? []
+      })
+      .catch((error) => {
+        setGraphListError(error instanceof Error ? error : new Error(String(error)))
+        return [] as AtlasNode[]
+      }),
   )
   const graphs = createMemo<AtlasNode[]>(() =>
     [...(graphList.latest ?? [])].sort((a, b) => (a.title || "").localeCompare(b.title || "")),
@@ -157,8 +167,18 @@ export function AtlasCanvas(): JSX.Element {
   // Resolve THIS folder's project root so the canvas defaults to its own graph
   // instead of another project's. `null` = unlinked (offer Initialize); read via
   // `.latest` so it never suspends. `undefined` = still resolving.
+  const [folderProjectError, setFolderProjectError] = createSignal<Error>()
   const [folderProject, { refetch: refetchFolderProject }] = createResource(directory, (dir) =>
-    atlas.resolveProject(dir).then((r) => r.project_id),
+    atlas
+      .resolveProject(dir)
+      .then((r) => {
+        setFolderProjectError(undefined)
+        return r.project_id
+      })
+      .catch((error) => {
+        setFolderProjectError(error instanceof Error ? error : new Error(String(error)))
+        return null
+      }),
   )
   const [graphId, setGraphIdRaw] = createSignal<string | undefined>(
     (() => {
@@ -199,12 +219,25 @@ export function AtlasCanvas(): JSX.Element {
 
   // Selected project's subtree — the ONLY node set we load (server-scoped).
   // Keyed on graphId() so switching graphs triggers a fresh fetch automatically.
+  const [graphTreeError, setGraphTreeError] = createSignal<Error>()
   const [graphTree, { refetch: refetchTree }] = createResource(
     () => graphId(),
-    (id) => atlas.getGraphTree(id).then((r) => r.nodes ?? []),
+    (id) =>
+      atlas
+        .getGraphTree(id)
+        .then((r) => {
+          setGraphTreeError(undefined)
+          return r.nodes ?? []
+        })
+        .catch((error) => {
+          setGraphTreeError(error instanceof Error ? error : new Error(String(error)))
+          return [] as AtlasNode[]
+        }),
   )
   const nodes = createMemo<AtlasNode[]>(() => graphTree.latest ?? [])
-  const atlasError = createMemo<Error | undefined>(() => graphList.error ?? folderProject.error ?? graphTree.error)
+  const atlasError = createMemo<Error | undefined>(
+    () => graphListError() ?? folderProjectError() ?? graphTreeError(),
+  )
   const byId = createMemo(() => new Map(nodes().map((n) => [n.node_id, n])))
   const loading = createMemo(() => graphList.loading || (graphId() !== undefined && graphTree.loading))
   const refetchAll = () => {
@@ -1246,12 +1279,19 @@ function OrbitTooltip(props: { node: AtlasNode; x: number; y: number; byId: Map<
 function NodeDetail(props: { node: AtlasNode; onClose: () => void }): JSX.Element {
   const sdk = useSDK()
   const atlas = createAtlasAPI(() => sdk.url)
+  const [artifactError, setArtifactError] = createSignal<Error>()
   const [artifacts] = createResource(
     () => props.node.node_id,
     async (id) => {
-      const res = await atlas.listArtifacts(id)
-      const list = Array.isArray(res) ? res : ((res as any)?.artifacts ?? [])
-      return list as Array<{ name?: string; kind?: string; uri?: string }>
+      try {
+        const res = await atlas.listArtifacts(id)
+        const list = Array.isArray(res) ? res : ((res as any)?.artifacts ?? [])
+        setArtifactError(undefined)
+        return list as Array<{ name?: string; kind?: string; uri?: string }>
+      } catch (error) {
+        setArtifactError(error instanceof Error ? error : new Error(String(error)))
+        return []
+      }
     },
   )
   return (
@@ -1352,14 +1392,14 @@ function NodeDetail(props: { node: AtlasNode; onClose: () => void }): JSX.Elemen
         <DetailField label="content" value={props.node.content} mono />
       </Show>
       <Suspense fallback={<AsciiSpinner size={10} label="loading artifacts…" color="var(--color-text-faint)" />}>
-        <Show when={artifacts.error}>
+        <Show when={artifactError()}>
           {(error) => (
             <div role="alert" style={{ "font-family": FONT_MONO, "font-size": "10px", color: "var(--color-error)" }}>
               artifacts unavailable · {error().message}
             </div>
           )}
         </Show>
-        <Show when={!artifacts.error && (artifacts.latest ?? []).length > 0}>
+        <Show when={!artifactError() && (artifacts.latest ?? []).length > 0}>
           <div
             style={{
               "font-family": FONT_MONO,

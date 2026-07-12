@@ -577,17 +577,27 @@ function ArtifactsPanel(): JSX.Element {
   const sdk = useSDK()
   const atlas = createAtlasAPI(() => sdk.url)
   const directory = () => sync.project?.worktree || sync.data.path.directory || sdk.directory
+  const [loadError, setLoadError] = createSignal<Error>()
   const [data] = createResource(directory, async (dir) => {
-    const pid = (await atlas.resolveProject(dir)).project_id
-    if (!pid) return [] as ArtifactRow[]
-    const tree = await atlas.getGraphTree(pid)
-    const rows: ArtifactRow[] = []
-    for (const node of tree.nodes ?? []) {
-      const res = await atlas.listArtifacts(node.node_id)
-      const items = Array.isArray(res) ? res : (res.artifacts ?? [])
-      for (const a of items) rows.push({ node, artifact: a })
+    try {
+      const pid = (await atlas.resolveProject(dir)).project_id
+      if (!pid) {
+        setLoadError(undefined)
+        return [] as ArtifactRow[]
+      }
+      const tree = await atlas.getGraphTree(pid)
+      const rows: ArtifactRow[] = []
+      for (const node of tree.nodes ?? []) {
+        const res = await atlas.listArtifacts(node.node_id)
+        const items = Array.isArray(res) ? res : (res.artifacts ?? [])
+        for (const a of items) rows.push({ node, artifact: a })
+      }
+      setLoadError(undefined)
+      return rows
+    } catch (error) {
+      setLoadError(error instanceof Error ? error : new Error(String(error)))
+      return [] as ArtifactRow[]
     }
-    return rows
   })
   return (
     <div class="atlas-scroll" style={{ flex: 1, "min-height": 0, "overflow-y": "auto", padding: "8px 4px" }}>
@@ -595,8 +605,8 @@ function ArtifactsPanel(): JSX.Element {
         when={(data.latest ?? []).length > 0}
         fallback={
           <div style={emptyMsg()}>
-            {data.error
-              ? `artifacts unavailable · ${data.error.message}`
+            {loadError()
+              ? `artifacts unavailable · ${loadError()!.message}`
               : data.loading
                 ? "loading artifacts…"
                 : "no artifacts yet · attach a file to seed one"}
