@@ -578,22 +578,16 @@ function ArtifactsPanel(): JSX.Element {
   const atlas = createAtlasAPI(() => sdk.url)
   const directory = () => sync.project?.worktree || sync.data.path.directory || sdk.directory
   const [data] = createResource(directory, async (dir) => {
-    try {
-      const pid = (await atlas.resolveProject(dir)).project_id
-      if (!pid) return [] as ArtifactRow[]
-      const tree = await atlas.getGraphTree(pid)
-      const rows: ArtifactRow[] = []
-      for (const node of tree.nodes ?? []) {
-        try {
-          const res = await atlas.listArtifacts(node.node_id)
-          const items = Array.isArray(res) ? res : (res.artifacts ?? [])
-          for (const a of items) rows.push({ node, artifact: a })
-        } catch {}
-      }
-      return rows
-    } catch {
-      return [] as ArtifactRow[]
+    const pid = (await atlas.resolveProject(dir)).project_id
+    if (!pid) return [] as ArtifactRow[]
+    const tree = await atlas.getGraphTree(pid)
+    const rows: ArtifactRow[] = []
+    for (const node of tree.nodes ?? []) {
+      const res = await atlas.listArtifacts(node.node_id)
+      const items = Array.isArray(res) ? res : (res.artifacts ?? [])
+      for (const a of items) rows.push({ node, artifact: a })
     }
+    return rows
   })
   return (
     <div class="atlas-scroll" style={{ flex: 1, "min-height": 0, "overflow-y": "auto", padding: "8px 4px" }}>
@@ -601,7 +595,11 @@ function ArtifactsPanel(): JSX.Element {
         when={(data.latest ?? []).length > 0}
         fallback={
           <div style={emptyMsg()}>
-            {data.loading ? "loading artifacts…" : "no artifacts yet · attach a file to seed one"}
+            {data.error
+              ? `artifacts unavailable · ${data.error.message}`
+              : data.loading
+                ? "loading artifacts…"
+                : "no artifacts yet · attach a file to seed one"}
           </div>
         }
       >
