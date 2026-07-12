@@ -2,7 +2,6 @@ import "@/index.css"
 import { ErrorBoundary, Show, lazy, type ParentProps } from "solid-js"
 import { Router, Route, Navigate } from "@solidjs/router"
 import { MetaProvider } from "@solidjs/meta"
-import { Font } from "@synsci/ui/font"
 import { MarkedProvider } from "@synsci/ui/context/marked"
 import { DiffComponentProvider } from "@synsci/ui/context/diff"
 import { CodeComponentProvider } from "@synsci/ui/context/code"
@@ -65,7 +64,6 @@ function MarkedProviderWithNativeParser(props: ParentProps) {
 export function AppBaseProviders(props: ParentProps) {
   return (
     <MetaProvider>
-      <Font />
       <ThemeProvider>
         <LanguageProvider>
           <UiI18nBridge>
