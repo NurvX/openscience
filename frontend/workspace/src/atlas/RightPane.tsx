@@ -104,6 +104,7 @@ export function RightPane(): JSX.Element {
       }
     >
       <aside
+        class="session-right-pane"
         style={{
           flex: `0 0 ${width()}px`,
           width: `${width()}px`,

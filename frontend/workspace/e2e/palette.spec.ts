@@ -6,9 +6,11 @@ test("search palette opens and closes", async ({ page, gotoSession }) => {
 
   await page.keyboard.press(`${modKey}+K`)
 
-  const search = page.getByPlaceholder("search projects, sessions, actions…")
+  const dialog = page.getByRole("dialog", { name: "command palette" })
+  const search = dialog.getByRole("textbox", { name: "search commands and projects" })
+  await expect(dialog).toBeVisible()
   await expect(search).toBeVisible()
-  await expect(page.getByRole("button", { name: /Settings/ })).toBeVisible()
+  await expect(dialog.getByRole("button", { name: /Settings/ })).toBeVisible()
 
   await page.keyboard.press("Escape")
   await expect(search).toHaveCount(0)

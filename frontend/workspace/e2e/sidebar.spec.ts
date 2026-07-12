@@ -31,3 +31,21 @@ test("sidebar filters sessions and clears the search", async ({ page, sdk, gotoS
     await sdk.session.delete({ sessionID: two.id }).catch(() => undefined)
   }
 })
+
+test.describe("mobile workspace", () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  test("sessions open as a drawer instead of squeezing the active pane", async ({ page, gotoSession }) => {
+    await gotoSession()
+
+    const sidebar = page.getByRole("complementary").filter({ has: page.getByLabel("search sessions") })
+    await expect(sidebar).toHaveAttribute("data-mobile-open", "false")
+
+    await page.getByRole("button", { name: "sessions" }).click()
+    await expect(sidebar).toHaveAttribute("data-mobile-open", "true")
+    await expect(page.getByLabel("search sessions")).toBeVisible()
+
+    await page.getByRole("button", { name: "close sessions" }).click()
+    await expect(sidebar).toHaveAttribute("data-mobile-open", "false")
+  })
+})
