@@ -3,25 +3,32 @@ import { terminalSelector } from "./utils"
 
 test.describe.configure({ mode: "serial" })
 
-test("terminal mounts and can create another tab", async ({ page, gotoSession }) => {
-  await gotoSession()
+test("terminal mounts and can create another tab", async ({ page, gotoSession, sdk }) => {
+  const initial = new Set((await sdk.pty.list()).data?.map((pty) => pty.id) ?? [])
 
-  const terminalTab = page.getByRole("tab", { name: "terminal", exact: true })
-  await terminalTab.click()
-  await expect(terminalTab).toHaveAttribute("aria-selected", "true")
+  try {
+    await gotoSession()
 
-  const terminals = page.locator(terminalSelector)
-  if ((await terminals.count()) === 0) {
-    await page.getByRole("button", { name: "start terminal", exact: true }).click()
+    const terminalTab = page.getByRole("tab", { name: "terminal", exact: true })
+    await terminalTab.click()
+    await expect(terminalTab).toHaveAttribute("aria-selected", "true")
+
+    const terminals = page.locator(terminalSelector)
+    if ((await terminals.count()) === 0) {
+      await page.getByRole("button", { name: "start terminal", exact: true }).click()
+    }
+
+    await expect(terminals.first()).toBeVisible()
+    await expect(terminals.first().locator("textarea")).toHaveCount(1)
+    const before = await terminals.count()
+
+    await page.getByRole("button", { name: "new", exact: true }).click()
+    await expect(terminals).toHaveCount(before + 1)
+    await expect(terminals.nth(before).locator("textarea")).toHaveCount(1)
+  } finally {
+    const created = ((await sdk.pty.list()).data ?? []).filter((pty) => !initial.has(pty.id))
+    await Promise.all(created.map((pty) => sdk.pty.remove({ ptyID: pty.id })))
   }
-
-  await expect(terminals.first()).toBeVisible()
-  await expect(terminals.first().locator("textarea")).toHaveCount(1)
-  const before = await terminals.count()
-
-  await page.getByRole("button", { name: "new", exact: true }).click()
-  await expect(terminals).toHaveCount(before + 1)
-  await expect(terminals.nth(before).locator("textarea")).toHaveCount(1)
 })
 
 test("terminal panel can be collapsed and reopened", async ({ page, gotoSession }) => {
