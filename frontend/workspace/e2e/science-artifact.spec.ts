@@ -138,6 +138,11 @@ test("notebook artifact metadata renders through the science fallback", async ({
 })
 
 test("renders an inline 2D chemical structure without network access", async ({ page, sdk, gotoSession }) => {
+  const workerResponse =
+    process.env.OPENSCIENCE_E2E_PACKAGED === "1"
+      ? page.waitForResponse((response) => /\/assets\/rdkit\.worker-[^/]+\.js$/.test(new URL(response.url()).pathname))
+      : undefined
+
   await withArtifact(
     { page, sdk, gotoSession },
     { kind: "chem-2d", data: { smiles: "CC(=O)Oc1ccccc1C(=O)O", width: 360, height: 220 } },
@@ -147,6 +152,19 @@ test("renders an inline 2D chemical structure without network access", async ({ 
       await expect(molecule.getByText(/Could not render molecule/)).toHaveCount(0)
     },
   )
+
+  if (workerResponse) {
+    const workerPolicy = (await workerResponse).headers()["content-security-policy"]
+    expect(workerPolicy).toContain("default-src 'none'")
+    expect(workerPolicy).toContain("script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'")
+
+    const appPolicy = await page.evaluate(async () => {
+      const response = await fetch(window.location.pathname, { method: "HEAD" })
+      return response.headers.get("content-security-policy")
+    })
+    expect(appPolicy).toContain("script-src 'self' 'wasm-unsafe-eval'")
+    expect(appPolicy).not.toContain("'unsafe-eval'")
+  }
 })
 
 test("renders a deterministic nucleotide sequence", async ({ page, sdk, gotoSession }) => {
