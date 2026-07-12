@@ -510,6 +510,11 @@ export function AtlasCanvas(): JSX.Element {
 
   const createNode = async () => {
     if (creating()) return
+    const parentID = selectedID() ?? graphId()
+    if (!parentID) {
+      toast.error("could not stage node", "initialize or select a project graph first")
+      return
+    }
     const title = await promptDialog(dialog, {
       title: "Stage a new node",
       placeholder: "node title",
@@ -518,11 +523,12 @@ export function AtlasCanvas(): JSX.Element {
     if (!title) return
     setCreating(true)
     try {
-      await atlas.createNode(title)
+      const created = await atlas.createNode({ title, directory: directory(), parentID })
+      await Promise.all([refetchGraphs(), refetchTree()])
+      setSelectedID(created.node_id)
       toast.info("node staged", title)
-      refresh()
     } catch (err: any) {
-      toast.error("could not create node", err?.message ?? String(err))
+      toast.error("could not stage node", err?.message ?? String(err))
     } finally {
       setCreating(false)
     }
@@ -754,7 +760,11 @@ export function AtlasCanvas(): JSX.Element {
           <CanvasAction title="fit to view" onClick={fit}>
             <FitGlyph />
           </CanvasAction>
-          <CanvasAction title="stage a new node" disabled={creating()} onClick={() => void createNode()}>
+          <CanvasAction
+            title={selectedID() ? "stage a child under the selected node" : "stage a node under the graph root"}
+            disabled={creating() || !graphId()}
+            onClick={() => void createNode()}
+          >
             <IconPlus size={12} strokeWidth={1.7} />
           </CanvasAction>
           <CanvasAction title="refresh" onClick={refresh}>

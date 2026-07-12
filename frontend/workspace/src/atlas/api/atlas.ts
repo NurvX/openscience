@@ -92,7 +92,12 @@ export function createAtlasAPI(server: () => string) {
     listGraphs: () => get<NodesListResponse>("/graphs"),
     /** Full subgraph for a single graph/root. */
     getGraphTree: (id: string) => get<GraphTreeResponse>(`/graphs/${id}/tree`),
-    createNode: (title: string) => post<AtlasNode>("/nodes", { title }),
+    createNode: (input: { title: string; directory: string; parentID: string }) =>
+      post<AtlasNode>("/nodes", {
+        title: input.title,
+        directory: input.directory,
+        parent_id: input.parentID,
+      }),
     /** Resolve the opened project's root without creating one. */
     resolveProject: (directory: string) =>
       get<{ project_id: string | null }>(`/project?directory=${encodeURIComponent(directory)}`),
