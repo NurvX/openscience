@@ -60,6 +60,12 @@ export function fakeModelConfig(baseURL: string) {
             name: "E2E echo model",
             tool_call: false,
             limit: { context: 128_000, output: 4_096 },
+            // Exercise the workspace's model-variant control without relying
+            // on a real provider catalog or making an external inference.
+            variants: {
+              fast: {},
+              thorough: {},
+            },
           },
         },
         options: {
