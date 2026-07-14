@@ -13,6 +13,8 @@ Five minutes from zero to a running research session. No account required.
     ```
 
     Or without a global install, `npx synsci` runs the same workbench in one step. The install script (`curl -fsSL https://openscience.sh/install | bash`) drops a standalone `openscience` binary into `~/.openscience/bin`, and platform binaries are attached to every [GitHub release](https://github.com/synthetic-sciences/openscience/releases).
+
+    Linux requires kernel 5.1 or newer. Glibc builds require glibc 2.17 or newer, and musl builds are selected separately. CentOS 7's stock 3.10 kernel is not supported; use a newer host kernel or VM.
   </Step>
   <Step title="Set a provider key">
     ```bash

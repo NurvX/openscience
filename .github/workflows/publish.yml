@@ -81,10 +81,40 @@ jobs:
     outputs:
       version: ${{ needs.version.outputs.version }}
 
+  verify-native-cli:
+    needs:
+      - version
+      - build-cli
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: openscience-linux-x64
+          - runner: ubuntu-24.04-arm
+            target: openscience-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Restore CLI build
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: backend/cli/dist
+          key: cli-build-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Run native binary
+        run: |
+          chmod +x "backend/cli/dist/${{ matrix.target }}/bin/openscience"
+          "backend/cli/dist/${{ matrix.target }}/bin/openscience" --version
+
   publish:
     needs:
       - version
       - build-cli
+      - verify-native-cli
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

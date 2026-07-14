@@ -12,6 +12,8 @@ npm install -g @synsci/openscience
 
 The command is `openscience`.
 
+On Linux, the bundled runtime requires kernel 5.1 or newer. Glibc binaries require glibc 2.17 or newer; separate musl packages are selected automatically. CentOS 7's stock 3.10 kernel is unsupported.
+
 ## Quick start
 
 ```bash
