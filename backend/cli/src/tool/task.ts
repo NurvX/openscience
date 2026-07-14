@@ -12,8 +12,14 @@ import { defer } from "@/util/defer"
 import { Config } from "../config/config"
 import { PermissionNext } from "@/permission/next"
 import { RLMState } from "../session/rlm/state"
+import { HierarchicalSemaphore } from "../util/semaphore"
 
 const ARTIFACT_AGENTS = ["research", "biology", "ml"]
+const COMPUTE_SUBAGENTS = new Set(["biology", "ml", "physics"])
+const configuredComputeCap = Number(process.env.OPENSCIENCE_MAX_COMPUTE_SUBAGENTS)
+const MAX_COMPUTE_SUBAGENTS =
+  Number.isFinite(configuredComputeCap) && configuredComputeCap >= 1 ? Math.floor(configuredComputeCap) : 2
+const computeSlots = new HierarchicalSemaphore(MAX_COMPUTE_SUBAGENTS)
 
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
@@ -99,6 +105,15 @@ export const TaskTool = Tool.define("task", async (ctx) => {
           ],
         })
       })
+
+      // A nested compute agent takes over its waiting parent's permit. Parallel
+      // nested siblings serialize on that lease, so nesting cannot bypass the
+      // global cap and a full pool cannot deadlock on permits held by parents.
+      const releaseComputeSlot = COMPUTE_SUBAGENTS.has(agent.name)
+        ? await computeSlots.acquire(session.id, { parent: ctx.sessionID, signal: ctx.abort })
+        : undefined
+      using _computeSlot = defer(() => releaseComputeSlot?.())
+
       const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
       if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
 

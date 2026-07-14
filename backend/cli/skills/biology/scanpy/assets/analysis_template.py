@@ -39,6 +39,48 @@ sc.settings.set_figure_params(dpi=80, facecolor='white')
 sc.settings.figdir = FIGURES_DIR
 
 # ============================================================================
+# MEMORY GUARDS
+# ============================================================================
+# Parallel dense operations can fork one worker process per job, with each
+# worker holding a full matrix copy. Size worker pools from available RAM, not
+# CPU count alone.
+import os as _os
+
+
+def _available_ram_bytes():
+    try:
+        import psutil
+        return psutil.virtual_memory().available
+    except Exception:
+        pass
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    try:
+        # Total RAM is less useful than available RAM, so halve this fallback.
+        return (_os.sysconf('SC_PAGE_SIZE') * _os.sysconf('SC_PHYS_PAGES')) // 2
+    except (ValueError, OSError, AttributeError):
+        return 4 * 1024 ** 3
+
+
+def memory_safe_n_jobs(adata, fraction=0.5):
+    """Return a worker count whose dense copies fit in a RAM budget.
+
+    One copy is reserved for the parent. Returning zero means even one worker
+    copy would exceed the budget and the dense operation should be skipped.
+    """
+    per_worker = max(1, adata.n_obs * adata.n_vars * 8)
+    fits = int(_available_ram_bytes() * fraction // per_worker) - 1
+    return max(0, min(_os.cpu_count() or 1, fits))
+
+
+MAX_DENSE_GB = 8.0
+
+# ============================================================================
 # 1. LOAD DATA
 # ============================================================================
 
@@ -52,6 +94,12 @@ adata = sc.read_h5ad(INPUT_FILE)
 # adata = sc.read_csv('data/counts.csv')  # For CSV data
 
 print(f"Loaded: {adata.n_obs} cells x {adata.n_vars} genes")
+
+import scipy.sparse as _sp
+_load_gb = adata.n_obs * adata.n_vars * 8 / 1e9
+if not _sp.issparse(adata.X) and _load_gb > MAX_DENSE_GB:
+    print(f"WARNING: adata.X is DENSE (~{_load_gb:.1f} GB). Convert it to sparse "
+          "before continuing to avoid exhausting memory.")
 
 # ============================================================================
 # 2. QUALITY CONTROL
@@ -128,8 +176,16 @@ print("\n" + "=" * 80)
 print("SCALING AND REGRESSION")
 print("=" * 80)
 
-# Regress out unwanted sources of variation
-sc.pp.regress_out(adata, ['total_counts', 'pct_counts_mt'])
+# regress_out densifies the matrix and can fork one full copy per worker.
+_dense_gb = adata.n_obs * adata.n_vars * 8 / 1e9
+_n_jobs = memory_safe_n_jobs(adata)
+if _n_jobs >= 1 and _dense_gb <= MAX_DENSE_GB:
+    print(f"regress_out: n_jobs={_n_jobs} (each worker copies ~{_dense_gb:.1f} GB)")
+    sc.pp.regress_out(adata, ['total_counts', 'pct_counts_mt'], n_jobs=_n_jobs)
+else:
+    print(f"WARNING: skipping regress_out because a dense copy is ~{_dense_gb:.1f} GB "
+          f"(workers that fit={_n_jobs}, limit={MAX_DENSE_GB} GB). Subset cells or "
+          "reduce N_TOP_GENES before retrying this step.")
 
 # Scale data
 sc.pp.scale(adata, max_value=10)
