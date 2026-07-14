@@ -432,6 +432,7 @@ export namespace ProviderTransform {
   //   gpt-5.1 (2025-11-13) none/low/medium/high         (none replaces minimal)
   //   gpt-5.2 (2025-12-11) none/low/medium/high/xhigh
   //   gpt-5.5 (2026-04) none/low/medium/high/xhigh
+  //   gpt-5.6 (2026-07) none/low/medium/high/xhigh/max
   //   *-codex           low/medium/high (+xhigh on 5.2-codex); never none/minimal
   //   gpt-5-pro         high only (fixed) → [] (no effort dial)
   //   gpt-5.2-pro       medium/high/xhigh
@@ -448,6 +449,7 @@ export namespace ProviderTransform {
     if (model.release_date >= "2025-11-13") arr.unshift("none")
     else if (id.includes("gpt-5")) arr.unshift("minimal")
     if (model.release_date >= "2025-12-11") arr.push("xhigh")
+    if (/gpt-5[.-]6\b/.test(id)) arr.push("max")
     return arr
   }
 
@@ -483,7 +485,22 @@ export namespace ProviderTransform {
         high: { reasoningEffort: "high" },
       }
     }
+    if (/grok-4[.-]5\b/.test(id)) {
+      const values = WIDELY_SUPPORTED_EFFORTS
+      if (model.api.npm === "@openrouter/ai-sdk-provider") {
+        return Object.fromEntries(values.map((effort) => [effort, { reasoning: { effort } }]))
+      }
+      return Object.fromEntries(values.map((effort) => [effort, { reasoningEffort: effort }]))
+    }
     if (id.includes("grok")) return {}
+
+    // Meta's OpenAI-compatible Muse endpoint accepts this exact ladder. Keep it
+    // separate from OpenAI's date-derived GPT ladder: Muse includes both
+    // `none` and `minimal`, but has no `max` tier.
+    if (/muse-spark-1[.-]1\b/.test(id)) {
+      const values = ["none", "minimal", ...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
+      return Object.fromEntries(values.map((effort) => [effort, { reasoningEffort: effort }]))
+    }
 
     switch (model.api.npm) {
       case "@openrouter/ai-sdk-provider": {
@@ -819,6 +836,10 @@ export namespace ProviderTransform {
       }
     }
 
+    if (/muse-spark-1[.-]1\b/.test(input.model.api.id.toLowerCase())) {
+      result["reasoningEffort"] = "medium"
+    }
+
     if (
       input.model.providerID === "baseten" ||
       (input.model.providerID === "synsci" && ["kimi-k2-thinking", "glm-4.6"].includes(input.model.api.id))
@@ -913,6 +934,9 @@ export namespace ProviderTransform {
         return { reasoningEffort: "low" }
       }
       return { reasoningEffort: "minimal" }
+    }
+    if (/muse-spark-1[.-]1\b/.test(model.api.id.toLowerCase())) {
+      return { reasoningEffort: "none" }
     }
     if (model.providerID === "google") {
       // gemini-3 uses thinkingLevel, gemini-2.5 uses thinkingBudget

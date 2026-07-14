@@ -35,6 +35,21 @@ import { Env } from "../../src/env"
 const SONNET = "claude-sonnet-4-6"
 const OPUS = "claude-opus-4-5"
 
+test("Codex OAuth allowlist includes the GPT-5.6 family", () => {
+  for (const id of [
+    "gpt-5.6",
+    "gpt-5-6",
+    "gpt-5.6-sol",
+    "gpt-5-6-sol",
+    "gpt-5.6-terra",
+    "gpt-5-6-terra",
+    "gpt-5.6-luna",
+    "gpt-5-6-luna",
+  ]) {
+    expect(Provider.isCodexOAuthModel(id)).toBe(true)
+  }
+})
+
 test("pinned catalog models are present in the seeded test fixture", async () => {
   await using tmp = await tmpdir({})
   await Instance.provide({
@@ -53,6 +68,35 @@ test("pinned catalog models are present in the seeded test fixture", async () =>
       }
     },
   })
+})
+
+test("seeded catalog exposes GPT-5.6, Grok 4.5, and Muse Spark 1.1 for direct BYOK", async () => {
+  await using tmp = await tmpdir({})
+  try {
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("OPENAI_API_KEY", "sk-openai-user")
+        Env.set("XAI_API_KEY", "xai-user")
+        Env.set("META_MODEL_API_KEY", "meta-user")
+        Provider.invalidate()
+      },
+      fn: async () => {
+        const providers = await Provider.list()
+        for (const id of ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+          expect(providers["openai"]?.models[id]).toBeDefined()
+        }
+        expect(providers["xai"]?.models["grok-4.5"]).toBeDefined()
+        const muse = providers["meta"]?.models["muse-spark-1.1"]
+        expect(muse).toBeDefined()
+        const language = await Provider.getLanguage(muse!)
+        expect(language.provider).toBe("meta.responses")
+      },
+    })
+  } finally {
+    for (const key of ["OPENAI_API_KEY", "XAI_API_KEY", "META_MODEL_API_KEY"]) delete process.env[key]
+    Provider.invalidate()
+  }
 })
 
 function clearManagedLLMEnv() {

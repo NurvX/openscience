@@ -12,6 +12,12 @@ import { test, expect } from "bun:test"
 //
 // Keep ANTHROPIC_PINS in sync with SONNET/OPUS in provider.test.ts.
 const ANTHROPIC_PINS = ["claude-sonnet-4-6", "claude-opus-4-5"]
+const NEW_MODEL_PINS: Record<string, string[]> = {
+  openai: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+  xai: ["grok-4.5"],
+  meta: ["muse-spark-1.1"],
+  openrouter: ["openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-5.6-luna", "x-ai/grok-4.5"],
+}
 
 test.skipIf(!process.env["OPENSCIENCE_LIVE_CATALOG"])("models.dev still lists the pinned catalog models", async () => {
   const res = await fetch("https://models.dev/api.json", { signal: AbortSignal.timeout(20_000) })
@@ -24,5 +30,11 @@ test.skipIf(!process.env["OPENSCIENCE_LIVE_CATALOG"])("models.dev still lists th
       throw new Error(
         `models.dev no longer lists anthropic/${id} — update the pins in provider.test.ts and regenerate test/fixture/models-catalog.json.gz`,
       )
+  }
+  for (const [provider, pins] of Object.entries(NEW_MODEL_PINS)) {
+    const models = Object.keys(catalog[provider]?.models ?? {})
+    for (const id of pins) {
+      if (!models.includes(id)) throw new Error(`models.dev no longer lists ${provider}/${id}`)
+    }
   }
 })
