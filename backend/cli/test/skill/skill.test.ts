@@ -4,6 +4,7 @@ import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 import path from "path"
 import fs from "fs/promises"
+import { ConfigMarkdown } from "../../src/config/markdown"
 
 async function createGlobalSkill(homeDir: string) {
   const skillDir = path.join(homeDir, ".claude", "skills", "global-test-skill")
@@ -182,4 +183,33 @@ test("returns empty array when no skills exist", async () => {
       expect(skills).toEqual([])
     },
   })
+})
+
+test("every bundled skill with frontmatter parses into a loadable skill", async () => {
+  const root = path.resolve(import.meta.dir, "../../skills")
+  const failures: string[] = []
+
+  for await (const relative of new Bun.Glob("**/SKILL.md").scan({ cwd: root })) {
+    const file = path.join(root, relative)
+    const source = await Bun.file(file).text()
+    // Category README files intentionally use the SKILL.md name without
+    // declaring a loadable skill.
+    if (!source.startsWith("---")) continue
+
+    try {
+      const markdown = await ConfigMarkdown.parse(file)
+      const parsed = Skill.Info.pick({
+        name: true,
+        description: true,
+        category: true,
+        tags: true,
+        entry: true,
+      }).safeParse(markdown.data)
+      if (!parsed.success) failures.push(`${relative}: ${parsed.error.message}`)
+    } catch (error) {
+      failures.push(`${relative}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  expect(failures).toEqual([])
 })
