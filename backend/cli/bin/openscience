@@ -68,7 +68,9 @@ function run(target) {
   const kernelProblem = linuxKernelProblem()
   if (kernelProblem) {
     console.error(kernelProblem)
-    console.error("Upgrade the host kernel or run OpenScience on a newer VM. CentOS 7's stock 3.10 kernel is not supported.")
+    console.error(
+      "Upgrade the host kernel or run OpenScience on a newer VM. CentOS 7's stock 3.10 kernel is not supported.",
+    )
     process.exit(1)
   }
 

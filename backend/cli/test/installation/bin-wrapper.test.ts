@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createRequire } from "module"
-import {
-  linuxKernelProblem as postinstallKernelProblem,
-  platformPackageNames,
-} from "../../script/postinstall.mjs"
+import { linuxKernelProblem as postinstallKernelProblem, platformPackageNames } from "../../script/postinstall.mjs"
 
 const require = createRequire(import.meta.url)
 const wrapper = require("../../bin/openscience") as {
