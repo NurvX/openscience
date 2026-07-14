@@ -187,8 +187,13 @@ else:
           f"(workers that fit={_n_jobs}, limit={MAX_DENSE_GB} GB). Subset cells or "
           "reduce N_TOP_GENES before retrying this step.")
 
-# Scale data
-sc.pp.scale(adata, max_value=10)
+# Centering a sparse matrix densifies it just like regress_out does. If the
+# memory guard kept the matrix sparse, retain that representation through PCA
+# instead of recreating the same OOM one line later.
+_scale_zero_center = not _sp.issparse(adata.X)
+if not _scale_zero_center:
+    print("scale: preserving sparse matrix with zero_center=False")
+sc.pp.scale(adata, max_value=10, zero_center=_scale_zero_center)
 
 # ============================================================================
 # 6. DIMENSIONALITY REDUCTION

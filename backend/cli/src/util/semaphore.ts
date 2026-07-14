@@ -161,7 +161,17 @@ export class HierarchicalSemaphore {
     this.rejectOrphaned(frame.lease)
     if (!wasActive) return
 
-    const next = frame.lease.pending.shift()
+    let ancestor = frame.parent
+    while (ancestor?.state === "closed") ancestor = ancestor.parent
+
+    // A descendant temporarily owns its ancestor's permit while that ancestor
+    // awaits the nested task. When the descendant closes, only another direct
+    // child of the nearest suspended ancestor may take over. An unrelated
+    // sibling queued under a higher ancestor must wait until the current branch
+    // has actually unwound, otherwise both it and the resumed parent run on the
+    // same permit.
+    const nextIndex = ancestor ? frame.lease.pending.findIndex((pending) => pending.frame.parent === ancestor) : 0
+    const next = nextIndex >= 0 ? frame.lease.pending.splice(nextIndex, 1)[0] : undefined
     if (next) {
       if (next.signal && next.onAbort) next.signal.removeEventListener("abort", next.onAbort)
       next.frame.state = "active"
@@ -170,8 +180,6 @@ export class HierarchicalSemaphore {
       return
     }
 
-    let ancestor = frame.parent
-    while (ancestor?.state === "closed") ancestor = ancestor.parent
     if (ancestor) {
       ancestor.state = "active"
       frame.lease.active = ancestor

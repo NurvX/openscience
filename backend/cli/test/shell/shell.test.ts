@@ -14,6 +14,16 @@ function withPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
   }
 }
 
+async function withPlatformAsync<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")
+  Object.defineProperty(process, "platform", { configurable: true, enumerable: true, value: platform })
+  try {
+    return await run()
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor)
+  }
+}
+
 function fakeProcess(pid: number) {
   return {
     pid,
@@ -63,6 +73,25 @@ test("killTreeSync never group-kills a Linux child that is not the group leader"
     expect(proc.kill).toHaveBeenCalledWith("SIGKILL")
   } finally {
     readStat.mockRestore()
+    groupKill.mockRestore()
+  }
+})
+
+test("killTree SIGKILLs a detached group even after its leader exits", async () => {
+  const proc = fakeProcess(4321)
+  const groupKill = spyOn(process, "kill").mockImplementation(() => true)
+
+  try {
+    await withPlatformAsync("darwin", () =>
+      Shell.killTree(proc, {
+        detached: true,
+        exited: () => true,
+      }),
+    )
+    expect(groupKill).toHaveBeenNthCalledWith(1, -4321, "SIGTERM")
+    expect(groupKill).toHaveBeenNthCalledWith(2, -4321, "SIGKILL")
+    expect(proc.kill).not.toHaveBeenCalled()
+  } finally {
     groupKill.mockRestore()
   }
 })

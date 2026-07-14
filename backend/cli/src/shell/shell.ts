@@ -20,11 +20,15 @@ export namespace Shell {
     }
   }
 
-  export async function killTree(proc: ChildProcess, opts?: { exited?: () => boolean }): Promise<void> {
+  export async function killTree(
+    proc: ChildProcess,
+    opts?: { exited?: () => boolean; detached?: boolean },
+  ): Promise<void> {
     const pid = proc.pid
-    if (!pid || opts?.exited?.()) return
+    if (!pid) return
 
     if (process.platform === "win32") {
+      if (opts?.exited?.()) return
       await new Promise<void>((resolve) => {
         const killer = spawn("taskkill", ["/pid", String(pid), "/f", "/t"], { stdio: "ignore" })
         killer.once("exit", () => resolve())
@@ -33,17 +37,32 @@ export namespace Shell {
       return
     }
 
-    if (leadsOwnGroup(pid)) {
+    // `detached` is captured at spawn time, so it remains trustworthy after the
+    // group leader exits and /proc/<pid> disappears. POSIX process groups outlive
+    // their leader while any grandchild remains.
+    const ownsGroup = opts?.detached === true || leadsOwnGroup(pid)
+    if (ownsGroup) {
       try {
         process.kill(-pid, "SIGTERM")
-        await Bun.sleep(SIGKILL_TIMEOUT_MS)
-        if (!opts?.exited?.()) process.kill(-pid, "SIGKILL")
-        return
       } catch {
-        // The group is gone or unavailable. Fall back to the direct child.
+        // ESRCH means the group is already gone. If the leader is also gone,
+        // there is no direct child left to clean up.
+        if (opts?.exited?.()) return
+        try {
+          proc.kill("SIGTERM")
+        } catch {}
+        return
       }
+      await Bun.sleep(SIGKILL_TIMEOUT_MS)
+      // Always make the group-kill attempt. The leader may have exited while a
+      // joblib/BLAS grandchild ignored SIGTERM; ESRCH is the successful no-op.
+      try {
+        process.kill(-pid, "SIGKILL")
+      } catch {}
+      return
     }
 
+    if (opts?.exited?.()) return
     try {
       proc.kill("SIGTERM")
       await Bun.sleep(SIGKILL_TIMEOUT_MS)
@@ -55,7 +74,7 @@ export namespace Shell {
    * Best-effort synchronous process-tree cleanup for process exit handlers.
    * Exit handlers cannot wait for killTree's timer or an asynchronous taskkill.
    */
-  export function killTreeSync(proc: ChildProcess): void {
+  export function killTreeSync(proc: ChildProcess, opts?: { detached?: boolean }): void {
     const pid = proc.pid
     if (!pid) return
 
@@ -70,7 +89,7 @@ export namespace Shell {
       return
     }
 
-    if (leadsOwnGroup(pid)) {
+    if (opts?.detached === true || leadsOwnGroup(pid)) {
       try {
         process.kill(-pid, "SIGKILL")
         return

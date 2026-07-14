@@ -8,6 +8,7 @@ test("scanpy template gates regress_out with a memory-sized worker count", async
   expect(source).toContain("def memory_safe_n_jobs(adata, fraction=0.5):")
   expect(source).toContain("if _n_jobs >= 1 and _dense_gb <= MAX_DENSE_GB:")
   expect(source).toContain("n_jobs=_n_jobs")
+  expect(source).toContain("zero_center=_scale_zero_center")
   expect(source).not.toContain("n_jobs=-1")
 })
 
@@ -50,6 +51,15 @@ regress_calls = [
 ]
 assert len(regress_calls) == 1
 assert any(keyword.arg == "n_jobs" for keyword in regress_calls[0].keywords)
+
+scale_calls = [
+    node for node in ast.walk(tree)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and node.func.attr == "scale"
+]
+assert len(scale_calls) == 1
+assert any(keyword.arg == "zero_center" for keyword in scale_calls[0].keywords)
 `
   const proc = Bun.spawnSync([python, "-c", harness, templatePath], {
     stdout: "pipe",

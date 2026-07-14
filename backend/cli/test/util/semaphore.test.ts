@@ -95,6 +95,29 @@ test("nested compute sessions transfer one permit and serialize parallel sibling
   releaseOutsider()
 })
 
+test("a grandchild restores its parent before an unrelated queued sibling", async () => {
+  const semaphore = new HierarchicalSemaphore(1)
+  const releaseRoot = await semaphore.acquire("root")
+  const releaseChild = await semaphore.acquire("child", { parent: "root" })
+
+  let siblingStarted = false
+  const sibling = semaphore.acquire("sibling", { parent: "root" }).then((release) => {
+    siblingStarted = true
+    return release
+  })
+  const releaseGrandchild = await semaphore.acquire("grandchild", { parent: "child" })
+
+  releaseGrandchild()
+  await sleep(1)
+  expect(siblingStarted).toBe(false)
+
+  releaseChild()
+  const releaseSibling = await sibling
+  expect(siblingStarted).toBe(true)
+  releaseSibling()
+  releaseRoot()
+})
+
 test("aborting a queued nested sibling leaves the inherited permit usable", async () => {
   const semaphore = new HierarchicalSemaphore(1)
   const releaseRoot = await semaphore.acquire("root")
