@@ -86,7 +86,10 @@ test("seeded catalog exposes GPT-5.6, Grok 4.5, and Muse Spark 1.1 for direct BY
         for (const id of ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
           expect(providers["openai"]?.models[id]).toBeDefined()
         }
-        expect(providers["xai"]?.models["grok-4.5"]).toBeDefined()
+        const grok = providers["xai"]?.models["grok-4.5"]
+        expect(grok).toBeDefined()
+        const grokLanguage = await Provider.getLanguage(grok!)
+        expect(grokLanguage.provider).toBe("xai.responses")
         const muse = providers["meta"]?.models["muse-spark-1.1"]
         expect(muse).toBeDefined()
         const language = await Provider.getLanguage(muse!)
@@ -236,20 +239,43 @@ test("openrouter with a BYOK env key routes to public OpenRouter with that key",
   })
 })
 
-test("a BYOK openrouter key overrides a lingering synced proxy base URL (no misroute)", async () => {
+test("a BYOK openrouter key overrides a path-prefixed synced proxy base URL (no misroute)", async () => {
   await using tmp = await tmpdir({})
   await Instance.provide({
     directory: tmp.path,
     init: async () => {
       Env.set("OPENROUTER_API_KEY", "sk-or-user-byok")
       // A proxy base URL left in env from a prior managed session must NOT
-      // capture the user's own key — the resolver pins it to public OpenRouter.
-      Env.set("OPENROUTER_BASE_URL", "https://thesis-synsc.fly.dev/api/llm/proxy/openrouter/v1")
+      // capture the user's own key, including when Atlas is hosted below a
+      // path prefix. The resolver pins it to public OpenRouter.
+      Env.set("OPENROUTER_BASE_URL", "https://atlas.example/control/api/llm/proxy/openrouter/v1")
     },
     fn: async () => {
       const providers = await Provider.list()
       expect(providers["openrouter"].options["apiKey"]).toBe("sk-or-user-byok")
       expect(providers["openrouter"].options["baseURL"]).toBe("https://openrouter.ai/api/v1")
+    },
+  })
+})
+
+test("a generic BYOK provider never sends its key to a path-prefixed Atlas proxy", async () => {
+  await using tmp = await tmpdir({})
+  await Instance.provide({
+    directory: tmp.path,
+    init: async () => {
+      Env.set("OPENAI_API_KEY", "sk-openai-user-byok")
+      Env.set("OPENAI_BASE_URL", "https://atlas.example/control/api/llm/proxy/openai/v1")
+      Provider.invalidate()
+    },
+    fn: async () => {
+      const openai = (await Provider.list())["openai"]
+      const model = openai.models["gpt-5.6"]
+      expect(model).toBeDefined()
+      expect(Provider.effectiveKey(openai)).toBe("sk-openai-user-byok")
+      const language = await Provider.getLanguage(model)
+      const requestURL = (language as any).config.url({ path: "/responses" })
+      expect(requestURL).toBe("https://api.openai.com/v1/responses")
+      expect(requestURL).not.toContain("/api/llm/proxy/")
     },
   })
 })
@@ -1230,21 +1256,21 @@ test("managed atlas proxy base URLs are forwarded for managed LLM providers", as
     init: async () => {
       clearManagedLLMEnv()
       Env.set("ANTHROPIC_API_KEY", "thk_anthropic")
-      Env.set("ANTHROPIC_BASE_URL", "https://atlas.test/api/llm/proxy/anthropic/v1")
+      Env.set("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/api/llm/proxy/anthropic/v1")
       Env.set("OPENAI_API_KEY", "thk_openai")
-      Env.set("OPENAI_BASE_URL", "https://atlas.test/api/llm/proxy/openai/v1")
+      Env.set("OPENAI_BASE_URL", "http://127.0.0.1:9/api/llm/proxy/openai/v1")
       Env.set("GOOGLE_GENERATIVE_AI_API_KEY", "thk_google")
-      Env.set("GOOGLE_GENERATIVE_AI_BASE_URL", "https://atlas.test/api/llm/proxy/gemini/v1beta")
+      Env.set("GOOGLE_GENERATIVE_AI_BASE_URL", "http://127.0.0.1:9/api/llm/proxy/gemini/v1beta")
       Env.set("OPENROUTER_API_KEY", "thk_openrouter")
-      Env.set("OPENROUTER_BASE_URL", "https://atlas.test/api/llm/proxy/openrouter/v1")
+      Env.set("OPENROUTER_BASE_URL", "http://127.0.0.1:9/api/llm/proxy/openrouter/v1")
       Provider.invalidate()
     },
     fn: async () => {
       const providers = await Provider.list()
-      expect(providers["anthropic"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/anthropic/v1")
-      expect(providers["openai"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/openai/v1")
-      expect(providers["google"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/gemini/v1beta")
-      expect(providers["openrouter"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/openrouter/v1")
+      expect(providers["anthropic"].options.baseURL).toBe("http://127.0.0.1:9/api/llm/proxy/anthropic/v1")
+      expect(providers["openai"].options.baseURL).toBe("http://127.0.0.1:9/api/llm/proxy/openai/v1")
+      expect(providers["google"].options.baseURL).toBe("http://127.0.0.1:9/api/llm/proxy/gemini/v1beta")
+      expect(providers["openrouter"].options.baseURL).toBe("http://127.0.0.1:9/api/llm/proxy/openrouter/v1")
     },
   })
 })
