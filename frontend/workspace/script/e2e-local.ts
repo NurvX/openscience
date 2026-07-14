@@ -44,6 +44,23 @@ async function waitForHealth(url: string, authHeader: string) {
   throw new Error(`Timed out waiting for server health: ${url}${last}`)
 }
 
+async function boundedCleanup(label: string, cleanup: () => void | Promise<void>, timeoutMs = 10_000, fatal = false) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve().then(cleanup),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} cleanup timed out after ${timeoutMs}ms`)), timeoutMs)
+      }),
+    ])
+  } catch (error) {
+    if (fatal) throw error
+    console.warn(`[e2e cleanup] ${label}:`, error)
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 const appDir = process.cwd()
 const repoDir = path.resolve(appDir, "../..")
 const openscienceDir = path.join(repoDir, "backend", "cli")
@@ -68,6 +85,7 @@ const serverEnv = {
   OPENSCIENCE_DISABLE_SHARE: "true",
   OPENSCIENCE_DISABLE_LSP_DOWNLOAD: "true",
   OPENSCIENCE_DISABLE_DEFAULT_PLUGINS: "true",
+  OPENSCIENCE_DISABLE_PROJECT_CONFIG: "true",
   OPENSCIENCE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true",
   OPENSCIENCE_TEST_HOME: path.join(sandbox, "home"),
   XDG_DATA_HOME: path.join(sandbox, "share"),
@@ -79,7 +97,14 @@ const serverEnv = {
   OPENSCIENCE_E2E_MESSAGE: "Seeded for UI e2e",
   OPENSCIENCE_E2E_MODEL: fakeModelID,
   OPENSCIENCE_E2E_FAKE_MODEL: "1",
-  OPENSCIENCE_CONFIG_CONTENT: JSON.stringify(fakeModelConfig(`http://127.0.0.1:${modelPort}/v1`)),
+  OPENSCIENCE_CONFIG_CONTENT: JSON.stringify({
+    ...fakeModelConfig(`http://127.0.0.1:${modelPort}/v1`),
+    // The isolated browser suite does not exercise repository snapshots. The
+    // eager scheduler otherwise launches `git gc` against the developer's
+    // checkout, races parallel tests, and can recreate the temporary XDG tree
+    // after teardown has removed it.
+    snapshot: false,
+  }),
   OPENSCIENCE_CLIENT: "app",
   OPENSCIENCE_SERVER_USERNAME: e2eServerUsername,
   OPENSCIENCE_SERVER_PASSWORD: e2eServerPassword,
@@ -96,6 +121,8 @@ const providerCredentialEnvKeys = [
   "GOOGLE_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
   "GOOGLE_GENERATIVE_AI_BASE_URL",
+  "GEMINI_API_KEY",
+  "GEMINI_BASE_URL",
   "AZURE_OPENAI_API_KEY",
   "AWS_ACCESS_KEY_ID",
   "AWS_PROFILE",
@@ -108,6 +135,8 @@ const providerCredentialEnvKeys = [
   "PERPLEXITY_API_KEY",
   "TOGETHER_API_KEY",
   "XAI_API_KEY",
+  "META_MODEL_API_KEY",
+  "META_MODEL_BASE_URL",
   "DEEPSEEK_API_KEY",
   "FIREWORKS_API_KEY",
   "CEREBRAS_API_KEY",
@@ -199,12 +228,20 @@ const result = await (async () => {
   } catch (error) {
     return { error }
   } finally {
-    await inst.Instance.disposeAll()
-    await server.stop()
     fakeModelServer.stop(true)
+    await boundedCleanup("backend server", () => server.stop(true), 5_000)
+    await boundedCleanup("project instances", () => inst.Instance.disposeAll())
     await Promise.all([
-      envLocalBefore === undefined ? fs.rm(envLocalPath, { force: true }) : fs.writeFile(envLocalPath, envLocalBefore),
-      fs.rm(sandbox, { recursive: true, force: true }),
+      boundedCleanup(
+        ".env.local",
+        () =>
+          envLocalBefore === undefined
+            ? fs.rm(envLocalPath, { force: true })
+            : fs.writeFile(envLocalPath, envLocalBefore),
+        10_000,
+        true,
+      ),
+      boundedCleanup("sandbox", () => fs.rm(sandbox, { recursive: true, force: true })),
     ])
   }
 })()
