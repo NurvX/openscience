@@ -47,6 +47,17 @@ function pageSize() {
   return result.status === 0 ? result.stdout.trim() || undefined : undefined
 }
 
+function linuxArm64PageSizeProblem(platform, arch, detectedPageSize) {
+  if (platform !== "linux" || arch !== "arm64" || detectedPageSize === undefined) return undefined
+  const bytes = Number.parseInt(String(detectedPageSize), 10)
+  if (!Number.isFinite(bytes) || bytes === 4096) return undefined
+  return [
+    `Linux ARM64 page size ${bytes} is unsupported by OpenScience's Bun-compiled executable.`,
+    "Use a kernel or VM configured with 4 KB pages.",
+    "Upstream status: https://github.com/oven-sh/bun/issues/17627",
+  ].join(" ")
+}
+
 function runtimeDescription(platform, arch, musl) {
   const details = [`${platform}-${arch}`]
   if (platform === "linux") {
@@ -71,6 +82,13 @@ function run(target) {
     console.error(
       "Upgrade the host kernel or run OpenScience on a newer VM. CentOS 7's stock 3.10 kernel is not supported.",
     )
+    process.exit(1)
+  }
+
+  const pageSizeProblem = linuxArm64PageSizeProblem(os.platform(), os.arch(), pageSize())
+  if (pageSizeProblem) {
+    console.error(pageSizeProblem)
+    console.error(`Detected runtime: ${runtimeDescription(os.platform(), os.arch(), detectMusl())}`)
     process.exit(1)
   }
 
@@ -211,6 +229,7 @@ module.exports = {
   detectMusl,
   exitCodeForResult,
   expectedPlatformPackages,
+  linuxArm64PageSizeProblem,
   linuxKernelProblem,
   matchingVariants,
   parseKernelVersion,

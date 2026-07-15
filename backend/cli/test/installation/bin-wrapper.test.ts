@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { createRequire } from "module"
-import { linuxKernelProblem as postinstallKernelProblem, platformPackageNames } from "../../script/postinstall.mjs"
+import {
+  linuxArm64PageSizeProblem as postinstallPageSizeProblem,
+  linuxKernelProblem as postinstallKernelProblem,
+  platformPackageNames,
+} from "../../script/postinstall.mjs"
 
 const require = createRequire(import.meta.url)
 const wrapper = require("../../bin/openscience") as {
   exitCodeForResult(result: { status: number | null; signal: NodeJS.Signals | null }): number
   expectedPlatformPackages(platform: string, arch: string, musl: boolean): string[]
+  linuxArm64PageSizeProblem(platform: string, arch: string, pageSize?: string): string | undefined
   linuxKernelProblem(platform: string, release: string): string | undefined
   matchingVariants(prefix: string, entries: string[], preferMusl: boolean): string[]
   parseKernelVersion(release: string): { major: number; minor: number } | undefined
@@ -24,6 +29,18 @@ describe("npm bin wrapper", () => {
     expect(wrapper.exitCodeForResult({ status: 7, signal: null })).toBe(7)
     expect(wrapper.exitCodeForResult({ status: null, signal: "SIGTERM" })).toBe(143)
     expect(wrapper.exitCodeForResult({ status: null, signal: null })).toBe(1)
+  })
+
+  test("rejects non-4 KB Linux ARM64 page sizes before launching the compiled runtime", () => {
+    expect(wrapper.linuxArm64PageSizeProblem("linux", "arm64", "65536")).toContain("page size 65536")
+    expect(wrapper.linuxArm64PageSizeProblem("linux", "arm64", "16384")).toContain("4 KB pages")
+    expect(wrapper.linuxArm64PageSizeProblem("linux", "arm64", "4096")).toBeUndefined()
+    expect(wrapper.linuxArm64PageSizeProblem("linux", "x64", "65536")).toBeUndefined()
+    expect(wrapper.linuxArm64PageSizeProblem("darwin", "arm64", "16384")).toBeUndefined()
+    expect(wrapper.linuxArm64PageSizeProblem("linux", "arm64", undefined)).toBeUndefined()
+
+    expect(postinstallPageSizeProblem("linux", "arm64", "65536")).toContain("page size 65536")
+    expect(postinstallPageSizeProblem("linux", "arm64", "4096")).toBeUndefined()
   })
 
   test("prefers the matching libc and exact native package", () => {
