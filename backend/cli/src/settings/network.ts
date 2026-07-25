@@ -117,6 +117,24 @@ export namespace Network {
     return { allowlistEnabled: false, enabled: ["package-management"], custom: [] }
   }
 
+  function normalize(domain: string): string {
+    return domain.trim().toLowerCase().replace(/^\*\./, "").replace(/\.$/, "")
+  }
+
+  function domains(state: State): string[] {
+    const result = new Set<string>(state.custom.map(normalize).filter(Boolean))
+    for (const group of CATALOG) {
+      if (!state.enabled.includes(group.id)) continue
+      for (const domain of group.domains) result.add(normalize(domain))
+    }
+    return [...result].sort()
+  }
+
+  export function domainAllowed(hostname: string, allowlist: string[]): boolean {
+    const host = normalize(hostname)
+    return allowlist.map(normalize).some((domain) => host === domain || host.endsWith(`.${domain}`))
+  }
+
   export async function get(): Promise<State> {
     const text = await Bun.file(file)
       .text()
@@ -140,12 +158,23 @@ export namespace Network {
   // Effective flat list of allowed domains (enabled groups ∪ custom). Readable
   // by any backend caller that wants to gate outbound access.
   export async function allowlist(): Promise<string[]> {
+    return domains(await get())
+  }
+
+  export async function assertAllowed(raw: string): Promise<void> {
     const state = await get()
-    const domains = new Set<string>(state.custom.map((d) => d.trim()).filter(Boolean))
-    for (const group of CATALOG) {
-      if (!state.enabled.includes(group.id)) continue
-      for (const domain of group.domains) domains.add(domain)
+    if (!state.allowlistEnabled) return
+    let url: URL
+    try {
+      url = new URL(raw)
+    } catch {
+      throw new Error(`Invalid network URL: ${raw}`)
     }
-    return [...domains].sort()
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error(`Network URL must use http or https: ${raw}`)
+    }
+    const allowed = domains(state)
+    if (domainAllowed(url.hostname, allowed)) return
+    throw new Error(`Network access to ${url.hostname} is not in the configured allow-list`)
   }
 }

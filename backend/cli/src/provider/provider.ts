@@ -13,7 +13,7 @@ import { Env } from "../env"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
 import { iife } from "@/util/iife"
-import { OpenScience } from "../openscience"
+import { API_BASE, OpenScience } from "../openscience"
 
 // Direct imports for bundled providers
 import { createAmazonBedrock, type AmazonBedrockProviderSettings } from "@ai-sdk/amazon-bedrock"
@@ -104,8 +104,25 @@ export namespace Provider {
     return typeof key === "string" && key.startsWith("thk_")
   }
 
-  function isAtlasProxyBaseURL(baseURL: unknown): baseURL is string {
-    return typeof baseURL === "string" && baseURL.includes("/api/llm/proxy/")
+  export function isManagedProxyBaseURL(baseURL: unknown): baseURL is string {
+    if (typeof baseURL !== "string") return false
+    try {
+      const url = new URL(baseURL)
+      return url.pathname.startsWith("/api/llm/proxy/") && !url.search && !url.hash
+    } catch {
+      return false
+    }
+  }
+
+  export function isAtlasProxyBaseURL(baseURL: unknown): baseURL is string {
+    if (typeof baseURL !== "string") return false
+    try {
+      const url = new URL(baseURL)
+      const proxy = new URL(`${API_BASE}/api/llm/proxy/`)
+      return url.origin === proxy.origin && url.pathname.startsWith(proxy.pathname) && !url.search && !url.hash
+    } catch {
+      return false
+    }
   }
 
   // Explicit apiKey for a provider routed through the Atlas managed proxy: force
@@ -491,7 +508,7 @@ export namespace Provider {
         // OPENROUTER_BASE_URL); only the Atlas proxy is swapped for the public
         // endpoint, since a BYOK key must never be sent to the managed proxy.
         const envBase = Env.get("OPENROUTER_BASE_URL")
-        const baseURL = envBase && !isAtlasProxyBaseURL(envBase) ? envBase : "https://openrouter.ai/api/v1"
+        const baseURL = envBase && !isManagedProxyBaseURL(envBase) ? envBase : "https://openrouter.ai/api/v1"
         return { autoload: false, options: { apiKey: ownKey, baseURL, headers } }
       }
 
