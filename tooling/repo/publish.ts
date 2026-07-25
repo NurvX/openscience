@@ -50,12 +50,17 @@ await $`bun install`
 await import(`../sdk/js/script/build.ts`)
 
 if (Script.release) {
-  await $`git commit -am "release: v${Script.version}"`.nothrow()
-  await $`git tag v${Script.version}`.nothrow()
+  const commit = await $`git commit -am "release: v${Script.version}"`.nothrow()
+  if (commit.exitCode !== 0) {
+    console.warn(`::warning::release commit failed or had no changes for v${Script.version}`)
+  }
+  const sha = await $`git rev-parse HEAD`.text().then((x) => x.trim())
+  await $`git tag -f v${Script.version} ${sha}`
+  await $`gh release edit v${Script.version} --target ${sha}`
   // Tags are exempt from branch protection; push the tag on its own so the
   // release assets and npm publishes can proceed regardless of what happens
   // to the branch push below.
-  const tagPush = await $`git push origin refs/tags/v${Script.version} --no-verify`.nothrow()
+  const tagPush = await $`git push origin refs/tags/v${Script.version} --force --no-verify`.nothrow()
   if (tagPush.exitCode !== 0) {
     console.warn(`::warning::tag push failed for v${Script.version} (already pushed?)`)
   }

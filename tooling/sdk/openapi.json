@@ -39,7 +39,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.health({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.health({\n  ...\n})"
           }
         ]
       }
@@ -64,7 +64,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.event({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.event({\n  ...\n})"
           }
         ]
       }
@@ -89,7 +89,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.config.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.config.get({\n  ...\n})"
           }
         ]
       },
@@ -131,7 +131,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.config.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.config.update({\n  ...\n})"
           }
         ]
       }
@@ -168,7 +168,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.configRawGet({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.configRawGet({\n  ...\n})"
           }
         ]
       },
@@ -218,7 +218,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.configRawSet({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.configRawSet({\n  ...\n})"
           }
         ]
       }
@@ -274,7 +274,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.configUnset({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.configUnset({\n  ...\n})"
           }
         ]
       }
@@ -299,7 +299,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.dispose({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.dispose({\n  ...\n})"
           }
         ]
       }
@@ -337,7 +337,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.global.sync({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.global.sync({\n  ...\n})"
           }
         ]
       }
@@ -410,7 +410,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.account.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.get({\n  ...\n})"
           }
         ]
       }
@@ -442,7 +442,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.account.balance({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.balance({\n  ...\n})"
           }
         ]
       }
@@ -511,7 +511,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.account.devices({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.devices({\n  ...\n})"
           }
         ]
       }
@@ -545,7 +545,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.account.device.revoke({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.device.revoke({\n  ...\n})"
           }
         ]
       }
@@ -600,7 +600,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.account.billingMode.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.billingMode.get({\n  ...\n})"
           }
         ]
       },
@@ -674,7 +674,59 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.account.billingMode.set({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.billingMode.set({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/account/login-key": {
+      "post": {
+        "operationId": "account.loginKey",
+        "summary": "Sign in with an Atlas API key",
+        "responses": {
+          "200": {
+            "description": "Login result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.loginKey({\n  ...\n})"
           }
         ]
       }
@@ -698,7 +750,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.account.logout({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.account.logout({\n  ...\n})"
           }
         ]
       }
@@ -811,7 +863,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.credentials.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.credentials.list({\n  ...\n})"
           }
         ]
       }
@@ -962,7 +1014,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.credentials.set({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.credentials.set({\n  ...\n})"
           }
         ]
       },
@@ -1083,7 +1135,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.credentials.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.credentials.remove({\n  ...\n})"
           }
         ]
       }
@@ -1174,7 +1226,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.storage.usage({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.storage.usage({\n  ...\n})"
           }
         ]
       }
@@ -1233,7 +1285,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.storage.relocate({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.storage.relocate({\n  ...\n})"
           }
         ]
       },
@@ -1264,7 +1316,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.storage.resetLocation({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.storage.resetLocation({\n  ...\n})"
           }
         ]
       }
@@ -1409,7 +1461,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.get({\n  ...\n})"
           }
         ]
       }
@@ -1592,7 +1644,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.provider.connect({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.provider.connect({\n  ...\n})"
           }
         ]
       },
@@ -1745,7 +1797,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.provider.disconnect({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.provider.disconnect({\n  ...\n})"
           }
         ]
       }
@@ -1931,7 +1983,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.ssh.add({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.ssh.add({\n  ...\n})"
           }
         ]
       }
@@ -2086,7 +2138,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.ssh.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.ssh.remove({\n  ...\n})"
           }
         ]
       }
@@ -2272,7 +2324,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.endpoint.add({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.endpoint.add({\n  ...\n})"
           }
         ]
       }
@@ -2427,7 +2479,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.endpoint.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.endpoint.remove({\n  ...\n})"
           }
         ]
       }
@@ -2468,7 +2520,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.permissions.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.permissions.get({\n  ...\n})"
           }
         ]
       }
@@ -2551,7 +2603,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.permissions.set({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.permissions.set({\n  ...\n})"
           }
         ]
       }
@@ -2622,7 +2674,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.permissions.revokeAll({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.permissions.revokeAll({\n  ...\n})"
           }
         ]
       }
@@ -2671,7 +2723,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.preferences.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.preferences.get({\n  ...\n})"
           }
         ]
       },
@@ -2752,7 +2804,172 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.preferences.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.preferences.update({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/local/start": {
+      "post": {
+        "operationId": "postSettingsLocalStart",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {}
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.postSettingsLocalStart({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/local/models": {
+      "post": {
+        "operationId": "postSettingsLocalModels",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {}
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.postSettingsLocalModels({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/local": {
+      "post": {
+        "operationId": "postSettingsLocal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "key": {
+                    "type": "string"
+                  },
+                  "models": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "setDefault": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "url",
+                  "models"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {}
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.postSettingsLocal({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/sandbox": {
+      "put": {
+        "operationId": "putSettingsSandbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "network": {
+                    "type": "string",
+                    "enum": [
+                      "allow",
+                      "deny"
+                    ]
+                  },
+                  "allowWrite": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "onUnavailable": {
+                    "type": "string",
+                    "enum": [
+                      "warn",
+                      "error",
+                      "allow"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {}
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.putSettingsSandbox({\n  ...\n})"
           }
         ]
       }
@@ -2798,7 +3015,7 @@
                           "type": "boolean"
                         },
                         "balanceUsd": {
-                          "description": "CLI wallet balance in USD; -1 when signed out or unavailable",
+                          "description": "Credit balance in USD; -1 when signed out or unavailable",
                           "type": "number"
                         }
                       },
@@ -2821,7 +3038,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.billing.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.billing.get({\n  ...\n})"
           }
         ]
       },
@@ -2865,7 +3082,7 @@
                           "type": "boolean"
                         },
                         "balanceUsd": {
-                          "description": "CLI wallet balance in USD; -1 when signed out or unavailable",
+                          "description": "Credit balance in USD; -1 when signed out or unavailable",
                           "type": "number"
                         }
                       },
@@ -2892,10 +3109,17 @@
                 "type": "object",
                 "properties": {
                   "llm": {
-                    "type": "string",
-                    "enum": [
-                      "managed",
-                      "byok"
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "managed",
+                          "byok"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   },
                   "compute": {
@@ -2913,7 +3137,98 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.billing.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.billing.update({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/wallet": {
+      "get": {
+        "operationId": "settings.wallet.get",
+        "summary": "Get credit balance, plan mode, and recent transactions",
+        "responses": {
+          "200": {
+            "description": "Wallet state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "signedIn": {
+                      "type": "boolean"
+                    },
+                    "balanceUsd": {
+                      "description": "Wallet balance in USD; -1 when signed out or unavailable",
+                      "type": "number"
+                    },
+                    "billingMode": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "managed",
+                            "byok"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "managedSupported": {
+                      "type": "boolean"
+                    },
+                    "lifetimeSpentUsd": {
+                      "type": "number"
+                    },
+                    "transactions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "amountCents": {
+                            "type": "number"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "amountCents",
+                          "source",
+                          "description",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "signedIn",
+                    "balanceUsd",
+                    "billingMode",
+                    "managedSupported",
+                    "lifetimeSpentUsd",
+                    "transactions"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.wallet.get({\n  ...\n})"
           }
         ]
       }
@@ -2967,7 +3282,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.auth.set({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.auth.set({\n  ...\n})"
           }
         ]
       },
@@ -3010,7 +3325,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.auth.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.auth.remove({\n  ...\n})"
           }
         ]
       }
@@ -3047,7 +3362,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.project.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.project.list({\n  ...\n})"
           }
         ]
       }
@@ -3081,7 +3396,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.project.current({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.project.current({\n  ...\n})"
           }
         ]
       }
@@ -3180,7 +3495,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.project.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.project.update({\n  ...\n})"
           }
         ]
       }
@@ -3217,7 +3532,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.pty.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.pty.list({\n  ...\n})"
           }
         ]
       },
@@ -3294,7 +3609,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.pty.create({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.pty.create({\n  ...\n})"
           }
         ]
       }
@@ -3346,7 +3661,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.pty.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.pty.get({\n  ...\n})"
           }
         ]
       },
@@ -3425,7 +3740,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.pty.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.pty.update({\n  ...\n})"
           }
         ]
       },
@@ -3475,7 +3790,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.pty.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.pty.remove({\n  ...\n})"
           }
         ]
       }
@@ -3527,7 +3842,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.pty.connect({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.pty.connect({\n  ...\n})"
           }
         ]
       }
@@ -3561,7 +3876,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.config.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.config.get({\n  ...\n})"
           }
         ]
       },
@@ -3612,7 +3927,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.config.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.config.update({\n  ...\n})"
           }
         ]
       }
@@ -3667,7 +3982,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.config.providers({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.config.providers({\n  ...\n})"
           }
         ]
       }
@@ -3711,7 +4026,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.tool.ids({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.tool.ids({\n  ...\n})"
           }
         ]
       }
@@ -3771,7 +4086,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.tool.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.tool.list({\n  ...\n})"
           }
         ]
       }
@@ -3824,7 +4139,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.worktree.create({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.worktree.create({\n  ...\n})"
           }
         ]
       },
@@ -3859,7 +4174,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.worktree.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.worktree.list({\n  ...\n})"
           }
         ]
       },
@@ -3910,7 +4225,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.worktree.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.worktree.remove({\n  ...\n})"
           }
         ]
       }
@@ -3963,7 +4278,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.worktree.reset({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.worktree.reset({\n  ...\n})"
           }
         ]
       }
@@ -4003,7 +4318,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.experimental.resource.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.experimental.resource.list({\n  ...\n})"
           }
         ]
       }
@@ -4073,7 +4388,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.list({\n  ...\n})"
           }
         ]
       },
@@ -4136,7 +4451,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.create({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.create({\n  ...\n})"
           }
         ]
       }
@@ -4186,7 +4501,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.status({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.status({\n  ...\n})"
           }
         ]
       }
@@ -4252,7 +4567,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.get({\n  ...\n})"
           }
         ]
       },
@@ -4313,7 +4628,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.delete({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.delete({\n  ...\n})"
           }
         ]
       },
@@ -4395,7 +4710,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.update({\n  ...\n})"
           }
         ]
       }
@@ -4464,7 +4779,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.children({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.children({\n  ...\n})"
           }
         ]
       }
@@ -4530,7 +4845,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.todo({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.todo({\n  ...\n})"
           }
         ]
       }
@@ -4619,7 +4934,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.init({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.init({\n  ...\n})"
           }
         ]
       }
@@ -4677,7 +4992,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.fork({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.fork({\n  ...\n})"
           }
         ]
       }
@@ -4739,7 +5054,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.abort({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.abort({\n  ...\n})"
           }
         ]
       }
@@ -4793,7 +5108,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.diff({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.diff({\n  ...\n})"
           }
         ]
       }
@@ -4881,7 +5196,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.summarize({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.summarize({\n  ...\n})"
           }
         ]
       }
@@ -4969,7 +5284,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.messages({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.messages({\n  ...\n})"
           }
         ]
       },
@@ -5097,9 +5412,6 @@
                       "ultra"
                     ]
                   },
-                  "fast": {
-                    "type": "boolean"
-                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -5130,7 +5442,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.prompt({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.prompt({\n  ...\n})"
           }
         ]
       }
@@ -5217,7 +5529,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.message({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.message({\n  ...\n})"
           }
         ]
       }
@@ -5297,7 +5609,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.part.delete({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.part.delete({\n  ...\n})"
           }
         ]
       },
@@ -5384,7 +5696,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.part.update({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.part.update({\n  ...\n})"
           }
         ]
       }
@@ -5492,9 +5804,6 @@
                       "ultra"
                     ]
                   },
-                  "fast": {
-                    "type": "boolean"
-                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -5525,7 +5834,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.prompt_async({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.prompt_async({\n  ...\n})"
           }
         ]
       }
@@ -5673,7 +5982,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.command({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.command({\n  ...\n})"
           }
         ]
       }
@@ -5772,7 +6081,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.shell({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.shell({\n  ...\n})"
           }
         ]
       }
@@ -5856,7 +6165,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.revert({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.revert({\n  ...\n})"
           }
         ]
       }
@@ -5918,7 +6227,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.session.unrevert({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.unrevert({\n  ...\n})"
           }
         ]
       }
@@ -6011,7 +6320,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.permission.respond({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.permission.respond({\n  ...\n})"
           }
         ]
       }
@@ -6098,7 +6407,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.permission.reply({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.permission.reply({\n  ...\n})"
           }
         ]
       }
@@ -6135,7 +6444,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.permission.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.permission.list({\n  ...\n})"
           }
         ]
       }
@@ -6172,7 +6481,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.question.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.question.list({\n  ...\n})"
           }
         ]
       }
@@ -6255,7 +6564,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.question.reply({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.question.reply({\n  ...\n})"
           }
         ]
       }
@@ -6317,7 +6626,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.question.reject({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.question.reject({\n  ...\n})"
           }
         ]
       }
@@ -6621,7 +6930,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.provider.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provider.list({\n  ...\n})"
           }
         ]
       }
@@ -6664,7 +6973,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.provider.auth({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provider.auth({\n  ...\n})"
           }
         ]
       }
@@ -6735,7 +7044,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.provider.oauth.authorize({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provider.oauth.authorize({\n  ...\n})"
           }
         ]
       }
@@ -6810,7 +7119,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.provider.oauth.callback({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provider.oauth.callback({\n  ...\n})"
           }
         ]
       }
@@ -6922,7 +7231,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.find.text({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.find.text({\n  ...\n})"
           }
         ]
       }
@@ -6998,7 +7307,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.find.files({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.find.files({\n  ...\n})"
           }
         ]
       }
@@ -7043,7 +7352,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.find.symbols({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.find.symbols({\n  ...\n})"
           }
         ]
       }
@@ -7088,7 +7397,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.file.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.list({\n  ...\n})"
           }
         ]
       }
@@ -7130,7 +7439,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.file.read({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.read({\n  ...\n})"
           }
         ]
       },
@@ -7183,7 +7492,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.file.write({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.write({\n  ...\n})"
           }
         ]
       }
@@ -7220,7 +7529,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.file.status({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.status({\n  ...\n})"
           }
         ]
       }
@@ -7260,7 +7569,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.status({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.status({\n  ...\n})"
           }
         ]
       },
@@ -7336,7 +7645,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.add({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.add({\n  ...\n})"
           }
         ]
       }
@@ -7425,7 +7734,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.config.set({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.config.set({\n  ...\n})"
           }
         ]
       },
@@ -7495,7 +7804,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.config.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.config.remove({\n  ...\n})"
           }
         ]
       }
@@ -7566,7 +7875,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.start({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.start({\n  ...\n})"
           }
         ]
       },
@@ -7625,7 +7934,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.remove({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.remove({\n  ...\n})"
           }
         ]
       }
@@ -7705,7 +8014,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.callback({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.callback({\n  ...\n})"
           }
         ]
       }
@@ -7767,7 +8076,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.authenticate({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.auth.authenticate({\n  ...\n})"
           }
         ]
       }
@@ -7808,7 +8117,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.connect({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.connect({\n  ...\n})"
           }
         ]
       }
@@ -7849,7 +8158,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.mcp.disconnect({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.mcp.disconnect({\n  ...\n})"
           }
         ]
       }
@@ -7981,7 +8290,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.skills.install({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.skills.install({\n  ...\n})"
           }
         ]
       }
@@ -8077,7 +8386,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.memory.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.memory.get({\n  ...\n})"
           }
         ]
       },
@@ -8230,7 +8539,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.memory.set({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.memory.set({\n  ...\n})"
           }
         ]
       }
@@ -8331,7 +8640,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.network.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.network.get({\n  ...\n})"
           }
         ]
       },
@@ -8431,7 +8740,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.network.set({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.network.set({\n  ...\n})"
           }
         ]
       }
@@ -8621,7 +8930,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.settings.usage.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.usage.get({\n  ...\n})"
           }
         ]
       }
@@ -8655,7 +8964,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.instance.dispose({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.instance.dispose({\n  ...\n})"
           }
         ]
       }
@@ -8689,7 +8998,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.path.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.path.get({\n  ...\n})"
           }
         ]
       }
@@ -8723,7 +9032,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.vcs.get({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.vcs.get({\n  ...\n})"
           }
         ]
       }
@@ -8760,7 +9069,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.command.list({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.command.list({\n  ...\n})"
           }
         ]
       }
@@ -8846,7 +9155,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.app.log({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.app.log({\n  ...\n})"
           }
         ]
       }
@@ -8883,7 +9192,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.app.agents({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.app.agents({\n  ...\n})"
           }
         ]
       }
@@ -8948,7 +9257,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.app.skills({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.app.skills({\n  ...\n})"
           }
         ]
       }
@@ -9035,7 +9344,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.app.skill.write({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.app.skill.write({\n  ...\n})"
           }
         ]
       },
@@ -9075,7 +9384,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.app.skill.delete({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.app.skill.delete({\n  ...\n})"
           }
         ]
       }
@@ -9112,7 +9421,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.lsp.status({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.lsp.status({\n  ...\n})"
           }
         ]
       }
@@ -9149,7 +9458,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.formatter.status({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.formatter.status({\n  ...\n})"
           }
         ]
       }
@@ -9183,7 +9492,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\n\nconst client = createOpenScienceClient()\nawait client.event.subscribe({\n  ...\n})"
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.event.subscribe({\n  ...\n})"
           }
         ]
       }
@@ -9191,6 +9500,40 @@
   },
   "components": {
     "schemas": {
+      "Event.server.connected": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "server.connected"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
+      },
+      "Event.global.disposed": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "global.disposed"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
+      },
       "Event.installation.updated": {
         "type": "object",
         "properties": {
@@ -9350,40 +9693,6 @@
           "properties"
         ]
       },
-      "Event.server.connected": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "server.connected"
-          },
-          "properties": {
-            "type": "object",
-            "properties": {}
-          }
-        },
-        "required": [
-          "type",
-          "properties"
-        ]
-      },
-      "Event.global.disposed": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "global.disposed"
-          },
-          "properties": {
-            "type": "object",
-            "properties": {}
-          }
-        },
-        "required": [
-          "type",
-          "properties"
-        ]
-      },
       "Event.lsp.client.diagnostics": {
         "type": "object",
         "properties": {
@@ -9515,117 +9824,6 @@
           "properties"
         ]
       },
-      "PermissionRequest": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^per.*"
-          },
-          "sessionID": {
-            "type": "string",
-            "pattern": "^ses.*"
-          },
-          "permission": {
-            "type": "string"
-          },
-          "patterns": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "metadata": {
-            "type": "object",
-            "propertyNames": {
-              "type": "string"
-            },
-            "additionalProperties": {}
-          },
-          "always": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "tool": {
-            "type": "object",
-            "properties": {
-              "messageID": {
-                "type": "string"
-              },
-              "callID": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "messageID",
-              "callID"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "sessionID",
-          "permission",
-          "patterns",
-          "metadata",
-          "always"
-        ]
-      },
-      "Event.permission.asked": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "permission.asked"
-          },
-          "properties": {
-            "$ref": "#/components/schemas/PermissionRequest"
-          }
-        },
-        "required": [
-          "type",
-          "properties"
-        ]
-      },
-      "Event.permission.replied": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "permission.replied"
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "sessionID": {
-                "type": "string"
-              },
-              "requestID": {
-                "type": "string"
-              },
-              "reply": {
-                "type": "string",
-                "enum": [
-                  "once",
-                  "always",
-                  "reject"
-                ]
-              }
-            },
-            "required": [
-              "sessionID",
-              "requestID",
-              "reply"
-            ]
-          }
-        },
-        "required": [
-          "type",
-          "properties"
-        ]
-      },
       "FileDiff": {
         "type": "object",
         "properties": {
@@ -9737,9 +9935,6 @@
               "pro",
               "ultra"
             ]
-          },
-          "fast": {
-            "type": "boolean"
           }
         },
         "required": [
@@ -10014,6 +10209,9 @@
             ]
           },
           "finish": {
+            "type": "string"
+          },
+          "tailStartId": {
             "type": "string"
           }
         },
@@ -10951,6 +11149,20 @@
           },
           "auto": {
             "type": "boolean"
+          },
+          "focus": {
+            "type": "string"
+          },
+          "handoffFile": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "proactive",
+              "overflow",
+              "manual"
+            ]
           }
         },
         "required": [
@@ -11060,6 +11272,117 @@
           "properties"
         ]
       },
+      "PermissionRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^per.*"
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses.*"
+          },
+          "permission": {
+            "type": "string"
+          },
+          "patterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "always": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tool": {
+            "type": "object",
+            "properties": {
+              "messageID": {
+                "type": "string"
+              },
+              "callID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageID",
+              "callID"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "sessionID",
+          "permission",
+          "patterns",
+          "metadata",
+          "always"
+        ]
+      },
+      "Event.permission.asked": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "permission.asked"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/PermissionRequest"
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
+      },
+      "Event.permission.replied": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "permission.replied"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string"
+              },
+              "requestID": {
+                "type": "string"
+              },
+              "reply": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "always",
+                  "reject"
+                ]
+              }
+            },
+            "required": [
+              "sessionID",
+              "requestID",
+              "reply"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
+      },
       "SessionStatus": {
         "anyOf": [
           {
@@ -11104,6 +11427,18 @@
               "type": {
                 "type": "string",
                 "const": "busy"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "compacting"
               }
             },
             "required": [
@@ -11331,6 +11666,121 @@
             "required": [
               "sessionID",
               "requestID"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
+      },
+      "Event.session.context": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "session.context"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string"
+              },
+              "tokens": {
+                "type": "object",
+                "properties": {
+                  "system": {
+                    "type": "number"
+                  },
+                  "text": {
+                    "type": "number"
+                  },
+                  "reasoning": {
+                    "type": "number"
+                  },
+                  "tool": {
+                    "type": "number"
+                  },
+                  "skills": {
+                    "type": "number"
+                  },
+                  "image": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "system",
+                  "text",
+                  "reasoning",
+                  "tool",
+                  "skills",
+                  "image"
+                ]
+              },
+              "images": {
+                "type": "number"
+              },
+              "total": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "sessionID",
+              "tokens",
+              "images",
+              "total"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
+      },
+      "Event.session.compaction": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "session.compaction"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string"
+              },
+              "trigger": {
+                "type": "string",
+                "enum": [
+                  "proactive",
+                  "overflow",
+                  "manual"
+                ]
+              },
+              "mechanism": {
+                "type": "string",
+                "enum": [
+                  "prune",
+                  "summary"
+                ]
+              },
+              "before": {
+                "type": "number"
+              },
+              "after": {
+                "type": "number"
+              },
+              "reclaimed": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "sessionID",
+              "trigger",
+              "mechanism",
+              "reclaimed"
             ]
           }
         },
@@ -12021,6 +12471,12 @@
       "Event": {
         "anyOf": [
           {
+            "$ref": "#/components/schemas/Event.server.connected"
+          },
+          {
+            "$ref": "#/components/schemas/Event.global.disposed"
+          },
+          {
             "$ref": "#/components/schemas/Event.installation.updated"
           },
           {
@@ -12031,12 +12487,6 @@
           },
           {
             "$ref": "#/components/schemas/Event.server.instance.disposed"
-          },
-          {
-            "$ref": "#/components/schemas/Event.server.connected"
-          },
-          {
-            "$ref": "#/components/schemas/Event.global.disposed"
           },
           {
             "$ref": "#/components/schemas/Event.lsp.client.diagnostics"
@@ -12054,12 +12504,6 @@
             "$ref": "#/components/schemas/Event.vcs.branch.updated"
           },
           {
-            "$ref": "#/components/schemas/Event.permission.asked"
-          },
-          {
-            "$ref": "#/components/schemas/Event.permission.replied"
-          },
-          {
             "$ref": "#/components/schemas/Event.message.updated"
           },
           {
@@ -12070,6 +12514,12 @@
           },
           {
             "$ref": "#/components/schemas/Event.message.part.removed"
+          },
+          {
+            "$ref": "#/components/schemas/Event.permission.asked"
+          },
+          {
+            "$ref": "#/components/schemas/Event.permission.replied"
           },
           {
             "$ref": "#/components/schemas/Event.session.status"
@@ -12085,6 +12535,12 @@
           },
           {
             "$ref": "#/components/schemas/Event.question.rejected"
+          },
+          {
+            "$ref": "#/components/schemas/Event.session.context"
+          },
+          {
+            "$ref": "#/components/schemas/Event.session.compaction"
           },
           {
             "$ref": "#/components/schemas/Event.session.compacted"
@@ -13088,6 +13544,10 @@
               "baseURL": {
                 "type": "string"
               },
+              "tokenCommand": {
+                "description": "Shell command whose stdout is a short-lived bearer token. Sent as 'Authorization: Bearer <token>' on every request and re-minted automatically before the token's JWT exp (or every request for a non-JWT token). Use for providers behind rotating/SSO-minted credentials.",
+                "type": "string"
+              },
               "enterpriseUrl": {
                 "description": "GitHub Enterprise URL for copilot authentication",
                 "type": "string"
@@ -13237,6 +13697,40 @@
           "stretch"
         ]
       },
+      "SandboxConfig": {
+        "description": "OS-level execution sandbox for the agent's shell commands.",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "Run the agent's shell commands inside an OS sandbox (macOS Seatbelt / Linux bubblewrap) that confines writes to the workspace. Off by default.",
+            "type": "boolean"
+          },
+          "network": {
+            "description": "Whether sandboxed commands may reach the network. Default: allow.",
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "allowWrite": {
+            "description": "Extra absolute paths — beyond the workspace and temp dirs — the sandbox may write to.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "onUnavailable": {
+            "description": "Behaviour when no sandbox backend exists on this platform: 'warn' (default) runs unsandboxed with a notice, 'error' refuses to run the command, 'allow' runs unsandboxed silently.",
+            "type": "string",
+            "enum": [
+              "warn",
+              "error",
+              "allow"
+            ]
+          }
+        }
+      },
       "Config": {
         "type": "object",
         "properties": {
@@ -13359,15 +13853,22 @@
             "type": "string"
           },
           "billing": {
-            "description": "Managed (Atlas wallet) vs bring-your-own-key spend, toggled independently for LLM inference and compute.",
+            "description": "Managed Credits vs bring-your-own-key spend, toggled independently for LLM inference and compute.",
             "type": "object",
             "properties": {
               "llm": {
-                "description": "How LLM inference is paid for. 'managed' routes through the Atlas wallet (metered credits); 'byok' uses your own provider API keys or first-party OAuth (ChatGPT/Claude Pro/Copilot) and is never billed. Unset = auto-detect from the resolved credential.",
-                "type": "string",
-                "enum": [
-                  "managed",
-                  "byok"
+                "description": "How LLM inference is paid for. 'managed' uses Credits; 'byok' uses your own provider API keys or first-party OAuth (ChatGPT/Claude Pro/Copilot) and is never billed. Unset or null = auto-detect from the resolved credential.",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "managed",
+                      "byok"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "compute": {
@@ -13594,6 +14095,9 @@
           "permission": {
             "$ref": "#/components/schemas/PermissionConfig"
           },
+          "sandbox": {
+            "$ref": "#/components/schemas/SandboxConfig"
+          },
           "tools": {
             "type": "object",
             "propertyNames": {
@@ -13622,6 +14126,30 @@
               "prune": {
                 "description": "Enable pruning of old tool outputs (default: true)",
                 "type": "boolean"
+              },
+              "threshold": {
+                "description": "Compact when context exceeds this fraction of the model window (default: 0.75)",
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "fallbackContext": {
+                "description": "Assumed context window (tokens) when a provider reports 0 (default: 128000)",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "tailTurns": {
+                "description": "Minimum recent turns kept verbatim during compaction (default: 2)",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "tailTokens": {
+                "description": "Token budget for the verbatim recent tail during compaction (default: clamp(0.20*usable, 8000, 32000))",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
               }
             }
           },
@@ -14834,6 +15362,9 @@
             "type": "string"
           },
           "mcp": {
+            "type": "boolean"
+          },
+          "menu": {
             "type": "boolean"
           },
           "template": {
