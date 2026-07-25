@@ -2,6 +2,7 @@ import z from "zod"
 import { Tool } from "./tool"
 import TurndownService from "turndown"
 import DESCRIPTION from "./webfetch.txt"
+import { Network } from "@/settings/network"
 
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
 const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds
@@ -22,6 +23,7 @@ export const WebFetchTool = Tool.define("webfetch", {
     if (!params.url.startsWith("http://") && !params.url.startsWith("https://")) {
       throw new Error("URL must start with http:// or https://")
     }
+    await Network.assertAllowed(params.url)
 
     await ctx.ask({
       permission: "webfetch",

@@ -27,6 +27,7 @@ import { Instance } from "../../src/project/instance"
 import { Provider } from "../../src/provider/provider"
 import { Env } from "../../src/env"
 import { Auth } from "../../src/auth"
+import { API_BASE } from "../../src/openscience"
 
 /* Keep this list aligned with live-catalog.test.ts. The committed fixture makes
    PR CI deterministic; the scheduled live check catches upstream delistings. */
@@ -1242,6 +1243,7 @@ test("multiple providers can be configured simultaneously", async () => {
 })
 
 test("managed atlas proxy base URLs are forwarded for managed LLM providers", async () => {
+  const proxy = `${API_BASE}/api/llm/proxy`
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -1257,21 +1259,21 @@ test("managed atlas proxy base URLs are forwarded for managed LLM providers", as
     init: async () => {
       clearManagedLLMEnv()
       Env.set("ANTHROPIC_API_KEY", "thk_anthropic")
-      Env.set("ANTHROPIC_BASE_URL", "https://atlas.test/api/llm/proxy/anthropic/v1")
+      Env.set("ANTHROPIC_BASE_URL", `${proxy}/anthropic/v1`)
       Env.set("OPENAI_API_KEY", "thk_openai")
-      Env.set("OPENAI_BASE_URL", "https://atlas.test/api/llm/proxy/openai/v1")
+      Env.set("OPENAI_BASE_URL", `${proxy}/openai/v1`)
       Env.set("GOOGLE_GENERATIVE_AI_API_KEY", "thk_google")
-      Env.set("GOOGLE_GENERATIVE_AI_BASE_URL", "https://atlas.test/api/llm/proxy/gemini/v1beta")
+      Env.set("GOOGLE_GENERATIVE_AI_BASE_URL", `${proxy}/gemini/v1beta`)
       Env.set("OPENROUTER_API_KEY", "thk_openrouter")
-      Env.set("OPENROUTER_BASE_URL", "https://atlas.test/api/llm/proxy/openrouter/v1")
+      Env.set("OPENROUTER_BASE_URL", `${proxy}/openrouter/v1`)
       Provider.invalidate()
     },
     fn: async () => {
       const providers = await Provider.list()
-      expect(providers["anthropic"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/anthropic/v1")
-      expect(providers["openai"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/openai/v1")
-      expect(providers["google"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/gemini/v1beta")
-      expect(providers["openrouter"].options.baseURL).toBe("https://atlas.test/api/llm/proxy/openrouter/v1")
+      expect(providers["anthropic"].options.baseURL).toBe(`${proxy}/anthropic/v1`)
+      expect(providers["openai"].options.baseURL).toBe(`${proxy}/openai/v1`)
+      expect(providers["google"].options.baseURL).toBe(`${proxy}/gemini/v1beta`)
+      expect(providers["openrouter"].options.baseURL).toBe(`${proxy}/openrouter/v1`)
     },
   })
 })

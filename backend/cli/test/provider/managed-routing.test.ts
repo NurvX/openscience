@@ -24,6 +24,7 @@ import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Provider } from "../../src/provider/provider"
 import { Env } from "../../src/env"
+import { API_BASE } from "../../src/openscience"
 
 function clearManagedLLMEnv() {
   for (const key of [
@@ -42,7 +43,7 @@ function clearManagedLLMEnv() {
   }
 }
 
-const PROXY = "https://atlas.test/api/llm/proxy"
+const PROXY = `${API_BASE}/api/llm/proxy`
 
 // ── Pure decision helpers ────────────────────────────────────────────────────
 
@@ -70,6 +71,29 @@ describe("Provider.managedProviderAllowed (pure)", () => {
     for (const id of ["anthropic", "openai", "google", "openai-codex", "github-copilot", "gateway", "azure"]) {
       expect(Provider.managedProviderAllowed(id)).toBe(false)
     }
+  })
+})
+
+describe("Provider.isAtlasProxyBaseURL (pure)", () => {
+  test("accepts only current first-party proxy routes", () => {
+    expect(Provider.isAtlasProxyBaseURL(`${PROXY}/openrouter/v1`)).toBe(true)
+    expect(Provider.isAtlasProxyBaseURL(`${PROXY}/openrouter/v1/chat/completions`)).toBe(true)
+  })
+
+  test("rejects lookalike origins and path/query tricks", () => {
+    expect(Provider.isAtlasProxyBaseURL("https://evil.test/api/llm/proxy/openrouter/v1")).toBe(false)
+    expect(Provider.isAtlasProxyBaseURL(`${API_BASE}/not-api/llm/proxy/openrouter/v1`)).toBe(false)
+    expect(Provider.isAtlasProxyBaseURL(`${PROXY}/openrouter/v1?next=https://evil.test`)).toBe(false)
+    expect(Provider.isAtlasProxyBaseURL(`not a url`)).toBe(false)
+  })
+})
+
+describe("Provider.isManagedProxyBaseURL (pure)", () => {
+  test("detects proxy-shaped routes for BYOK leak prevention", () => {
+    expect(Provider.isManagedProxyBaseURL(`${PROXY}/openrouter/v1`)).toBe(true)
+    expect(Provider.isManagedProxyBaseURL("https://legacy.example/api/llm/proxy/openrouter/v1")).toBe(true)
+    expect(Provider.isManagedProxyBaseURL("https://openrouter.ai/api/v1")).toBe(false)
+    expect(Provider.isManagedProxyBaseURL(`${PROXY}/openrouter/v1?key=value`)).toBe(false)
   })
 })
 
