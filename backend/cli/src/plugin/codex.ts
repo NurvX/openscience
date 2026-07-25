@@ -1,5 +1,6 @@
 import type { Hooks, PluginInput } from "@synsci/plugin"
 import { Log } from "../util/log"
+import { escapeHtml, htmlResponse } from "../util/html"
 import { Installation } from "../installation"
 import { OAUTH_DUMMY_KEY } from "../auth"
 import { OpenScience } from "../openscience"
@@ -293,9 +294,6 @@ const HTML_SUCCESS = `<!doctype html>
       <h1>Authorization Successful</h1>
       <p>You can close this window and return to OpenScience.</p>
     </div>
-    <script>
-      setTimeout(() => window.close(), 2000)
-    </script>
   </body>
 </html>`
 
@@ -342,7 +340,7 @@ const HTML_ERROR = (error: string) => `<!doctype html>
     <div class="container">
       <h1>Authorization Failed</h1>
       <p>An error occurred during authorization.</p>
-      <div class="error">${error}</div>
+      <div class="error">${escapeHtml(error)}</div>
     </div>
   </body>
 </html>`
@@ -378,6 +376,7 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
 
   oauthServer = Bun.serve({
     port: OAUTH_PORT,
+    hostname: "127.0.0.1",
     fetch(req) {
       const url = new URL(req.url)
 
@@ -391,18 +390,15 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
           const errorMsg = errorDescription || error
           pendingOAuth?.reject(new Error(errorMsg))
           pendingOAuth = undefined
-          return new Response(HTML_ERROR(errorMsg), {
-            headers: { "Content-Type": "text/html" },
-          })
+          return htmlResponse(HTML_ERROR(errorMsg))
         }
 
         if (!code) {
           const errorMsg = "Missing authorization code"
           pendingOAuth?.reject(new Error(errorMsg))
           pendingOAuth = undefined
-          return new Response(HTML_ERROR(errorMsg), {
+          return htmlResponse(HTML_ERROR(errorMsg), {
             status: 400,
-            headers: { "Content-Type": "text/html" },
           })
         }
 
@@ -410,9 +406,8 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
           const errorMsg = "Invalid state - potential CSRF attack"
           pendingOAuth?.reject(new Error(errorMsg))
           pendingOAuth = undefined
-          return new Response(HTML_ERROR(errorMsg), {
+          return htmlResponse(HTML_ERROR(errorMsg), {
             status: 400,
-            headers: { "Content-Type": "text/html" },
           })
         }
 
@@ -423,9 +418,7 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
           .then((tokens) => current.resolve(tokens))
           .catch((err) => current.reject(err))
 
-        return new Response(HTML_SUCCESS, {
-          headers: { "Content-Type": "text/html" },
-        })
+        return htmlResponse(HTML_SUCCESS)
       }
 
       if (url.pathname === "/cancel") {
