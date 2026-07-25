@@ -59,6 +59,7 @@ import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncation"
 import { Memory } from "@/settings/memory"
 import { OpenScience } from "@/openscience"
+import { assertExternalDirectory } from "@/tool/external-directory"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1135,6 +1136,15 @@ export namespace SessionPrompt {
 
   async function createUserMessage(input: PromptInput) {
     const agent = await Agent.get(input.agent ?? (await Agent.defaultAgent()))
+    const session = await Session.get(input.sessionID)
+    const ruleset = PermissionNext.merge(agent.permission, session.permission ?? [])
+    const ask = async (req: Omit<PermissionNext.Request, "id" | "sessionID" | "tool">) => {
+      await PermissionNext.ask({
+        ...req,
+        sessionID: input.sessionID,
+        ruleset,
+      })
+    }
     // Regenerate ID if client-provided one would sort before existing messages
     // (48-bit Identifier timestamp field wraps every ~2.2y; cross-clock drift
     // in pre-existing sessions can cause new IDs to sort below old ones).
@@ -1326,12 +1336,12 @@ export namespace SessionPrompt {
                     const readCtx: Tool.Context = {
                       sessionID: input.sessionID,
                       abort: new AbortController().signal,
-                      agent: input.agent!,
+                      agent: agent.name,
                       messageID: info.id,
-                      extra: { bypassCwdCheck: true, model },
+                      extra: { model },
                       messages: [],
                       metadata: async () => {},
-                      ask: async () => {},
+                      ask,
                     }
                     const result = await t.execute(args, readCtx)
                     pieces.push({
@@ -1388,12 +1398,12 @@ export namespace SessionPrompt {
                 const listCtx: Tool.Context = {
                   sessionID: input.sessionID,
                   abort: new AbortController().signal,
-                  agent: input.agent!,
+                  agent: agent.name,
                   messageID: info.id,
-                  extra: { bypassCwdCheck: true },
+                  extra: {},
                   messages: [],
                   metadata: async () => {},
-                  ask: async () => {},
+                  ask,
                 }
                 const result = await ListTool.init().then((t) => t.execute(args, listCtx))
                 return [
@@ -1423,6 +1433,23 @@ export namespace SessionPrompt {
               }
 
               const file = Bun.file(filepath)
+              const readCtx: Tool.Context = {
+                sessionID: input.sessionID,
+                abort: new AbortController().signal,
+                agent: agent.name,
+                messageID: info.id,
+                extra: {},
+                messages: [],
+                metadata: async () => {},
+                ask,
+              }
+              await assertExternalDirectory(readCtx, filepath)
+              await readCtx.ask({
+                permission: "read",
+                patterns: [filepath],
+                always: ["*"],
+                metadata: {},
+              })
               FileTime.read(input.sessionID, filepath)
               const bytes = await file.bytes()
               const mime = correctImageMime(part.mime, bytes)
