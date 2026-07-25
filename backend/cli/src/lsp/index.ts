@@ -10,6 +10,7 @@ import { Config } from "../config/config"
 import { spawn } from "child_process"
 import { Instance } from "../project/instance"
 import { Flag } from "@/flag/flag"
+import { OpenScience } from "@/openscience"
 
 export namespace LSP {
   const log = Log.create({ service: "lsp" })
@@ -114,10 +115,7 @@ export namespace LSP {
             return {
               process: spawn(item.command[0], item.command.slice(1), {
                 cwd: root,
-                env: {
-                  ...process.env,
-                  ...item.env,
-                },
+                env: { ...(await OpenScience.subprocessEnv(process.env)), ...item.env },
               }),
               initialization: item.initialization,
             }

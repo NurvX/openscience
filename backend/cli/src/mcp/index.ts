@@ -22,6 +22,7 @@ import { McpAuth } from "./auth"
 import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import open from "open"
+import { OpenScience } from "@/openscience"
 
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
@@ -157,6 +158,18 @@ export namespace MCP {
   type McpEntry = NonNullable<Config.Info["mcp"]>[string]
   function isMcpConfigured(entry: McpEntry): entry is Config.Mcp {
     return typeof entry === "object" && entry !== null && "type" in entry
+  }
+
+  export function localEnv(
+    base: Record<string, string>,
+    command: string,
+    environment?: Record<string, string>,
+  ): Record<string, string> {
+    return {
+      ...base,
+      ...(command === "openscience" ? { BUN_BE_BUN: "1" } : {}),
+      ...environment,
+    }
   }
 
   const state = Instance.state(
@@ -395,16 +408,13 @@ export namespace MCP {
     if (mcp.type === "local") {
       const [cmd, ...args] = mcp.command
       const cwd = Instance.directory
+      const env = localEnv(await OpenScience.subprocessEnv(process.env), cmd, mcp.environment)
       const transport = new StdioClientTransport({
         stderr: "pipe",
         command: cmd,
         args,
         cwd,
-        env: {
-          ...process.env,
-          ...(cmd === "openscience" ? { BUN_BE_BUN: "1" } : {}),
-          ...mcp.environment,
-        },
+        env,
       })
       transport.stderr?.on("data", (chunk: Buffer) => {
         log.info(`mcp stderr: ${chunk.toString()}`, { key })

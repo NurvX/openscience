@@ -58,6 +58,7 @@ import { correctImageMime } from "@/util/image"
 import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncation"
 import { Memory } from "@/settings/memory"
+import { OpenScience } from "@/openscience"
 import { assertExternalDirectory } from "@/tool/external-directory"
 
 // @ts-ignore
@@ -1950,7 +1951,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        ...process.env,
+        ...(await OpenScience.subprocessEnv(process.env)),
         TERM: "dumb",
       },
     })
