@@ -118,11 +118,7 @@ export namespace Network {
   }
 
   function normalize(domain: string): string {
-    return domain
-      .trim()
-      .toLowerCase()
-      .replace(/^\*\./, "")
-      .replace(/\.$/, "")
+    return domain.trim().toLowerCase().replace(/^\*\./, "").replace(/\.$/, "")
   }
 
   function domains(state: State): string[] {

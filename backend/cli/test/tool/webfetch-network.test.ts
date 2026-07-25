@@ -22,7 +22,5 @@ test("webfetch blocks disallowed hosts before permission prompts", async () => {
   await Network.set({ allowlistEnabled: true, enabled: [], custom: ["allowed.test"] })
   const webfetch = await WebFetchTool.init()
 
-  await expect(webfetch.execute({ url: "https://blocked.test", format: "markdown" }, ctx)).rejects.toThrow(
-    "allow-list",
-  )
+  await expect(webfetch.execute({ url: "https://blocked.test", format: "markdown" }, ctx)).rejects.toThrow("allow-list")
 })
