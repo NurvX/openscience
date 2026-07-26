@@ -5,7 +5,7 @@
 //
 //   • Atlas managed → open the dashboard sign-in in a new tab, paste the `thk_`
 //     key, POST /account/login-key, then resync so managed models light up.
-//   • Your own keys → the real Credentials add-key flow (auth.set + global.sync).
+//   • Your own keys → the real Credentials add-key flow (auth.set + global.dispose).
 //   • Not now → dismiss + persist a localStorage marker so we don't re-prompt.
 //
 // The one hosted checkout that leaves the app is "add funds"; everything else
@@ -42,6 +42,8 @@ const BYOK_PROVIDERS: { id: string; label: string; placeholder: string }[] = [
   { id: "openai", label: "OpenAI", placeholder: "sk-…" },
   { id: "google", label: "Google", placeholder: "AIza…" },
   { id: "openrouter", label: "OpenRouter", placeholder: "sk-or-…" },
+  { id: "xai", label: "xAI", placeholder: "xai-…" },
+  { id: "meta", label: "Meta", placeholder: "meta-…" },
 ]
 
 const money = (n: number) => `$${(n < 0 ? 0 : n).toFixed(n >= 100 ? 0 : 2)}`
@@ -117,7 +119,7 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
     setError(undefined)
     try {
       await sdk.client.auth.set({ providerID: provider(), auth: { type: "api", key: k } })
-      await sdk.client.global.sync()
+      await sdk.client.global.dispose()
       dialog.close()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -159,7 +161,7 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
             />
             <ChoiceCard
               title="Your own keys"
-              body="Bring an Anthropic / OpenAI / Google key. Stored on this machine, free and unmetered here."
+              body="Bring your own provider key. Stored on this machine, free and unmetered here."
               onClick={() => {
                 setError(undefined)
                 setView("byok")

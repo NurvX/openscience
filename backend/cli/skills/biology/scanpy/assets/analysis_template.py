@@ -43,7 +43,7 @@ sc.settings.figdir = FIGURES_DIR
 # ============================================================================
 # Parallel steps like regress_out fork one worker PROCESS per job, each holding a
 # full DENSE copy of the matrix — so the safe worker count is bounded by RAM, not
-# just CPU. Size it at runtime rather than hardcoding n_jobs=-1.
+# just CPU. Size it at runtime instead of enabling unbounded parallelism.
 import os as _os
 
 
@@ -69,12 +69,13 @@ def _available_ram_bytes():
 
 
 def memory_safe_n_jobs(adata, fraction=0.5):
-    """Largest worker count whose per-worker dense copies fit in `fraction` of RAM,
-    reserving one copy for the parent process (which also densifies the matrix).
-    Returns 0 when not even one worker copy fits — the caller must then skip the
-    dense step rather than run one worker that OOMs anyway."""
+    """Return a worker count whose dense copies fit in a RAM budget.
+
+    One copy is reserved for the parent. Returning zero means even one worker
+    copy would exceed the budget and the dense operation should be skipped.
+    """
     per_worker = max(1, adata.n_obs * adata.n_vars * 8)  # float64 dense copy, bytes
-    fits = int(_available_ram_bytes() * fraction // per_worker) - 1  # -1: parent's copy
+    fits = int(_available_ram_bytes() * fraction // per_worker) - 1  # reserve parent's copy
     return max(0, min(_os.cpu_count() or 1, fits))
 
 
@@ -194,8 +195,13 @@ else:
           f"exhaust RAM (fits={_n_jobs}, MAX_DENSE_GB={MAX_DENSE_GB}). Subset cells "
           f"or reduce N_TOP_GENES first, then re-run this step (#102).")
 
-# Scale data
-sc.pp.scale(adata, max_value=10)
+# Centering a sparse matrix densifies it just like regress_out does. If the
+# memory guard kept the matrix sparse, retain that representation through PCA
+# instead of recreating the same OOM one line later.
+_scale_zero_center = not _sp.issparse(adata.X)
+if not _scale_zero_center:
+    print("scale: preserving sparse matrix with zero_center=False")
+sc.pp.scale(adata, max_value=10, zero_center=_scale_zero_center)
 
 # ============================================================================
 # 6. DIMENSIONALITY REDUCTION

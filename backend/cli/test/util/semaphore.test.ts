@@ -1,82 +1,173 @@
 import { expect, test } from "bun:test"
-import { Semaphore } from "../../src/util/semaphore"
+import { HierarchicalSemaphore, Semaphore } from "../../src/util/semaphore"
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-test("bounds concurrency to max", async () => {
-  const sem = new Semaphore(2)
+test("semaphore bounds concurrency and returns idempotent permits", async () => {
+  const semaphore = new Semaphore(2)
   let running = 0
   let peak = 0
-  const run = async () => {
-    await sem.acquire()
-    running++
-    peak = Math.max(peak, running)
-    await sleep(10)
-    running--
-    sem.release()
-  }
-  await Promise.all(Array.from({ length: 6 }, run))
+
+  await Promise.all(
+    Array.from({ length: 6 }, async () => {
+      const release = await semaphore.acquire()
+      running++
+      peak = Math.max(peak, running)
+      await sleep(5)
+      running--
+      release()
+      release()
+    }),
+  )
+
   expect(peak).toBe(2)
+  const first = await semaphore.acquire()
+  const second = await semaphore.acquire()
+  first()
+  second()
 })
 
-test("release wakes blocked waiters in FIFO order", async () => {
-  const sem = new Semaphore(1)
+test("semaphore wakes live waiters in FIFO order", async () => {
+  const semaphore = new Semaphore(1)
+  const releaseRoot = await semaphore.acquire()
   const order: number[] = []
-  await sem.acquire() // hold the only slot
-  const p1 = sem.acquire().then(() => order.push(1))
-  const p2 = sem.acquire().then(() => order.push(2))
-  await sleep(1)
-  sem.release() // -> p1
-  await p1
-  sem.release() // -> p2
-  await p2
+
+  const first = semaphore.acquire().then((release) => {
+    order.push(1)
+    release()
+  })
+  const second = semaphore.acquire().then((release) => {
+    order.push(2)
+    release()
+  })
+
+  releaseRoot()
+  await Promise.all([first, second])
   expect(order).toEqual([1, 2])
 })
 
-test("max floors at 1 (never zero-slot deadlock)", async () => {
-  const sem = new Semaphore(0)
-  await sem.acquire()
-  expect(true).toBe(true) // resolved, did not hang
+test("aborting a queued waiter removes it without leaking a permit", async () => {
+  const semaphore = new Semaphore(1)
+  const releaseRoot = await semaphore.acquire()
+  const controller = new AbortController()
+  const queued = semaphore.acquire(controller.signal)
+
+  controller.abort(new Error("cancelled"))
+  await expect(queued).rejects.toThrow("cancelled")
+  releaseRoot()
+
+  const release = await semaphore.acquire()
+  release()
 })
 
-test("acquire rejects immediately when the signal is already aborted", async () => {
-  const sem = new Semaphore(1)
-  const ac = new AbortController()
-  ac.abort()
-  await expect(sem.acquire(ac.signal)).rejects.toBeDefined()
-  // the slot was not consumed by the rejected call
-  await sem.acquire()
-  expect(true).toBe(true)
-})
+test("nested compute sessions transfer one permit and serialize parallel siblings", async () => {
+  const semaphore = new HierarchicalSemaphore(1)
+  const releaseRoot = await semaphore.acquire("root")
+  const releaseFirstChild = await semaphore.acquire("child-1", { parent: "root" })
 
-test("abort while queued rejects and does not leak the slot", async () => {
-  const sem = new Semaphore(1)
-  await sem.acquire() // hold the only slot
-  const ac = new AbortController()
-  const queued = sem.acquire(ac.signal)
+  let secondChildStarted = false
+  const secondChild = semaphore.acquire("child-2", { parent: "root" }).then((release) => {
+    secondChildStarted = true
+    return release
+  })
+  let outsiderStarted = false
+  const outsider = semaphore.acquire("other-root").then((release) => {
+    outsiderStarted = true
+    return release
+  })
+
   await sleep(1)
-  ac.abort()
-  await expect(queued).rejects.toBeDefined()
-  // the aborted waiter left the queue, so release returns the slot to the pool
-  sem.release()
-  await sem.acquire() // resolves rather than hanging on a ghost waiter
-  expect(true).toBe(true)
+  expect(secondChildStarted).toBe(false)
+  expect(outsiderStarted).toBe(false)
+
+  releaseFirstChild()
+  const releaseSecondChild = await secondChild
+  expect(secondChildStarted).toBe(true)
+  expect(outsiderStarted).toBe(false)
+
+  releaseSecondChild()
+  await sleep(1)
+  expect(outsiderStarted).toBe(false)
+
+  releaseRoot()
+  const releaseOutsider = await outsider
+  expect(outsiderStarted).toBe(true)
+  releaseOutsider()
 })
 
-test("aborting one queued waiter still serves a live waiter (no lost slot)", async () => {
-  const sem = new Semaphore(1)
-  await sem.acquire() // hold slot
-  const ac = new AbortController()
-  const aborted = sem.acquire(ac.signal).then(
-    () => "resolved",
-    () => "rejected",
-  )
-  const order: string[] = []
-  const live = sem.acquire().then(() => order.push("live"))
+test("a grandchild restores its parent before an unrelated queued sibling", async () => {
+  const semaphore = new HierarchicalSemaphore(1)
+  const releaseRoot = await semaphore.acquire("root")
+  const releaseChild = await semaphore.acquire("child", { parent: "root" })
+
+  let siblingStarted = false
+  const sibling = semaphore.acquire("sibling", { parent: "root" }).then((release) => {
+    siblingStarted = true
+    return release
+  })
+  const releaseGrandchild = await semaphore.acquire("grandchild", { parent: "child" })
+
+  releaseGrandchild()
   await sleep(1)
-  ac.abort() // drop the first waiter
-  expect(await aborted).toBe("rejected")
-  sem.release() // must go to the live waiter, not the dead one
-  await live
-  expect(order).toEqual(["live"])
+  expect(siblingStarted).toBe(false)
+
+  releaseChild()
+  const releaseSibling = await sibling
+  expect(siblingStarted).toBe(true)
+  releaseSibling()
+  releaseRoot()
+})
+
+test("aborting a queued nested sibling leaves the inherited permit usable", async () => {
+  const semaphore = new HierarchicalSemaphore(1)
+  const releaseRoot = await semaphore.acquire("root")
+  const releaseChild = await semaphore.acquire("child", { parent: "root" })
+  const controller = new AbortController()
+  const queuedSibling = semaphore.acquire("cancelled-child", {
+    parent: "root",
+    signal: controller.signal,
+  })
+
+  controller.abort(new Error("nested cancelled"))
+  await expect(queuedSibling).rejects.toThrow("nested cancelled")
+  releaseChild()
+  releaseRoot()
+
+  const releaseNext = await semaphore.acquire("next-root")
+  releaseNext()
+})
+
+test("closing a parent while its child is active releases after the child", async () => {
+  const semaphore = new HierarchicalSemaphore(1)
+  const releaseRoot = await semaphore.acquire("root")
+  const releaseChild = await semaphore.acquire("child", { parent: "root" })
+  releaseRoot()
+
+  let nextStarted = false
+  const next = semaphore.acquire("next").then((release) => {
+    nextStarted = true
+    return release
+  })
+  await sleep(1)
+  expect(nextStarted).toBe(false)
+
+  releaseChild()
+  const releaseNext = await next
+  expect(nextStarted).toBe(true)
+  releaseNext()
+})
+
+test("semaphore floors its capacity at one", async () => {
+  const semaphore = new Semaphore(0)
+  const release = await semaphore.acquire()
+  release()
+})
+
+test("semaphore rejects an already-aborted acquisition without consuming a permit", async () => {
+  const semaphore = new Semaphore(1)
+  const controller = new AbortController()
+  controller.abort(new Error("already cancelled"))
+  await expect(semaphore.acquire(controller.signal)).rejects.toThrow("already cancelled")
+  const release = await semaphore.acquire()
+  release()
 })

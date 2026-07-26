@@ -1983,7 +1983,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     let aborted = false
     let exited = false
 
-    const kill = () => Shell.killTree(proc, { exited: () => exited })
+    const kill = () => Shell.killTree(proc, { exited: () => exited, detached: process.platform !== "win32" })
 
     if (abort.aborted) {
       aborted = true

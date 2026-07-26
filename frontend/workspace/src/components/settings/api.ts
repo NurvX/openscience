@@ -8,7 +8,11 @@ export async function settingsApi<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetchFn(`${base.replace(/\/$/, "")}${path}`, {
+  // Hono's mounted settings routes are strict: `/settings/local` exists while
+  // `/settings/local/` falls through to the SPA shell. Canonicalize route
+  // roots here so callers can never turn an HTML fallback into a JSON error.
+  const normalizedPath = path === "/" ? "" : path.replace(/\/+$/, "")
+  const res = await fetchFn(`${base.replace(/\/+$/, "")}${normalizedPath}`, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   })

@@ -8,9 +8,8 @@
  * the same contract the `atlas` CLI binary speaks (`nodes:list`,
  * `nodes:commit-new`, `auth/github/*`).
  *
- * Unauthenticated (or backend-unreachable) callers get graceful empty /
- * local-stub payloads so the canvas + sync stay quiet instead of throwing
- * 401 toasts on every project open.
+ * Reads and mutations both preserve failure semantics. A signed-out or
+ * unreachable Atlas account must not look like a legitimately empty graph.
  */
 import { Hono } from "hono"
 import crypto from "crypto"
@@ -21,10 +20,6 @@ import { OpenScience, API_BASE } from "../../openscience"
 import { Log } from "../../util/log"
 
 const log = Log.create({ service: "atlas-bridge" })
-
-const EMPTY_NODES = { nodes: [] as unknown[], total: 0, page: 1, per_page: 50, has_more: false }
-const EMPTY_ARTIFACTS = { artifacts: [] as unknown[], has_more: false }
-const EMPTY_GITHUB = { connected: false }
 
 /** Deterministic local placeholder id for unauthenticated callers — lets
  *  the SPA cache a project/session mapping without minting real Atlas state. */
@@ -193,6 +188,85 @@ async function commitNew(input: {
   return { node_id: nodeIdOf(data), raw: data }
 }
 
+export interface StageNodeInput {
+  title: string
+  directory: string
+  parentID: string
+}
+
+class StageNodeInputError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "StageNodeInputError"
+  }
+}
+
+/** Validate the browser payload before doing any git or Atlas work. */
+export function parseStageNodeInput(body: unknown): StageNodeInput {
+  const value = body && typeof body === "object" ? (body as Record<string, unknown>) : {}
+  const title = typeof value.title === "string" ? value.title.trim() : ""
+  const directory = typeof value.directory === "string" ? value.directory.trim() : ""
+  const parentID = typeof value.parent_id === "string" ? value.parent_id.trim() : ""
+  if (!title) throw new StageNodeInputError("title is required")
+  if (!directory) throw new StageNodeInputError("directory is required")
+  if (!parentID) throw new StageNodeInputError("parent_id is required")
+  return { title, directory, parentID }
+}
+
+/** Create a real staged child in Atlas, rooted in the repository the SPA has
+ * open. The previous bridge used commit-new (so "stage" actually committed),
+ * dropped the parent edge, captured process.cwd(), and fabricated an id on
+ * failure. Keep the lifecycle, topology, and code context truthful instead. */
+async function stageNode(input: StageNodeInput): Promise<unknown> {
+  const root = await repoRoot(input.directory)
+  const context = await repoContext(root)
+  const res = await atlas("POST", "/api/nodes/stage-create", {
+    title: input.title,
+    summary: "",
+    content: "",
+    kind: "insight",
+    parent_ids: [input.parentID],
+    ...context,
+  })
+  if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
+  const data = await res.json()
+  if (!nodeIdOf(data)) throw new Error("Atlas returned no node id")
+  return data
+}
+
+function mutationError(error: unknown): { status: number; detail: string } {
+  if (error instanceof StageNodeInputError) return { status: 400, detail: error.message }
+  if (error instanceof BackendHttpError) {
+    return {
+      status: error.status,
+      detail: backendMessage(error.body) ?? `Atlas request failed with HTTP ${error.status}`,
+    }
+  }
+  if (error instanceof Error && error.message === "unauthenticated") {
+    return { status: 401, detail: "Sign in to Atlas before changing the graph." }
+  }
+  return {
+    status: 502,
+    detail: error instanceof Error ? error.message : "Atlas is unavailable",
+  }
+}
+
+function readError(error: unknown): { status: number; detail: string } {
+  if (error instanceof BackendHttpError) {
+    return {
+      status: error.status,
+      detail: backendMessage(error.body) ?? `Atlas request failed with HTTP ${error.status}`,
+    }
+  }
+  if (error instanceof Error && error.message === "unauthenticated") {
+    return { status: 401, detail: "Sign in to Atlas to load the graph." }
+  }
+  return {
+    status: 502,
+    detail: error instanceof Error ? error.message : "Atlas is unavailable",
+  }
+}
+
 // ── stable repo-identity dedupe key ──────────────────────────────────────
 // Keys off REPO IDENTITY, not the raw opened folder:
 //   `repo:<host>/<owner>/<name>` when a git remote exists (portable across
@@ -274,33 +348,29 @@ function writeProjectPin(root: string, projectId: string, key: string): void {
   }
 }
 
-// Find-only: the repo's dedupe-key → its Atlas project root id (null when
-// unlinked/offline). Honours the local pin first, then the API; caches an API
+// Find-only: the repo's dedupe-key → its Atlas project root id (null only when
+// the backend confirms it is unlinked). Honours the local pin first, then the API; caches an API
 // hit back to the pin. The directory is the folder the SPA has open (query
 // param), NOT the serve launch dir.
 async function resolveProjectId(directory: string): Promise<string | null> {
   if (!directory) return null
-  try {
-    // Root to the git repo top-level so a subfolder / a clone at a different
-    // path resolves to the SAME project + graph as the repo itself.
-    const root = await repoRoot(directory)
-    const ctx = await repoContext(root)
-    const key = computeDedupeKey(root, ctx.repo_url)
-    // Honour the local pin first (instant + offline) — but ONLY when it was
-    // resolved for THIS repo identity, so a stale pin can't shadow the right
-    // project (or block find-or-create from ever creating it).
-    const pin = readProjectPin(root)
-    if (pin && pinMatchesKey(pin, key)) return pin.project_id
-    const res = await atlas("GET", `/api/agent/projects?dedupe_key=${encodeURIComponent(key)}`)
-    if (!res.ok) return null
-    const data = await res.json()
-    const existing = Array.isArray(data?.projects) ? data.projects[0] : undefined
-    const id = projectIdOf(existing)
-    if (id) writeProjectPin(root, id, key)
-    return id
-  } catch {
-    return null
-  }
+  // Root to the git repo top-level so a subfolder / a clone at a different
+  // path resolves to the SAME project + graph as the repo itself.
+  const root = await repoRoot(directory)
+  const ctx = await repoContext(root)
+  const key = computeDedupeKey(root, ctx.repo_url)
+  // Honour the local pin first (instant + offline) — but ONLY when it was
+  // resolved for THIS repo identity, so a stale pin can't shadow the right
+  // project (or block find-or-create from ever creating it).
+  const pin = readProjectPin(root)
+  if (pin && pinMatchesKey(pin, key)) return pin.project_id
+  const res = await atlas("GET", `/api/agent/projects?dedupe_key=${encodeURIComponent(key)}`)
+  if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
+  const data = await res.json()
+  const existing = Array.isArray(data?.projects) ? data.projects[0] : undefined
+  const id = projectIdOf(existing)
+  if (id) writeProjectPin(root, id, key)
+  return id
 }
 
 // ── graph-init failure classification ────────────────────────────────────
@@ -408,8 +478,17 @@ export async function initProjectDetailed(directory: string): Promise<InitProjec
   // Fail fast offline: no managed session means no request can succeed —
   // don't turn a missing `openscience login` into a network error.
   if (!(await token())) return { projectId: null, failure: { kind: "unauthenticated", host: API_BASE } }
-  const existing = await resolveProjectId(directory)
-  if (existing) return { projectId: existing }
+  // Resolution is a useful fast path, not a prerequisite for the idempotent
+  // find-or-create call below. Preserve its failure for logs, then keep going:
+  // a temporarily unavailable GET endpoint must not crash this never-throw API.
+  try {
+    const existing = await resolveProjectId(directory)
+    if (existing) return { projectId: existing }
+  } catch (e) {
+    log.warn("project lookup failed before init, continuing with find-or-create", {
+      error: e instanceof Error ? e.message : String(e),
+    })
+  }
   const root = await repoRoot(directory)
   const ctx = await repoContext(root)
   const key = computeDedupeKey(root, ctx.repo_url)
@@ -475,10 +554,11 @@ export const AtlasBridgeRoutes = lazy(() =>
     .get("/nodes", async (c) => {
       try {
         const res = await atlas("GET", "/api/v1/nodes")
-        if (!res.ok) return c.json(EMPTY_NODES)
+        if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
         return c.json(await res.json())
-      } catch {
-        return c.json(EMPTY_NODES)
+      } catch (error) {
+        const failure = readError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     // List the user's graphs (= root nodes). The canvas shows one graph at a
@@ -486,10 +566,11 @@ export const AtlasBridgeRoutes = lazy(() =>
     .get("/graphs", async (c) => {
       try {
         const res = await atlas("GET", "/api/v1/nodes?root_only=true")
-        if (!res.ok) return c.json(EMPTY_NODES)
+        if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
         return c.json(await res.json())
-      } catch {
-        return c.json(EMPTY_NODES)
+      } catch (error) {
+        const failure = readError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     // Full subgraph (nodes) for a single graph/root, matching Atlas web's
@@ -498,77 +579,78 @@ export const AtlasBridgeRoutes = lazy(() =>
       const id = c.req.param("id")
       try {
         const res = await atlas("GET", `/api/v1/nodes/${encodeURIComponent(id)}/tree?projection=full`)
-        if (!res.ok) return c.json({ nodes: [], node_count: 0 })
+        if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
         return c.json(await res.json())
-      } catch {
-        return c.json({ nodes: [], node_count: 0 })
+      } catch (error) {
+        const failure = readError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     .post("/nodes", async (c) => {
-      const body = await c.req.json().catch(() => ({}) as any)
-      const title = String(body?.title ?? "Untitled node")
       try {
-        return c.json(
-          await commitNew({
-            localID: `local-node-${stubNodeId(title)}`,
-            parentIDs: [],
-            title,
-            kind: "insight",
-            summary: "",
-            hypothesis: "",
-            content: "",
-            reason: "Created from OpenScience web.",
-            context: await repoContext(process.cwd()),
-          }),
-        )
-      } catch {
-        return c.json({ node_id: stubNodeId(title), raw: null })
+        const input = parseStageNodeInput(await c.req.json().catch(() => null))
+        return c.json(await stageNode(input), 201)
+      } catch (error) {
+        const failure = mutationError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     // Proxy a node's real artifacts/evidence so the detail drawer shows the
-    // run's outputs. Falls back to empty on auth/backend failure (like /nodes).
+    // run's outputs without conflating a failed request with "no artifacts".
     .get("/nodes/:id/artifacts", async (c) => {
       const id = c.req.param("id")
       try {
         const res = await atlas("GET", `/api/v1/nodes/${encodeURIComponent(id)}/artifacts`)
-        if (!res.ok) return c.json(EMPTY_ARTIFACTS)
+        if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
         return c.json(await res.json())
-      } catch {
-        return c.json(EMPTY_ARTIFACTS)
+      } catch (error) {
+        const failure = readError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     .get("/github/status", async (c) => {
       try {
         const res = await atlas("GET", "/api/v1/auth/github/status")
-        return c.json(res.ok ? await res.json() : EMPTY_GITHUB)
-      } catch {
-        return c.json(EMPTY_GITHUB)
+        if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
+        return c.json(await res.json())
+      } catch (error) {
+        const failure = readError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     .post("/github/refresh", async (c) => {
       try {
         const res = await atlas("POST", "/api/v1/auth/github/refresh-repos", {})
-        return c.json(res.ok ? await res.json() : EMPTY_GITHUB)
-      } catch {
-        return c.json(EMPTY_GITHUB)
+        if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
+        return c.json(await res.json())
+      } catch (error) {
+        const failure = mutationError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     .post("/github/disconnect", async (c) => {
       try {
         const res = await atlas("DELETE", "/api/v1/auth/github/disconnect")
-        return c.json(res.ok ? await res.json() : EMPTY_GITHUB)
-      } catch {
-        return c.json(EMPTY_GITHUB)
+        if (!res.ok) throw new BackendHttpError(res.status, await res.text().catch(() => ""))
+        return c.json(await res.json())
+      } catch (error) {
+        const failure = mutationError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     // Resolve / init the OPENED folder's project root, so the canvas scopes to
     // the folder the SPA has open (not the serve launch dir).
-    .get("/project", async (c) => c.json({ project_id: await resolveProjectId(c.req.query("directory") || "") }))
+    .get("/project", async (c) => {
+      try {
+        return c.json({ project_id: await resolveProjectId(c.req.query("directory") || "") })
+      } catch (error) {
+        const failure = readError(error)
+        return c.json({ detail: failure.detail }, failure.status as any)
+      }
+    })
     .post("/project/init", async (c) => {
       const result = await initProjectDetailed(c.req.query("directory") || "")
-      // Additive shape: the SPA reads project_id; error/message/host let it
-      // (and any curl-debugging user) see WHY init failed instead of a bare null.
-      return c.json({
+      const payload = {
         project_id: result.projectId,
         ...(result.failure
           ? {
@@ -578,8 +660,28 @@ export const AtlasBridgeRoutes = lazy(() =>
               host: result.failure.host,
             }
           : {}),
-      })
+      }
+      if (!result.failure) return c.json(payload)
+
+      const status =
+        result.failure.status ??
+        (result.failure.kind === "unauthenticated"
+          ? 401
+          : result.failure.kind === "plan"
+            ? 402
+            : result.failure.kind === "backend" && result.failure.message === "no directory provided"
+              ? 400
+              : 502)
+      const detail =
+        result.failure.message ??
+        (result.failure.kind === "unauthenticated"
+          ? "Sign in to Atlas before initializing the project graph."
+          : result.failure.kind === "plan"
+            ? "An active Atlas plan is required to initialize the project graph."
+            : result.failure.kind === "unreachable"
+              ? `Atlas is unavailable at ${result.failure.host}.`
+              : "Atlas could not initialize the project graph.")
+      return c.json({ ...payload, detail }, status as any)
     })
-    // Quiet 200 for any other atlas path the SPA probes.
-    .all("/*", (c) => c.json({}, 200)),
+    .all("/*", (c) => c.json({ detail: "Atlas bridge route not found" }, 404)),
 )
