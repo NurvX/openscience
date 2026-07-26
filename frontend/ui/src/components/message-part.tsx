@@ -53,6 +53,9 @@ import { createAutoScroll } from "../hooks"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { NotebookView, type NotebookCellProps } from "./notebook-cell"
 import { skillName, stripRedactedReasoning } from "./tool-display"
+import { ToolRegistry } from "./tool-registry"
+
+export { ARTIFACT_TOOL, ToolRegistry, type ToolComponent, type ToolProps } from "./tool-registry"
 
 interface Diagnostic {
   range: {
@@ -108,11 +111,6 @@ export interface MessagePartProps {
 export type PartComponent = Component<MessagePartProps>
 
 export const PART_MAPPING: Record<string, PartComponent | undefined> = {}
-
-// Openscience science-artifact tool renderer id. tool-renderer.tsx registers a
-// custom renderer under this name and imports it from here; re-exported so that
-// import resolves against the v1.1.116 message-part.
-export const ARTIFACT_TOOL = "__artifact__"
 
 // A file-mutation tool (write/edit/apply_patch) has no diff/content for a brief
 // window right after it starts, which would otherwise render a title-only card
@@ -532,44 +530,6 @@ export function Part(props: MessagePartProps) {
   )
 }
 
-export interface ToolProps {
-  input: Record<string, any>
-  metadata: Record<string, any>
-  tool: string
-  output?: string
-  status?: string
-  partID?: string
-  title?: string
-  hideDetails?: boolean
-  defaultOpen?: boolean
-  forceOpen?: boolean
-  locked?: boolean
-}
-
-export type ToolComponent = Component<ToolProps>
-
-const state: Record<
-  string,
-  {
-    name: string
-    render?: ToolComponent
-  }
-> = {}
-
-export function registerTool(input: { name: string; render?: ToolComponent }) {
-  state[input.name] = input
-  return input
-}
-
-export function getTool(name: string) {
-  return state[name]?.render
-}
-
-export const ToolRegistry = {
-  register: registerTool,
-  render: getTool,
-}
-
 PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   const data = useData()
   const i18n = useI18n()
@@ -641,7 +601,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   // @ts-expect-error - title only exists on the running/completed state variants
   const title = () => part.state?.title as string | undefined
 
-  const render = ToolRegistry.render(part.tool) ?? GenericTool
+  const render = createMemo(() => ToolRegistry.render(part.tool, metadata()) ?? GenericTool)
 
   return (
     <div data-component="tool-part-wrapper" data-permission={showPermission()} data-question={showQuestion()}>
@@ -672,7 +632,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
         </Match>
         <Match when={true}>
           <Dynamic
-            component={render}
+            component={render()}
             input={input()}
             tool={part.tool}
             metadata={metadata()}
@@ -964,18 +924,27 @@ ToolRegistry.register({
       return permissions[0]
     })
 
-    const childToolPart = createMemo(() => {
-      const perm = childPermission()
-      if (!perm || !perm.tool) return undefined
+    const childQuestion = createMemo(() => {
       const sessionId = childSessionId()
       if (!sessionId) return undefined
-      // Find the tool part that matches the permission's callID
+      const questions = data.store.question?.[sessionId] ?? []
+      return questions[0]
+    })
+
+    const childRequest = createMemo(() => childPermission() ?? childQuestion())
+
+    const childToolPart = createMemo(() => {
+      const request = childRequest()
+      if (!request || !request.tool) return undefined
+      const sessionId = childSessionId()
+      if (!sessionId) return undefined
+      // Find the tool part that owns the pending permission or question.
       const messages = data.store.message[sessionId] ?? []
-      const message = findLast(messages, (m) => m.id === perm.tool!.messageID)
+      const message = findLast(messages, (m) => m.id === request.tool!.messageID)
       if (!message) return undefined
       const parts = data.store.part[message.id] ?? []
       for (const part of parts) {
-        if (part.type === "tool" && (part as ToolPart).callID === perm.tool!.callID) {
+        if (part.type === "tool" && (part as ToolPart).callID === request.tool!.callID) {
           return { part: part as ToolPart, message }
         }
       }
@@ -1004,9 +973,9 @@ ToolRegistry.register({
       const toolData = childToolPart()
       if (!toolData) return null
       const { part } = toolData
-      const render = ToolRegistry.render(part.tool) ?? GenericTool
       // @ts-expect-error
       const metadata = part.state?.metadata ?? {}
+      const render = ToolRegistry.render(part.tool, metadata) ?? GenericTool
       const input = part.state?.input ?? {}
       return (
         <Dynamic
@@ -1023,7 +992,7 @@ ToolRegistry.register({
     }
 
     return (
-      <div data-component="tool-part-wrapper" data-permission={!!childPermission()}>
+      <div data-component="tool-part-wrapper" data-permission={!!childPermission()} data-question={!!childQuestion()}>
         <Switch>
           <Match when={childPermission()}>
             <>
@@ -1058,6 +1027,30 @@ ToolRegistry.register({
                 </div>
               </div>
             </>
+          </Match>
+          <Match when={childQuestion()}>
+            {(request) => (
+              <>
+                <Show
+                  when={childToolPart()}
+                  fallback={
+                    <BasicTool
+                      icon="task"
+                      defaultOpen={true}
+                      trigger={{
+                        title: i18n.t("ui.tool.agent", { type: props.input.subagent_type || props.tool }),
+                        titleClass: "capitalize",
+                        subtitle: props.input.description,
+                      }}
+                      onSubtitleClick={handleSubtitleClick}
+                    />
+                  }
+                >
+                  {renderChildToolPart()}
+                </Show>
+                <QuestionPrompt request={request()} />
+              </>
+            )}
           </Match>
           <Match when={true}>
             <BasicTool

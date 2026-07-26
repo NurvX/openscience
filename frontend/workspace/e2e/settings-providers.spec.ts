@@ -1,56 +1,54 @@
 import { test, expect } from "./fixtures"
-import { modKey, promptSelector } from "./utils"
 
-test("smoke providers settings opens provider selector", async ({ page, gotoSession }) => {
+test("credentials settings exposes provider connection controls", async ({ page, gotoSession }) => {
   await gotoSession()
 
+  await page.getByRole("button", { name: "settings", exact: true }).click()
   const dialog = page.getByRole("dialog")
+  await dialog.getByRole("button", { name: "Credentials", exact: true }).click()
 
-  await page.keyboard.press(`${modKey}+Comma`).catch(() => undefined)
+  await expect(dialog.getByRole("heading", { name: "Credentials" })).toBeVisible()
+  await expect(dialog.getByRole("heading", { name: "Provider keys" })).toBeVisible()
+  await expect(dialog.getByText("Sign in with ChatGPT", { exact: true }).first()).toBeVisible()
+  await expect(dialog.getByPlaceholder("sk-…")).toBeVisible()
+  await expect(dialog.getByRole("button", { name: "save key" })).toBeDisabled()
 
-  const opened = await dialog
-    .waitFor({ state: "visible", timeout: 3000 })
-    .then(() => true)
-    .catch(() => false)
-
-  if (!opened) {
-    await page.getByRole("button", { name: "Settings" }).first().click()
-    await expect(dialog).toBeVisible()
-  }
-
-  await dialog.getByRole("tab", { name: "Providers" }).click()
-  await expect(dialog.getByText("Connected providers", { exact: true })).toBeVisible()
-  await expect(dialog.getByText("Popular providers", { exact: true })).toBeVisible()
-
-  await dialog.getByRole("button", { name: "Show more providers" }).click()
-
-  const providerDialog = page.getByRole("dialog").filter({ has: page.getByPlaceholder("Search providers") })
-
-  await expect(providerDialog).toBeVisible()
-  await expect(providerDialog.getByPlaceholder("Search providers")).toBeVisible()
-  await expect(providerDialog.locator('[data-slot="list-item"]').first()).toBeVisible()
-
-  await page.keyboard.press("Escape")
-  await expect(providerDialog).toHaveCount(0)
-  await expect(page.locator(promptSelector)).toBeVisible()
-
-  const stillOpen = await dialog.isVisible().catch(() => false)
-  if (!stillOpen) return
-
-  await page.keyboard.press("Escape")
-  const closed = await dialog
-    .waitFor({ state: "detached", timeout: 1500 })
-    .then(() => true)
-    .catch(() => false)
-  if (closed) return
-
-  await page.keyboard.press("Escape")
-  const closedSecond = await dialog
-    .waitFor({ state: "detached", timeout: 1500 })
-    .then(() => true)
-    .catch(() => false)
-  if (closedSecond) return
-
-  await page.locator('[data-component="dialog-overlay"]').click({ position: { x: 5, y: 5 } })
+  await dialog.getByRole("button", { name: "Close" }).click()
   await expect(dialog).toHaveCount(0)
+})
+
+test("credentials settings saves and removes a local provider key", async ({ page, gotoSession, sdk }) => {
+  await sdk.auth.remove({ providerID: "openai" }).catch(() => undefined)
+
+  try {
+    await gotoSession()
+    await page.getByRole("button", { name: "settings", exact: true }).click()
+    const dialog = page.getByRole("dialog")
+    await dialog.getByRole("button", { name: "Credentials", exact: true }).click()
+
+    await dialog.locator("select").selectOption("openai")
+    await dialog.getByPlaceholder("sk-…").fill("sk-e2e-local-only")
+    await dialog.getByRole("button", { name: "save key", exact: true }).click()
+
+    await expect
+      .poll(async () => {
+        const response = await sdk.provider.list()
+        return response.data?.connected.includes("openai")
+      })
+      .toBe(true)
+    await expect(dialog.getByText("OpenAI", { exact: true }).last()).toBeVisible()
+
+    page.once("dialog", (prompt) => prompt.accept())
+    const row = dialog.getByText("OpenAI", { exact: true }).last().locator("xpath=../..")
+    await row.getByRole("button", { name: "remove", exact: true }).click()
+    await expect
+      .poll(async () => {
+        const response = await sdk.provider.list()
+        return response.data?.connected.includes("openai")
+      })
+      .toBe(false)
+  } finally {
+    await sdk.auth.remove({ providerID: "openai" }).catch(() => undefined)
+    await sdk.global.dispose().catch(() => undefined)
+  }
 })
