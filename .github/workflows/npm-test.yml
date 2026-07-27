@@ -1,5 +1,5 @@
-name: npm test publish
-run-name: "npm test ${{ inputs.version || github.run_number }}"
+name: test publish
+run-name: "test publish ${{ inputs.version || github.run_number }}"
 
 on:
   workflow_dispatch:

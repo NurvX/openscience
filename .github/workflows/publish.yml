@@ -1,5 +1,5 @@
-name: publish
-run-name: "${{ format('release {0}', inputs.bump) }}"
+name: prod publish
+run-name: "${{ inputs.version && format('prod publish {0}', inputs.version) || format('prod publish {0}', inputs.bump) }}"
 
 on:
   workflow_dispatch:
