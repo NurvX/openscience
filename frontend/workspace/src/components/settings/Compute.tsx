@@ -21,6 +21,8 @@ interface SshHost {
   host: string
   user?: string
   port?: number
+  scheduler: "none" | "slurm" | "pbs"
+  workdir?: string
 }
 interface Endpoint {
   id: string
@@ -97,11 +99,16 @@ const Compute: Component = () => {
   const [hHost, setHHost] = createSignal("")
   const [hUser, setHUser] = createSignal("")
   const [hPort, setHPort] = createSignal("")
+  const [hScheduler, setHScheduler] = createSignal<"none" | "slurm" | "pbs">("none")
+  const [hWorkdir, setHWorkdir] = createSignal("")
+  const [testingHost, setTestingHost] = createSignal<string>()
   const resetHost = () => {
     setHLabel("")
     setHHost("")
     setHUser("")
     setHPort("")
+    setHScheduler("none")
+    setHWorkdir("")
     setAddingHost(false)
   }
   const saveHost = async () => {
@@ -115,11 +122,48 @@ const Compute: Component = () => {
             host: hHost().trim(),
             user: hUser().trim() || undefined,
             port: hPort().trim() ? Number(hPort().trim()) : undefined,
+            scheduler: hScheduler(),
+            workdir: hWorkdir().trim() || undefined,
           }),
         }),
       "Failed to add SSH host",
     )
     resetHost()
+  }
+  const testHost = async (host: SshHost) => {
+    setTestingHost(host.id)
+    const result = await call<{
+      ok: boolean
+      latency_ms: number
+      hostname?: string
+      python: boolean
+      gpu: boolean
+      slurm: boolean
+      pbs: boolean
+      error?: string
+    }>(`/ssh/${host.id}/test`, { method: "POST" }).catch((error) => ({
+      ok: false,
+      latency_ms: 0,
+      python: false,
+      gpu: false,
+      slurm: false,
+      pbs: false,
+      hostname: undefined,
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    setTestingHost(undefined)
+    const capabilities = [
+      result.python ? "Python" : undefined,
+      result.gpu ? "NVIDIA GPU" : undefined,
+      result.slurm ? "Slurm" : undefined,
+      result.pbs ? "PBS" : undefined,
+    ].filter(Boolean)
+    showToast({
+      title: result.ok ? `Connected to ${result.hostname ?? host.label}` : `Could not connect to ${host.label}`,
+      description: result.ok
+        ? `${result.latency_ms} ms${capabilities.length ? ` · ${capabilities.join(" · ")}` : ""}`
+        : result.error || "SSH did not return a successful connection probe.",
+    })
   }
 
   // ── Endpoint add form ──
@@ -149,6 +193,11 @@ const Compute: Component = () => {
   const kindOptions: { value: "local" | "remote"; label: string }[] = [
     { value: "remote", label: "Remote" },
     { value: "local", label: "Local" },
+  ]
+  const schedulerOptions: { value: "none" | "slurm" | "pbs"; label: string }[] = [
+    { value: "none", label: "Direct SSH" },
+    { value: "slurm", label: "Slurm" },
+    { value: "pbs", label: "PBS / Torque" },
   ]
 
   return (
@@ -212,13 +261,32 @@ const Compute: Component = () => {
             >
               <For each={info()?.ssh_hosts}>
                 {(h) => (
-                  <Row title={h.label} subtitle={`${h.user ? `${h.user}@` : ""}${h.host}${h.port ? `:${h.port}` : ""}`}>
-                    <RemoveButton
-                      disabled={busy()}
-                      onClick={() =>
-                        run(() => call<ComputeInfo>(`/ssh/${h.id}`, { method: "DELETE" }), "Failed to remove host")
-                      }
-                    />
+                  <Row
+                    title={h.label}
+                    subtitle={[
+                      `${h.user ? `${h.user}@` : ""}${h.host}${h.port ? `:${h.port}` : ""}`,
+                      h.scheduler === "slurm" ? "Slurm" : h.scheduler === "pbs" ? "PBS" : "direct",
+                      h.workdir,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  >
+                    <div class="flex items-center gap-1.5">
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        disabled={busy() || testingHost() === h.id}
+                        onClick={() => void testHost(h)}
+                      >
+                        {testingHost() === h.id ? "testing…" : "test"}
+                      </Button>
+                      <RemoveButton
+                        disabled={busy()}
+                        onClick={() =>
+                          run(() => call<ComputeInfo>(`/ssh/${h.id}`, { method: "DELETE" }), "Failed to remove host")
+                        }
+                      />
+                    </div>
                   </Row>
                 )}
               </For>
@@ -235,6 +303,25 @@ const Compute: Component = () => {
                   />
                   <TextField label="User (optional)" value={hUser()} onInput={setHUser} placeholder="ubuntu" />
                   <TextField label="Port (optional)" value={hPort()} onInput={setHPort} placeholder="22" />
+                  <div class="flex flex-col gap-1.5">
+                    <span class="text-12-medium text-text-weak">Scheduler</span>
+                    <Select
+                      options={schedulerOptions}
+                      current={schedulerOptions.find((option) => option.value === hScheduler())}
+                      value={(option) => option.value}
+                      label={(option) => option.label}
+                      onSelect={(option) => option && setHScheduler(option.value)}
+                      variant="secondary"
+                      size="small"
+                      triggerVariant="settings"
+                    />
+                  </div>
+                  <TextField
+                    label="Working directory (optional)"
+                    value={hWorkdir()}
+                    onInput={setHWorkdir}
+                    placeholder="/home/ubuntu/research"
+                  />
                 </div>
                 <FormActions
                   onCancel={resetHost}

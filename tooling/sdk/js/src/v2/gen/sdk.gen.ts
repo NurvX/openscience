@@ -171,12 +171,22 @@ import type {
   SettingsComputeEndpointAddResponses,
   SettingsComputeEndpointRemoveResponses,
   SettingsComputeGetResponses,
+  SettingsComputeJobsCancelErrors,
+  SettingsComputeJobsCancelResponses,
+  SettingsComputeJobsClearResponses,
+  SettingsComputeJobsListResponses,
+  SettingsComputeJobsLogErrors,
+  SettingsComputeJobsLogResponses,
+  SettingsComputeJobsStartErrors,
+  SettingsComputeJobsStartResponses,
   SettingsComputeProviderConnectErrors,
   SettingsComputeProviderConnectResponses,
   SettingsComputeProviderDisconnectResponses,
   SettingsComputeSshAddErrors,
   SettingsComputeSshAddResponses,
   SettingsComputeSshRemoveResponses,
+  SettingsComputeSshTestErrors,
+  SettingsComputeSshTestResponses,
   SettingsCredentialsListResponses,
   SettingsCredentialsRemoveResponses,
   SettingsCredentialsSetResponses,
@@ -742,6 +752,8 @@ export class Ssh extends HeyApiClient {
       host?: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -754,6 +766,8 @@ export class Ssh extends HeyApiClient {
             { in: "body", key: "host" },
             { in: "body", key: "user" },
             { in: "body", key: "port" },
+            { in: "body", key: "scheduler" },
+            { in: "body", key: "workdir" },
           ],
         },
       ],
@@ -771,6 +785,27 @@ export class Ssh extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Test an SSH compute host
+   */
+  public test<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).post<
+      SettingsComputeSshTestResponses,
+      SettingsComputeSshTestErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/ssh/{id}/test",
+      ...options,
+      ...params,
     })
   }
 
@@ -850,6 +885,118 @@ export class Endpoint extends HeyApiClient {
   }
 }
 
+export class Jobs extends HeyApiClient {
+  /**
+   * List local and remote compute jobs
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<SettingsComputeJobsListResponses, unknown, ThrowOnError>({
+      url: "/settings/compute/jobs",
+      ...options,
+    })
+  }
+
+  /**
+   * Start a local, SSH, Slurm, or PBS compute job
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters?: {
+      name?: string
+      command?: string
+      cwd?: string
+      target?:
+        | {
+            kind: "local"
+          }
+        | {
+            kind: "ssh"
+            host_id: string
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "name" },
+            { in: "body", key: "command" },
+            { in: "body", key: "cwd" },
+            { in: "body", key: "target" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SettingsComputeJobsStartResponses,
+      SettingsComputeJobsStartErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/jobs",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Clear completed compute jobs
+   */
+  public clear<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).delete<SettingsComputeJobsClearResponses, unknown, ThrowOnError>({
+      url: "/settings/compute/jobs/completed",
+      ...options,
+    })
+  }
+
+  /**
+   * Read a compute job log
+   */
+  public log<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).get<
+      SettingsComputeJobsLogResponses,
+      SettingsComputeJobsLogErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/jobs/{id}/log",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Cancel a compute job
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).post<
+      SettingsComputeJobsCancelResponses,
+      SettingsComputeJobsCancelErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/jobs/{id}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Compute extends HeyApiClient {
   /**
    * Get compute settings
@@ -874,6 +1021,11 @@ export class Compute extends HeyApiClient {
   private _endpoint?: Endpoint
   get endpoint(): Endpoint {
     return (this._endpoint ??= new Endpoint({ client: this.client }))
+  }
+
+  private _jobs?: Jobs
+  get jobs(): Jobs {
+    return (this._jobs ??= new Jobs({ client: this.client }))
   }
 }
 

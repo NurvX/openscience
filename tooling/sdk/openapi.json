@@ -1445,6 +1445,18 @@
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "scheduler": {
+                            "default": "none",
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "slurm",
+                              "pbs"
+                            ]
+                          },
+                          "workdir": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -1590,6 +1602,18 @@
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "scheduler": {
+                            "default": "none",
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "slurm",
+                              "pbs"
+                            ]
+                          },
+                          "workdir": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -1771,6 +1795,18 @@
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "scheduler": {
+                            "default": "none",
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "slurm",
+                              "pbs"
+                            ]
+                          },
+                          "workdir": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -1926,6 +1962,18 @@
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "scheduler": {
+                            "default": "none",
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "slurm",
+                              "pbs"
+                            ]
+                          },
+                          "workdir": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -2003,6 +2051,18 @@
                     "type": "integer",
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991
+                  },
+                  "scheduler": {
+                    "default": "none",
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "slurm",
+                      "pbs"
+                    ]
+                  },
+                  "workdir": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -2017,6 +2077,89 @@
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.ssh.add({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/compute/ssh/{id}/test": {
+      "post": {
+        "operationId": "settings.compute.ssh.test",
+        "summary": "Test an SSH compute host",
+        "responses": {
+          "200": {
+            "description": "Connection result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "host": {
+                      "type": "string"
+                    },
+                    "latency_ms": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "hostname": {
+                      "type": "string"
+                    },
+                    "python": {
+                      "type": "boolean"
+                    },
+                    "gpu": {
+                      "type": "boolean"
+                    },
+                    "slurm": {
+                      "type": "boolean"
+                    },
+                    "pbs": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "host",
+                    "latency_ms",
+                    "python",
+                    "gpu",
+                    "slurm",
+                    "pbs"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.ssh.test({\n  ...\n})"
           }
         ]
       }
@@ -2112,6 +2255,18 @@
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "scheduler": {
+                            "default": "none",
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "slurm",
+                              "pbs"
+                            ]
+                          },
+                          "workdir": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -2267,6 +2422,18 @@
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "scheduler": {
+                            "default": "none",
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "slurm",
+                              "pbs"
+                            ]
+                          },
+                          "workdir": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -2453,6 +2620,18 @@
                             "type": "integer",
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "scheduler": {
+                            "default": "none",
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "slurm",
+                              "pbs"
+                            ]
+                          },
+                          "workdir": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -2513,6 +2692,577 @@
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.endpoint.remove({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/compute/jobs": {
+      "get": {
+        "operationId": "settings.compute.jobs.list",
+        "summary": "List local and remote compute jobs",
+        "responses": {
+          "200": {
+            "description": "Compute jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "command": {
+                        "type": "string"
+                      },
+                      "cwd": {
+                        "type": "string"
+                      },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "local"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "ssh"
+                              },
+                              "host_id": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "host_id"
+                            ]
+                          }
+                        ]
+                      },
+                      "target_label": {
+                        "type": "string"
+                      },
+                      "scheduler": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "slurm",
+                          "pbs"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "queued",
+                          "running",
+                          "succeeded",
+                          "failed",
+                          "cancelled",
+                          "interrupted"
+                        ]
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "started_at": {
+                        "type": "string"
+                      },
+                      "completed_at": {
+                        "type": "string"
+                      },
+                      "exit_code": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "pid": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "error": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "command",
+                      "target",
+                      "target_label",
+                      "scheduler",
+                      "status",
+                      "created_at"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.jobs.list({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "settings.compute.jobs.start",
+        "summary": "Start a local, SSH, Slurm, or PBS compute job",
+        "responses": {
+          "200": {
+            "description": "Started job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "command": {
+                      "type": "string"
+                    },
+                    "cwd": {
+                      "type": "string"
+                    },
+                    "target": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "local"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "ssh"
+                            },
+                            "host_id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "host_id"
+                          ]
+                        }
+                      ]
+                    },
+                    "target_label": {
+                      "type": "string"
+                    },
+                    "scheduler": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "slurm",
+                        "pbs"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "running",
+                        "succeeded",
+                        "failed",
+                        "cancelled",
+                        "interrupted"
+                      ]
+                    },
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "started_at": {
+                      "type": "string"
+                    },
+                    "completed_at": {
+                      "type": "string"
+                    },
+                    "exit_code": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "pid": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "command",
+                    "target",
+                    "target_label",
+                    "scheduler",
+                    "status",
+                    "created_at"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "command": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  },
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "local"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "ssh"
+                          },
+                          "host_id": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "host_id"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "command",
+                  "target"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.jobs.start({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/compute/jobs/completed": {
+      "delete": {
+        "operationId": "settings.compute.jobs.clear",
+        "summary": "Clear completed compute jobs",
+        "responses": {
+          "200": {
+            "description": "Number cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cleared": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "cleared"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.jobs.clear({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/compute/jobs/{id}/log": {
+      "get": {
+        "operationId": "settings.compute.jobs.log",
+        "summary": "Read a compute job log",
+        "responses": {
+          "200": {
+            "description": "Job output",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "log": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "log"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.jobs.log({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/compute/jobs/{id}/cancel": {
+      "post": {
+        "operationId": "settings.compute.jobs.cancel",
+        "summary": "Cancel a compute job",
+        "responses": {
+          "200": {
+            "description": "Cancelled job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "command": {
+                      "type": "string"
+                    },
+                    "cwd": {
+                      "type": "string"
+                    },
+                    "target": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "local"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "ssh"
+                            },
+                            "host_id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "host_id"
+                          ]
+                        }
+                      ]
+                    },
+                    "target_label": {
+                      "type": "string"
+                    },
+                    "scheduler": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "slurm",
+                        "pbs"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "running",
+                        "succeeded",
+                        "failed",
+                        "cancelled",
+                        "interrupted"
+                      ]
+                    },
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "started_at": {
+                      "type": "string"
+                    },
+                    "completed_at": {
+                      "type": "string"
+                    },
+                    "exit_code": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "pid": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "command",
+                    "target",
+                    "target_label",
+                    "scheduler",
+                    "status",
+                    "created_at"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.compute.jobs.cancel({\n  ...\n})"
           }
         ]
       }
@@ -14725,6 +15475,30 @@
           "success"
         ]
       },
+      "NotFoundError": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "const": "NotFoundError"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "data"
+        ]
+      },
       "OAuth": {
         "type": "object",
         "properties": {
@@ -14802,30 +15576,6 @@
           {
             "$ref": "#/components/schemas/WellKnownAuth"
           }
-        ]
-      },
-      "NotFoundError": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "const": "NotFoundError"
-          },
-          "data": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "message"
-            ]
-          }
-        },
-        "required": [
-          "name",
-          "data"
         ]
       },
       "Model": {

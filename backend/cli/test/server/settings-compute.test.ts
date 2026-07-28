@@ -78,3 +78,48 @@ test("re-saving a key updates the injected value in place", async () => {
   await ComputeSettingsRoutes().request("/provider/runpod", { method: "DELETE" })
   expect(process.env["RUNPOD_API_KEY"]).toBeUndefined()
 })
+
+test("compute job routes execute a real local command and expose its log", async () => {
+  const started = await ComputeSettingsRoutes().request("/jobs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: "route smoke test",
+      command: "printf 'compute-route-ok\\n'",
+      target: { kind: "local" },
+    }),
+  })
+  expect(started.status).toBe(200)
+  const first = (await started.json()) as { id: string }
+  const final = await (async () => {
+    for (const _ of Array.from({ length: 100 })) {
+      const response = await ComputeSettingsRoutes().request("/jobs")
+      const jobs = (await response.json()) as { id: string; status: string }[]
+      const job = jobs.find((item) => item.id === first.id)
+      if (job && ["succeeded", "failed", "cancelled"].includes(job.status)) return job
+      await Bun.sleep(20)
+    }
+    throw new Error("Timed out waiting for route compute job")
+  })()
+  expect(final.status).toBe("succeeded")
+
+  const output = await ComputeSettingsRoutes().request(`/jobs/${first.id}/log`)
+  expect(output.status).toBe(200)
+  expect(await output.json()).toEqual({ log: "compute-route-ok\n" })
+
+  const cleared = await ComputeSettingsRoutes().request("/jobs/completed", { method: "DELETE" })
+  expect(cleared.status).toBe(200)
+})
+
+test("compute job routes reject an SSH target that is not configured", async () => {
+  const response = await ComputeSettingsRoutes().request("/jobs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: "missing host",
+      command: "true",
+      target: { kind: "ssh", host_id: "does-not-exist" },
+    }),
+  })
+  expect(response.status).toBe(400)
+})

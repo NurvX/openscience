@@ -7,6 +7,7 @@ import { Terminal } from "@/components/terminal"
 import { uiStore, type RightPaneTab } from "@/atlas/store/ui"
 import { SkillLibraryDialog } from "@/atlas/SkillsBrowser"
 import { AtlasCanvas } from "@/atlas/AtlasCanvas"
+import { ComputeJobs } from "@/atlas/ComputeJobs"
 import { toast } from "@/atlas/Toast"
 import {
   IconLayoutGrid,
@@ -15,6 +16,7 @@ import {
   IconChevronLeft,
   IconSettings,
   IconTerminal,
+  IconActivity,
 } from "@/atlas/shared/Icon"
 
 const RIGHT_PANE_WIDTH_KEY = "thesis-right-pane-width-v1"
@@ -47,6 +49,7 @@ export function RightPane(): JSX.Element {
   const TABS: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[] =
     [
       { k: "canvas", label: "atlas", Icon: IconLayoutGrid },
+      { k: "jobs", Icon: IconActivity },
       { k: "terminal", Icon: IconTerminal },
     ]
   const visibleTabs = createMemo(() => TABS.filter((t) => !uiStore.isTabHidden(t.k)))
@@ -220,6 +223,9 @@ export function RightPane(): JSX.Element {
         <div style={{ flex: 1, "min-height": 0, position: "relative", display: "flex", "flex-direction": "column" }}>
           <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
             <CanvasTab />
+          </KeepAlive>
+          <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
+            <ComputeJobs />
           </KeepAlive>
           <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
             <TerminalTab />

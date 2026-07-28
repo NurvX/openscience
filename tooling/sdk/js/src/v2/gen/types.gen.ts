@@ -1885,6 +1885,13 @@ export type BadRequestError = {
   success: false
 }
 
+export type NotFoundError = {
+  name: "NotFoundError"
+  data: {
+    message: string
+  }
+}
+
 export type OAuth = {
   type: "oauth"
   refresh: string
@@ -1906,13 +1913,6 @@ export type WellKnownAuth = {
 }
 
 export type Auth = OAuth | ApiAuth | WellKnownAuth
-
-export type NotFoundError = {
-  name: "NotFoundError"
-  data: {
-    message: string
-  }
-}
 
 export type Model = {
   id: string
@@ -2836,6 +2836,8 @@ export type SettingsComputeGetResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2878,6 +2880,8 @@ export type SettingsComputeProviderDisconnectResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2933,6 +2937,8 @@ export type SettingsComputeProviderConnectResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2952,6 +2958,8 @@ export type SettingsComputeSshAddData = {
     host: string
     user?: string
     port?: number
+    scheduler?: "none" | "slurm" | "pbs"
+    workdir?: string
   }
   path?: never
   query?: never
@@ -2988,6 +2996,8 @@ export type SettingsComputeSshAddResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2999,6 +3009,43 @@ export type SettingsComputeSshAddResponses = {
 }
 
 export type SettingsComputeSshAddResponse = SettingsComputeSshAddResponses[keyof SettingsComputeSshAddResponses]
+
+export type SettingsComputeSshTestData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/settings/compute/ssh/{id}/test"
+}
+
+export type SettingsComputeSshTestErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SettingsComputeSshTestError = SettingsComputeSshTestErrors[keyof SettingsComputeSshTestErrors]
+
+export type SettingsComputeSshTestResponses = {
+  /**
+   * Connection result
+   */
+  200: {
+    ok: boolean
+    host: string
+    latency_ms: number
+    hostname?: string
+    python: boolean
+    gpu: boolean
+    slurm: boolean
+    pbs: boolean
+    error?: string
+  }
+}
+
+export type SettingsComputeSshTestResponse = SettingsComputeSshTestResponses[keyof SettingsComputeSshTestResponses]
 
 export type SettingsComputeSshRemoveData = {
   body?: never
@@ -3030,6 +3077,8 @@ export type SettingsComputeSshRemoveResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -3084,6 +3133,8 @@ export type SettingsComputeEndpointAddResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -3127,6 +3178,8 @@ export type SettingsComputeEndpointRemoveResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -3139,6 +3192,202 @@ export type SettingsComputeEndpointRemoveResponses = {
 
 export type SettingsComputeEndpointRemoveResponse =
   SettingsComputeEndpointRemoveResponses[keyof SettingsComputeEndpointRemoveResponses]
+
+export type SettingsComputeJobsListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/settings/compute/jobs"
+}
+
+export type SettingsComputeJobsListResponses = {
+  /**
+   * Compute jobs
+   */
+  200: Array<{
+    id: string
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+    target_label: string
+    scheduler: "none" | "slurm" | "pbs"
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
+    created_at: string
+    started_at?: string
+    completed_at?: string
+    exit_code?: number | null
+    pid?: number
+    error?: string
+  }>
+}
+
+export type SettingsComputeJobsListResponse = SettingsComputeJobsListResponses[keyof SettingsComputeJobsListResponses]
+
+export type SettingsComputeJobsStartData = {
+  body?: {
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+  }
+  path?: never
+  query?: never
+  url: "/settings/compute/jobs"
+}
+
+export type SettingsComputeJobsStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SettingsComputeJobsStartError = SettingsComputeJobsStartErrors[keyof SettingsComputeJobsStartErrors]
+
+export type SettingsComputeJobsStartResponses = {
+  /**
+   * Started job
+   */
+  200: {
+    id: string
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+    target_label: string
+    scheduler: "none" | "slurm" | "pbs"
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
+    created_at: string
+    started_at?: string
+    completed_at?: string
+    exit_code?: number | null
+    pid?: number
+    error?: string
+  }
+}
+
+export type SettingsComputeJobsStartResponse =
+  SettingsComputeJobsStartResponses[keyof SettingsComputeJobsStartResponses]
+
+export type SettingsComputeJobsClearData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/settings/compute/jobs/completed"
+}
+
+export type SettingsComputeJobsClearResponses = {
+  /**
+   * Number cleared
+   */
+  200: {
+    cleared: number
+  }
+}
+
+export type SettingsComputeJobsClearResponse =
+  SettingsComputeJobsClearResponses[keyof SettingsComputeJobsClearResponses]
+
+export type SettingsComputeJobsLogData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/settings/compute/jobs/{id}/log"
+}
+
+export type SettingsComputeJobsLogErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SettingsComputeJobsLogError = SettingsComputeJobsLogErrors[keyof SettingsComputeJobsLogErrors]
+
+export type SettingsComputeJobsLogResponses = {
+  /**
+   * Job output
+   */
+  200: {
+    log: string
+  }
+}
+
+export type SettingsComputeJobsLogResponse = SettingsComputeJobsLogResponses[keyof SettingsComputeJobsLogResponses]
+
+export type SettingsComputeJobsCancelData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/settings/compute/jobs/{id}/cancel"
+}
+
+export type SettingsComputeJobsCancelErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SettingsComputeJobsCancelError = SettingsComputeJobsCancelErrors[keyof SettingsComputeJobsCancelErrors]
+
+export type SettingsComputeJobsCancelResponses = {
+  /**
+   * Cancelled job
+   */
+  200: {
+    id: string
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+    target_label: string
+    scheduler: "none" | "slurm" | "pbs"
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
+    created_at: string
+    started_at?: string
+    completed_at?: string
+    exit_code?: number | null
+    pid?: number
+    error?: string
+  }
+}
+
+export type SettingsComputeJobsCancelResponse =
+  SettingsComputeJobsCancelResponses[keyof SettingsComputeJobsCancelResponses]
 
 export type SettingsPermissionsGetData = {
   body?: never
