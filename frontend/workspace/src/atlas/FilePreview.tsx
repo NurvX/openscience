@@ -21,6 +21,8 @@ import { ScienceArtifact } from "@/science/ScienceArtifact"
 import { detectScientificFile } from "@/science/files"
 import { ScientificDataView } from "@/science/formats/ScientificDataView"
 import { detectBiologicalFormat } from "@/science/formats/biological"
+import { BinaryScienceView } from "@/science/formats/BinaryScienceView"
+import { detectBinaryScienceFormat } from "@/science/formats/binary"
 import { NotebookView } from "@/notebook/NotebookView"
 import { DataTableView } from "@/data/DataTableView"
 import type { TableFormat } from "@/data/table"
@@ -106,9 +108,19 @@ const LANG: Record<string, string> = {
   log: "text",
 }
 
-type Kind = "markdown" | "notebook" | "table" | "scientific-data" | "pdf" | "image" | "science" | "code" | "binary"
+type Kind =
+  | "markdown"
+  | "notebook"
+  | "table"
+  | "scientific-data"
+  | "scientific-binary"
+  | "pdf"
+  | "image"
+  | "science"
+  | "code"
+  | "binary"
 
-type FileData = { content?: string; encoding?: string; mimeType?: string }
+type FileData = { content?: string; encoding?: string; mimeType?: string; size?: number; truncated?: boolean }
 
 /**
  * Inline file view — header (icon + name + subtitle + controls) over the
@@ -160,6 +172,7 @@ export function FileView(props: {
   const dirty = () => draft() !== savedText()
   const scientific = createMemo(() => (isBinary() ? undefined : detectScientificFile(e(), draft())))
   const biological = createMemo(() => (isBinary() ? undefined : detectBiologicalFormat(e())))
+  const binaryScience = createMemo(() => detectBinaryScienceFormat(e()))
   const tabular = createMemo<TableFormat | undefined>(() => {
     if (isBinary()) return
     if (e() === "csv" || e() === "tsv" || e() === "jsonl") return e() as TableFormat
@@ -171,6 +184,7 @@ export function FileView(props: {
     if (isBinary()) {
       if (mime().startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(x)) return "image"
       if (mime() === "application/pdf" || x === "pdf") return "pdf"
+      if (binaryScience()) return "scientific-binary"
       return "binary"
     }
     if (x === "md" || x === "markdown" || x === "mdx") return "markdown"
@@ -190,6 +204,7 @@ export function FileView(props: {
     if (k === "code") return LANG[e()] ?? e() ?? "text"
     if (k === "science") return scientific()?.format ?? e()
     if (k === "scientific-data") return biological() ?? e()
+    if (k === "scientific-binary") return binaryScience() ?? e()
     if (k === "table") return tabular() ?? e()
     return k
   }
@@ -233,6 +248,23 @@ export function FileView(props: {
       await navigator.clipboard?.writeText(isBinary() ? dataUrl() : draft())
       toast.success("copied", name())
     } catch {}
+  }
+
+  const download = async () => {
+    try {
+      const doFetch = platform.fetch ?? fetch
+      const url = `${sdk.url.replace(/\/$/, "")}/file/raw?directory=${encodeURIComponent(directory())}&path=${encodeURIComponent(props.path)}`
+      const response = await doFetch(url)
+      if (!response.ok) throw new Error(`download failed (${response.status})`)
+      const object = URL.createObjectURL(await response.blob())
+      const anchor = document.createElement("a")
+      anchor.href = object
+      anchor.download = name()
+      anchor.click()
+      URL.revokeObjectURL(object)
+    } catch (error) {
+      toast.error("download failed", error instanceof Error ? error.message : String(error))
+    }
   }
 
   const toggleable = () =>
@@ -342,9 +374,9 @@ export function FileView(props: {
           </button>
         </Show>
         <Show when={isBinary()}>
-          <a href={dataUrl()} download={name()} title="download" style={{ ...iconBtn(), "text-decoration": "none" }}>
+          <button type="button" onClick={() => void download()} title="download" style={iconBtn()}>
             <IconDownload size={13} strokeWidth={1.6} />
-          </a>
+          </button>
         </Show>
 
         <button type="button" onClick={() => setRefreshKey((k) => k + 1)} title="refresh" style={iconBtn()}>
@@ -457,6 +489,13 @@ export function FileView(props: {
               <Match when={kind() === "scientific-data" && !showSource()}>
                 <Show when={biological()}>
                   {(format) => <ScientificDataView text={draft()} format={format()} name={name()} />}
+                </Show>
+              </Match>
+
+              {/* large scientific containers */}
+              <Match when={kind() === "scientific-binary"}>
+                <Show when={binaryScience()}>
+                  {(format) => <BinaryScienceView path={props.path} directory={directory()} format={format()} />}
                 </Show>
               </Match>
 

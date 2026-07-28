@@ -2162,6 +2162,8 @@ export type FileContent = {
   }
   encoding?: "base64"
   mimeType?: string
+  size?: number
+  truncated?: boolean
 }
 
 export type File = {
@@ -5289,6 +5291,57 @@ export type FileWriteResponses = {
 
 export type FileWriteResponse = FileWriteResponses[keyof FileWriteResponses]
 
+export type FileInspectData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/inspect"
+}
+
+export type FileInspectResponses = {
+  /**
+   * Scientific file inspection
+   */
+  200: {
+    format: "bam" | "cram" | "h5ad" | "loom"
+    name: string
+    size: number
+    modified: number
+    signature: boolean
+    index?: string
+    tool: {
+      name: string
+      available: boolean
+      detail?: string
+    }
+    details: {
+      [key: string]: unknown
+    }
+  }
+}
+
+export type FileInspectResponse = FileInspectResponses[keyof FileInspectResponses]
+
+export type FileRawData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/raw"
+}
+
+export type FileRawResponses = {
+  /**
+   * Raw file contents
+   */
+  200: unknown
+}
+
 export type FileStatusData = {
   body?: never
   path?: never
@@ -5306,6 +5359,83 @@ export type FileStatusResponses = {
 }
 
 export type FileStatusResponse = FileStatusResponses[keyof FileStatusResponses]
+
+export type NotebookExecuteData = {
+  body?: {
+    id: string
+    language: "python" | "r"
+    code: string
+    timeout?: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/notebook/execute"
+}
+
+export type NotebookExecuteResponses = {
+  /**
+   * Jupyter-compatible cell outputs
+   */
+  200: unknown
+}
+
+export type NotebookStatusData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    id: string
+    language: "python" | "r"
+  }
+  url: "/notebook/status"
+}
+
+export type NotebookStatusResponses = {
+  /**
+   * Kernel state
+   */
+  200: unknown
+}
+
+export type NotebookRestartData = {
+  body?: {
+    id: string
+    language: "python" | "r"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/notebook/restart"
+}
+
+export type NotebookRestartResponses = {
+  /**
+   * Kernel state
+   */
+  200: unknown
+}
+
+export type NotebookInterruptData = {
+  body?: {
+    id: string
+    language: "python" | "r"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/notebook/interrupt"
+}
+
+export type NotebookInterruptResponses = {
+  /**
+   * Kernel state
+   */
+  200: unknown
+}
 
 export type McpStatusData = {
   body?: never

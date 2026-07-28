@@ -32,9 +32,11 @@ import type {
   ConfigUpdateResponses,
   EventSubscribeResponses,
   ExperimentalResourceListResponses,
+  FileInspectResponses,
   FileListResponses,
   FilePartInput,
   FilePartSource,
+  FileRawResponses,
   FileReadResponses,
   FileStatusResponses,
   FileWriteResponses,
@@ -75,6 +77,10 @@ import type {
   McpLocalConfig,
   McpRemoteConfig,
   McpStatusResponses,
+  NotebookExecuteResponses,
+  NotebookInterruptResponses,
+  NotebookRestartResponses,
+  NotebookStatusResponses,
   Part as Part2,
   PartDeleteErrors,
   PartDeleteResponses,
@@ -3311,6 +3317,66 @@ export class File extends HeyApiClient {
   }
 
   /**
+   * Inspect a scientific binary file
+   *
+   * Inspect BAM, CRAM, H5AD, or LOOM metadata with locally available scientific tools.
+   */
+  public inspect<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileInspectResponses, unknown, ThrowOnError>({
+      url: "/file/inspect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Download a file
+   *
+   * Stream a project file without loading it into the JSON API as base64.
+   */
+  public raw<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileRawResponses, unknown, ThrowOnError>({
+      url: "/file/raw",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Get file status
    *
    * Get the git status of all files in the project.
@@ -3326,6 +3392,151 @@ export class File extends HeyApiClient {
       url: "/file/status",
       ...options,
       ...params,
+    })
+  }
+}
+
+export class Notebook extends HeyApiClient {
+  /**
+   * Execute a notebook cell
+   *
+   * Execute code in a persistent project-scoped Python or R kernel.
+   */
+  public execute<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      id?: string
+      language?: "python" | "r"
+      code?: string
+      timeout?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "id" },
+            { in: "body", key: "language" },
+            { in: "body", key: "code" },
+            { in: "body", key: "timeout" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<NotebookExecuteResponses, unknown, ThrowOnError>({
+      url: "/notebook/execute",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get notebook kernel status
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      id: string
+      language: "python" | "r"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "id" },
+            { in: "query", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<NotebookStatusResponses, unknown, ThrowOnError>({
+      url: "/notebook/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Restart a notebook kernel
+   */
+  public restart<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      id?: string
+      language?: "python" | "r"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "id" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<NotebookRestartResponses, unknown, ThrowOnError>({
+      url: "/notebook/restart",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Interrupt a notebook kernel
+   *
+   * Stop the running cell and release its kernel. The next execution starts a fresh kernel.
+   */
+  public interrupt<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      id?: string
+      language?: "python" | "r"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "id" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<NotebookInterruptResponses, unknown, ThrowOnError>({
+      url: "/notebook/interrupt",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
@@ -4174,6 +4385,11 @@ export class OpenScienceClient extends HeyApiClient {
   private _file?: File
   get file(): File {
     return (this._file ??= new File({ client: this.client }))
+  }
+
+  private _notebook?: Notebook
+  get notebook(): Notebook {
+    return (this._notebook ??= new Notebook({ client: this.client }))
   }
 
   private _mcp?: Mcp

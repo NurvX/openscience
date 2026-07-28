@@ -7281,6 +7281,143 @@
         ]
       }
     },
+    "/file/inspect": {
+      "get": {
+        "operationId": "file.inspect",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Inspect a scientific binary file",
+        "description": "Inspect BAM, CRAM, H5AD, or LOOM metadata with locally available scientific tools.",
+        "responses": {
+          "200": {
+            "description": "Scientific file inspection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "bam",
+                        "cram",
+                        "h5ad",
+                        "loom"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "number"
+                    },
+                    "modified": {
+                      "type": "number"
+                    },
+                    "signature": {
+                      "type": "boolean"
+                    },
+                    "index": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "available": {
+                          "type": "boolean"
+                        },
+                        "detail": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "available"
+                      ]
+                    },
+                    "details": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "name",
+                    "size",
+                    "modified",
+                    "signature",
+                    "tool",
+                    "details"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.inspect({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/raw": {
+      "get": {
+        "operationId": "file.raw",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Download a file",
+        "description": "Stream a project file without loading it into the JSON API as base64.",
+        "responses": {
+          "200": {
+            "description": "Raw file contents"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.raw({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/file/status": {
       "get": {
         "operationId": "file.status",
@@ -7314,6 +7451,225 @@
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.status({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/notebook/execute": {
+      "post": {
+        "operationId": "notebook.execute",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Execute a notebook cell",
+        "description": "Execute code in a persistent project-scoped Python or R kernel.",
+        "responses": {
+          "200": {
+            "description": "Jupyter-compatible cell outputs"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "language": {
+                    "type": "string",
+                    "enum": [
+                      "python",
+                      "r"
+                    ]
+                  },
+                  "code": {
+                    "type": "string",
+                    "maxLength": 2000000
+                  },
+                  "timeout": {
+                    "type": "integer",
+                    "minimum": 5000,
+                    "maximum": 600000
+                  }
+                },
+                "required": [
+                  "id",
+                  "language",
+                  "code"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.notebook.execute({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/notebook/status": {
+      "get": {
+        "operationId": "notebook.status",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "language",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "python",
+                "r"
+              ]
+            },
+            "required": true
+          }
+        ],
+        "summary": "Get notebook kernel status",
+        "responses": {
+          "200": {
+            "description": "Kernel state"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.notebook.status({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/notebook/restart": {
+      "post": {
+        "operationId": "notebook.restart",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Restart a notebook kernel",
+        "responses": {
+          "200": {
+            "description": "Kernel state"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "language": {
+                    "type": "string",
+                    "enum": [
+                      "python",
+                      "r"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "language"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.notebook.restart({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/notebook/interrupt": {
+      "post": {
+        "operationId": "notebook.interrupt",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Interrupt a notebook kernel",
+        "description": "Stop the running cell and release its kernel. The next execution starts a fresh kernel.",
+        "responses": {
+          "200": {
+            "description": "Kernel state"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "language": {
+                    "type": "string",
+                    "enum": [
+                      "python",
+                      "r"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "language"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.notebook.interrupt({\n  ...\n})"
           }
         ]
       }
@@ -15164,6 +15520,12 @@
           },
           "mimeType": {
             "type": "string"
+          },
+          "size": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
           }
         },
         "required": [

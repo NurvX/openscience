@@ -15,6 +15,7 @@ import fuzzysort from "fuzzysort"
 import { Global } from "../global"
 import { FileWatcher } from "./watcher"
 import { createSearchCache } from "./search-cache"
+import { ScienceFile } from "./science"
 
 export namespace File {
   const log = Log.create({ service: "file" })
@@ -73,6 +74,8 @@ export namespace File {
         .optional(),
       encoding: z.literal("base64").optional(),
       mimeType: z.string().optional(),
+      size: z.number().optional(),
+      truncated: z.boolean().optional(),
     })
     .meta({
       ref: "FileContent",
@@ -303,13 +306,23 @@ export namespace File {
       return { type: "text", content: "" }
     }
 
-    const encode = await shouldEncode(bunFile)
+    const encode = ScienceFile.binary(file) || (await shouldEncode(bunFile))
 
     if (encode) {
+      if (bunFile.size > 16 * 1024 * 1024) {
+        return {
+          type: "text",
+          content: "",
+          mimeType: bunFile.type || "application/octet-stream",
+          encoding: "base64",
+          size: bunFile.size,
+          truncated: true,
+        }
+      }
       const buffer = await bunFile.arrayBuffer().catch(() => new ArrayBuffer(0))
       const content = Buffer.from(buffer).toString("base64")
       const mimeType = bunFile.type || "application/octet-stream"
-      return { type: "text", content, mimeType, encoding: "base64" }
+      return { type: "text", content, mimeType, encoding: "base64", size: bunFile.size }
     }
 
     // Return the file content verbatim — callers like the web editor write
@@ -331,6 +344,24 @@ export namespace File {
       }
     }
     return { type: "text", content }
+  }
+
+  export async function inspect(file: string): Promise<ScienceFile.Inspection> {
+    const full = path.join(Instance.directory, file)
+    if (!Instance.containsPath(full)) {
+      throw new Error(`Access denied: path escapes project directory`)
+    }
+    return ScienceFile.inspect(full, file)
+  }
+
+  export async function raw(file: string): Promise<BunFile> {
+    const full = path.join(Instance.directory, file)
+    if (!Instance.containsPath(full)) {
+      throw new Error(`Access denied: path escapes project directory`)
+    }
+    const content = Bun.file(full)
+    if (!(await content.exists())) throw new HTTPException(404, { message: `File not found: ${file}` })
+    return content
   }
 
   export async function write(file: string, content: string): Promise<Content> {

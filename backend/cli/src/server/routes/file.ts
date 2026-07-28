@@ -6,6 +6,7 @@ import { Ripgrep } from "../../file/ripgrep"
 import { LSP } from "../../lsp"
 import { Instance } from "../../project/instance"
 import { lazy } from "../../util/lazy"
+import { ScienceFile } from "../../file/science"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -200,6 +201,64 @@ export const FileRoutes = lazy(() =>
         const body = c.req.valid("json")
         const content = await File.write(body.path, body.content)
         return c.json(content)
+      },
+    )
+    .get(
+      "/file/inspect",
+      describeRoute({
+        summary: "Inspect a scientific binary file",
+        description: "Inspect BAM, CRAM, H5AD, or LOOM metadata with locally available scientific tools.",
+        operationId: "file.inspect",
+        responses: {
+          200: {
+            description: "Scientific file inspection",
+            content: {
+              "application/json": {
+                schema: resolver(ScienceFile.Inspection),
+              },
+            },
+          },
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          path: z.string(),
+        }),
+      ),
+      async (c) => {
+        const result = await File.inspect(c.req.valid("query").path)
+        return c.json(result)
+      },
+    )
+    .get(
+      "/file/raw",
+      describeRoute({
+        summary: "Download a file",
+        description: "Stream a project file without loading it into the JSON API as base64.",
+        operationId: "file.raw",
+        responses: {
+          200: {
+            description: "Raw file contents",
+          },
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          path: z.string(),
+        }),
+      ),
+      async (c) => {
+        const path = c.req.valid("query").path
+        const content = await File.raw(path)
+        return new Response(content, {
+          headers: {
+            "Content-Type": content.type || "application/octet-stream",
+            "Content-Length": String(content.size),
+            "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.split("/").pop() || "download")}`,
+          },
+        })
       },
     )
     .get(
