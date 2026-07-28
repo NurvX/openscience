@@ -17,6 +17,8 @@ import { useSync } from "@/context/sync"
 import { usePlatform } from "@/context/platform"
 import { FONT_MONO, FONT_SANS, FONT_CODE } from "@/styles/tokens"
 import { PdfViewer } from "@/science/renderers/documents/PdfViewer"
+import { ScienceArtifact } from "@/science/ScienceArtifact"
+import { detectScientificFile } from "@/science/files"
 import { toast } from "@/atlas/Toast"
 import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, IconRefresh } from "@/atlas/shared/Icon"
 
@@ -26,6 +28,7 @@ import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, Icon
  * A file's extension picks the renderer:
  *   .md / .markdown  → formatted markdown (@synsci/ui Markdown)
  *   .pdf             → PdfViewer (pdfjs page rasterizer)
+ *   molecular/FASTA  → scientific artifact renderer, with editable source
  *   .tex / .latex    → highlighted LaTeX source (a .tex is a source FILE, not a
  *                      math expression — the KaTeX LatexView is reserved for
  *                      kind:"latex" math ARTIFACTS with a single math string)
@@ -98,7 +101,7 @@ const LANG: Record<string, string> = {
   log: "text",
 }
 
-type Kind = "markdown" | "pdf" | "image" | "code" | "binary"
+type Kind = "markdown" | "pdf" | "image" | "science" | "code" | "binary"
 
 type FileData = { content?: string; encoding?: string; mimeType?: string }
 
@@ -150,6 +153,7 @@ export function FileView(props: {
   const dataUrl = () => `data:${mime() || "application/octet-stream"};base64,${b64()}`
   const text = () => (!data() || isBinary() ? "" : (data()!.content ?? ""))
   const dirty = () => draft() !== savedText()
+  const scientific = createMemo(() => (isBinary() ? undefined : detectScientificFile(e(), draft())))
 
   const kind = createMemo<Kind>(() => {
     const x = e()
@@ -160,6 +164,7 @@ export function FileView(props: {
     }
     if (x === "md" || x === "markdown" || x === "mdx") return "markdown"
     if (x === "pdf") return "pdf"
+    if (scientific()) return "science"
     // .tex / .latex / .sty / .cls are source files → highlighted "code" view
     // (LANG maps them to the shiki `latex` grammar). They are NEVER routed to
     // KaTeX, which blanks on a full \documentclass document.
@@ -169,6 +174,7 @@ export function FileView(props: {
   const badge = () => {
     const k = kind()
     if (k === "code") return LANG[e()] ?? e() ?? "text"
+    if (k === "science") return scientific()?.format ?? e()
     return k
   }
 
@@ -213,7 +219,7 @@ export function FileView(props: {
     } catch {}
   }
 
-  const toggleable = () => kind() === "markdown" || kind() === "code"
+  const toggleable = () => kind() === "markdown" || kind() === "science" || kind() === "code"
 
   return (
     <div
@@ -426,6 +432,24 @@ export function FileView(props: {
                 </div>
               </Match>
 
+              {/* scientific file */}
+              <Match when={kind() === "science" && !showSource()}>
+                <Show when={scientific()}>
+                  {(artifact) => (
+                    <div
+                      style={{
+                        padding: "14px",
+                        height: "100%",
+                        "min-height": "420px",
+                        "box-sizing": "border-box",
+                      }}
+                    >
+                      <ScienceArtifact kind={artifact().kind} data={artifact().data} height={560} />
+                    </div>
+                  )}
+                </Show>
+              </Match>
+
               {/* binary */}
               <Match when={kind() === "binary"}>
                 <div
@@ -453,7 +477,7 @@ export function FileView(props: {
               </Match>
 
               {/* code / text — editable source, or highlighted read view */}
-              <Match when={kind() === "code" && showSource()}>
+              <Match when={(kind() === "code" || kind() === "science") && showSource()}>
                 <textarea
                   value={draft()}
                   spellcheck={false}

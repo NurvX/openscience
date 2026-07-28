@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { detectScientificFile } from "./files"
+
+const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8")
 
 describe("detectScientificFile", () => {
   test("routes small-molecule structures into the 3D chemistry renderer", () => {
@@ -78,5 +82,16 @@ describe("detectScientificFile", () => {
       },
       format: "fasta",
     })
+  })
+})
+
+describe("scientific file viewer integration", () => {
+  test("routes recognized files through the shared science artifact dispatcher", () => {
+    const preview = read("../atlas/FilePreview.tsx")
+
+    expect(preview).toContain('import { detectScientificFile } from "@/science/files"')
+    expect(preview).toContain('import { ScienceArtifact } from "@/science/ScienceArtifact"')
+    expect(preview).toContain('type Kind = "markdown" | "pdf" | "image" | "science" | "code" | "binary"')
+    expect(preview).toContain("<ScienceArtifact")
   })
 })
