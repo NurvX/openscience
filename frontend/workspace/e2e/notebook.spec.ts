@@ -59,10 +59,19 @@ test("opens, executes, edits, and saves a native Jupyter notebook", async ({ pag
 
     const result = notebook.getByLabel("code cell 3")
     await result.fill("value + 2")
+    await notebook.locator('[data-action="notebook-diff"]').click()
+    await expect(page.getByRole("dialog", { name: "Notebook changes" })).toBeVisible()
+    await page.getByRole("dialog", { name: "Notebook changes" }).getByRole("button", { name: "close" }).click()
+
+    await notebook.locator('[data-action="notebook-export"]').click()
+    const download = page.waitForEvent("download")
+    await page.getByRole("menuitem", { name: "Python script (.py)" }).click()
+    expect((await download).suggestedFilename()).toBe("analysis.py")
+
     await notebook.locator('[data-cell-id="result"] [data-action="run-cell"]').click()
     await expect(notebook.getByText("43", { exact: true })).toBeVisible()
 
-    await page.getByRole("button", { name: "save", exact: true }).click()
+    await page.keyboard.press("Control+s")
     await expect.poll(() => JSON.parse(readFileSync(filepath, "utf8")).cells[2].source).toEqual(["value + 2"])
     await expect
       .poll(() => JSON.parse(readFileSync(filepath, "utf8")).cells[2].outputs[0].data["text/plain"])

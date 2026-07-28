@@ -1,11 +1,15 @@
-import { For, Show, createMemo, createSignal, onMount, type JSX } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Markdown } from "@synsci/ui/markdown"
+import { Diff } from "@synsci/ui/diff"
 import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { FONT_CODE, FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import {
   clearOutputs,
   createCell,
+  exportHtml,
+  exportMarkdown,
+  exportScript,
   insertCell,
   moveCell,
   parseNotebook,
@@ -49,7 +53,11 @@ export function NotebookView(props: {
   path: string
   directory: string
   text: string
+  savedText: string
+  dirty: boolean
+  saving: boolean
   onChange: (text: string) => void
+  onSave: () => void
   onRaw: () => void
 }): JSX.Element {
   const sdk = useSDK()
@@ -58,6 +66,8 @@ export function NotebookView(props: {
   const [running, setRunning] = createSignal<string[]>([])
   const [editing, setEditing] = createSignal<string>()
   const [error, setError] = createSignal("")
+  const [diff, setDiff] = createSignal(false)
+  const [exports, setExports] = createSignal(false)
 
   const parsed = createMemo(() => {
     try {
@@ -176,7 +186,54 @@ export function NotebookView(props: {
     void call("restart").catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
   }
 
+  const snapshot = (text: string) => {
+    try {
+      return exportScript(parseNotebook(text), language())
+    } catch {
+      return text
+    }
+  }
+
+  const download = (format: "script" | "markdown" | "html") => {
+    const current = notebook()
+    if (!current) return
+    const base =
+      props.path
+        .split("/")
+        .pop()
+        ?.replace(/\.ipynb$/i, "") || "notebook"
+    const output =
+      format === "script"
+        ? exportScript(current, language())
+        : format === "markdown"
+          ? exportMarkdown(current, language())
+          : exportHtml(current, base)
+    const extension = format === "script" ? (language() === "r" ? "r" : "py") : format === "markdown" ? "md" : "html"
+    const url = URL.createObjectURL(new Blob([output], { type: "text/plain;charset=utf-8" }))
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `${base}.${extension}`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    setExports(false)
+  }
+
   onMount(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (event.key.toLowerCase() === "s") {
+        event.preventDefault()
+        props.onSave()
+        return
+      }
+      if (event.shiftKey && event.key === "Enter") {
+        event.preventDefault()
+        void runAll()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    onCleanup(() => window.removeEventListener("keydown", onKey))
+
     void send(`${endpoint("status")}&id=${encodeURIComponent(props.path)}&language=${encodeURIComponent(language())}`)
       .then((response) => response.json())
       .then((result: { active?: boolean }) => setState(result.active ? "ready" : "idle"))
@@ -189,6 +246,7 @@ export function NotebookView(props: {
       style={{
         height: "100%",
         "min-height": "100%",
+        position: "relative",
         display: "flex",
         "flex-direction": "column",
         background:
@@ -226,6 +284,7 @@ export function NotebookView(props: {
                 "border-bottom": "1px solid var(--color-border)",
                 background: "color-mix(in srgb, var(--color-bg) 94%, transparent)",
                 "backdrop-filter": "blur(14px)",
+                overflow: "visible",
               }}
             >
               <select
@@ -262,6 +321,56 @@ export function NotebookView(props: {
               <div style={{ flex: 1 }} />
               <button
                 type="button"
+                data-action="notebook-diff"
+                disabled={!props.dirty}
+                style={button()}
+                onClick={() => setDiff(true)}
+              >
+                diff
+              </button>
+              <div style={{ position: "relative" }}>
+                <button
+                  type="button"
+                  data-action="notebook-export"
+                  style={button()}
+                  onClick={() => setExports((value) => !value)}
+                >
+                  export
+                </button>
+                <Show when={exports()}>
+                  <div
+                    role="menu"
+                    aria-label="Export notebook"
+                    style={{
+                      position: "absolute",
+                      top: "32px",
+                      right: 0,
+                      width: "160px",
+                      padding: "5px",
+                      display: "flex",
+                      "flex-direction": "column",
+                      gap: "2px",
+                      border: "1px solid var(--color-border-strong)",
+                      "border-radius": "7px",
+                      background: "var(--color-bg)",
+                      "box-shadow": "0 12px 32px rgba(0,0,0,0.18)",
+                      "z-index": 8,
+                    }}
+                  >
+                    <button type="button" role="menuitem" style={menu()} onClick={() => download("script")}>
+                      {language() === "r" ? "R script (.r)" : "Python script (.py)"}
+                    </button>
+                    <button type="button" role="menuitem" style={menu()} onClick={() => download("markdown")}>
+                      Markdown report
+                    </button>
+                    <button type="button" role="menuitem" style={menu()} onClick={() => download("html")}>
+                      Standalone HTML
+                    </button>
+                  </div>
+                </Show>
+              </div>
+              <button
+                type="button"
                 data-action="run-all"
                 disabled={busy()}
                 style={button(true)}
@@ -289,6 +398,11 @@ export function NotebookView(props: {
               <button type="button" style={button()} onClick={() => apply(clearOutputs(document()))}>
                 clear outputs
               </button>
+              <Show when={props.dirty}>
+                <button type="button" disabled={props.saving} style={button(true)} onClick={props.onSave}>
+                  {props.saving ? "saving…" : "save"}
+                </button>
+              </Show>
             </div>
 
             <Show when={error()}>
@@ -356,6 +470,48 @@ export function NotebookView(props: {
                 </button>
               </div>
             </div>
+
+            <Show when={diff()}>
+              <div
+                role="dialog"
+                aria-label="Notebook changes"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  "z-index": 12,
+                  display: "flex",
+                  "flex-direction": "column",
+                  background: "var(--color-bg)",
+                }}
+              >
+                <div
+                  style={{
+                    height: "46px",
+                    display: "flex",
+                    "align-items": "center",
+                    gap: "10px",
+                    padding: "0 14px",
+                    "border-bottom": "1px solid var(--color-border)",
+                  }}
+                >
+                  <strong style={{ "font-family": FONT_SANS, "font-size": "13px" }}>Notebook changes</strong>
+                  <span style={{ "font-family": FONT_MONO, "font-size": "10px", color: "var(--color-text-faint)" }}>
+                    saved checkpoint → working copy
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  <button type="button" style={button()} onClick={() => setDiff(false)}>
+                    close
+                  </button>
+                </div>
+                <div class="atlas-scroll" style={{ flex: 1, "min-height": 0, overflow: "auto" }}>
+                  <Diff
+                    before={{ name: props.path, contents: snapshot(props.savedText) }}
+                    after={{ name: props.path, contents: snapshot(props.text) }}
+                    diffStyle="split"
+                  />
+                </div>
+              </div>
+            </Show>
           </>
         )}
       </Show>
@@ -617,6 +773,18 @@ function mini(): JSX.CSSProperties {
     "font-family": FONT_MONO,
     "font-size": "9px",
     color: "var(--color-text-faint)",
+  }
+}
+
+function menu(): JSX.CSSProperties {
+  return {
+    all: "unset",
+    cursor: "pointer",
+    padding: "8px 9px",
+    "border-radius": "4px",
+    "font-family": FONT_SANS,
+    "font-size": "11px",
+    color: "var(--color-text-muted)",
   }
 }
 

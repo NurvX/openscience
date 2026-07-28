@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url"
 import {
   clearOutputs,
   createCell,
+  exportHtml,
+  exportMarkdown,
+  exportScript,
   insertCell,
   moveCell,
   parseNotebook,
@@ -151,6 +154,73 @@ describe("notebook document model", () => {
     expect(cleared.cells[1]).toEqual(notebook.cells[1])
     expect(notebook.cells[0]?.outputs).toHaveLength(1)
   })
+
+  test("exports a notebook as an executable percent-format script", () => {
+    const notebook = parseNotebook(
+      JSON.stringify({
+        cells: [
+          { cell_type: "markdown", id: "intro", metadata: {}, source: ["# Analysis\n", "Important context"] },
+          {
+            cell_type: "code",
+            id: "code",
+            metadata: {},
+            source: ["answer = 42\n", "answer"],
+            execution_count: 1,
+            outputs: [],
+          },
+        ],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      }),
+    )
+
+    expect(exportScript(notebook, "python")).toBe(
+      "# %% [markdown]\n# # Analysis\n# Important context\n\n# %%\nanswer = 42\nanswer\n",
+    )
+    expect(exportScript(notebook, "r")).toContain("# %%\nanswer = 42")
+  })
+
+  test("exports Markdown with code fences and readable outputs", () => {
+    const notebook = parseNotebook(
+      JSON.stringify({
+        cells: [
+          { cell_type: "markdown", id: "intro", metadata: {}, source: ["# Analysis"] },
+          {
+            cell_type: "code",
+            id: "code",
+            metadata: {},
+            source: ["print(42)"],
+            execution_count: 1,
+            outputs: [{ output_type: "stream", name: "stdout", text: ["42\n"] }],
+          },
+        ],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      }),
+    )
+
+    expect(exportMarkdown(notebook, "python")).toBe("# Analysis\n\n```python\nprint(42)\n```\n\n```text\n42\n\n```\n")
+  })
+
+  test("exports a standalone escaped HTML report", () => {
+    const notebook = parseNotebook(
+      JSON.stringify({
+        cells: [{ cell_type: "code", id: "code", metadata: {}, source: ["value < 4"], outputs: [] }],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      }),
+    )
+
+    const html = exportHtml(notebook, "Analysis")
+
+    expect(html).toContain("<!doctype html>")
+    expect(html).toContain("<title>Analysis</title>")
+    expect(html).toContain("value &lt; 4")
+    expect(html).not.toContain("value < 4")
+  })
 })
 
 describe("notebook file integration", () => {
@@ -170,6 +240,9 @@ describe("notebook file integration", () => {
     expect(view).toContain('data-action="run-all"')
     expect(view).toContain('data-action="restart-kernel"')
     expect(view).toContain('data-action="interrupt-kernel"')
+    expect(view).toContain('data-action="notebook-diff"')
+    expect(view).toContain('data-action="notebook-export"')
     expect(view).toContain('data-slot="notebook-output"')
+    expect(view).toContain('event.key.toLowerCase() === "s"')
   })
 })

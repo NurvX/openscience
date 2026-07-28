@@ -417,7 +417,11 @@ export function FileView(props: {
                   path={props.path}
                   directory={directory()}
                   text={draft()}
+                  savedText={savedText()}
+                  dirty={dirty()}
+                  saving={saving()}
                   onChange={setDraft}
+                  onSave={() => void save()}
                   onRaw={() => setShowSource(true)}
                 />
               </Match>
