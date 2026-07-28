@@ -5342,6 +5342,73 @@ export type FileRawResponses = {
   200: unknown
 }
 
+export type FileArtifactsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/artifacts"
+}
+
+export type FileArtifactsResponses = {
+  /**
+   * Research artifacts
+   */
+  200: Array<{
+    name: string
+    path: string
+    kind:
+      | "notebook"
+      | "dataset"
+      | "figure"
+      | "report"
+      | "structure"
+      | "sequence"
+      | "genomics"
+      | "spectrum"
+      | "model"
+      | "archive"
+    format: string
+    size: number
+    modified: number
+  }>
+}
+
+export type FileArtifactsResponse = FileArtifactsResponses[keyof FileArtifactsResponses]
+
+export type FileProvenanceData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/provenance"
+}
+
+export type FileProvenanceResponses = {
+  /**
+   * Local provenance
+   */
+  200: {
+    path: string
+    tracked: boolean
+    dirty: boolean
+    status: "clean" | "modified" | "added" | "deleted" | "untracked" | "local"
+    branch?: string
+    commit?: {
+      sha: string
+      author: string
+      email: string
+      date: string
+      message: string
+    }
+  }
+}
+
+export type FileProvenanceResponse = FileProvenanceResponses[keyof FileProvenanceResponses]
+
 export type FileStatusData = {
   body?: never
   path?: never

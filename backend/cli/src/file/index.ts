@@ -16,6 +16,7 @@ import { Global } from "../global"
 import { FileWatcher } from "./watcher"
 import { createSearchCache } from "./search-cache"
 import { ScienceFile } from "./science"
+import { ArtifactFile } from "./artifacts"
 
 export namespace File {
   const log = Log.create({ service: "file" })
@@ -362,6 +363,18 @@ export namespace File {
     const content = Bun.file(full)
     if (!(await content.exists())) throw new HTTPException(404, { message: `File not found: ${file}` })
     return content
+  }
+
+  export async function artifacts(): Promise<ArtifactFile.Info[]> {
+    return ArtifactFile.scan(Instance.directory)
+  }
+
+  export async function provenance(file: string): Promise<ArtifactFile.Provenance> {
+    const full = path.join(Instance.directory, file)
+    if (!Instance.containsPath(full)) {
+      throw new Error(`Access denied: path escapes project directory`)
+    }
+    return ArtifactFile.provenance(Instance.directory, file)
   }
 
   export async function write(file: string, content: string): Promise<Content> {

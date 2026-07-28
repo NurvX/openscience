@@ -32,10 +32,12 @@ import type {
   ConfigUpdateResponses,
   EventSubscribeResponses,
   ExperimentalResourceListResponses,
+  FileArtifactsResponses,
   FileInspectResponses,
   FileListResponses,
   FilePartInput,
   FilePartSource,
+  FileProvenanceResponses,
   FileRawResponses,
   FileReadResponses,
   FileStatusResponses,
@@ -3371,6 +3373,55 @@ export class File extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<FileRawResponses, unknown, ThrowOnError>({
       url: "/file/raw",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List local research artifacts
+   *
+   * Discover notebooks, datasets, figures, reports, models, and scientific files in the project.
+   */
+  public artifacts<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FileArtifactsResponses, unknown, ThrowOnError>({
+      url: "/file/artifacts",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get local file provenance
+   *
+   * Read Git branch, dirty state, and latest commit metadata for a project file.
+   */
+  public provenance<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileProvenanceResponses, unknown, ThrowOnError>({
+      url: "/file/provenance",
       ...options,
       ...params,
     })

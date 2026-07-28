@@ -7418,6 +7418,183 @@
         ]
       }
     },
+    "/file/artifacts": {
+      "get": {
+        "operationId": "file.artifacts",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List local research artifacts",
+        "description": "Discover notebooks, datasets, figures, reports, models, and scientific files in the project.",
+        "responses": {
+          "200": {
+            "description": "Research artifacts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "notebook",
+                          "dataset",
+                          "figure",
+                          "report",
+                          "structure",
+                          "sequence",
+                          "genomics",
+                          "spectrum",
+                          "model",
+                          "archive"
+                        ]
+                      },
+                      "format": {
+                        "type": "string"
+                      },
+                      "size": {
+                        "type": "number"
+                      },
+                      "modified": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "path",
+                      "kind",
+                      "format",
+                      "size",
+                      "modified"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.artifacts({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/provenance": {
+      "get": {
+        "operationId": "file.provenance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Get local file provenance",
+        "description": "Read Git branch, dirty state, and latest commit metadata for a project file.",
+        "responses": {
+          "200": {
+            "description": "Local provenance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "tracked": {
+                      "type": "boolean"
+                    },
+                    "dirty": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "clean",
+                        "modified",
+                        "added",
+                        "deleted",
+                        "untracked",
+                        "local"
+                      ]
+                    },
+                    "branch": {
+                      "type": "string"
+                    },
+                    "commit": {
+                      "type": "object",
+                      "properties": {
+                        "sha": {
+                          "type": "string"
+                        },
+                        "author": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sha",
+                        "author",
+                        "email",
+                        "date",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "tracked",
+                    "dirty",
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.provenance({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/file/status": {
       "get": {
         "operationId": "file.status",

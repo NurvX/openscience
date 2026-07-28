@@ -7,6 +7,7 @@ import { LSP } from "../../lsp"
 import { Instance } from "../../project/instance"
 import { lazy } from "../../util/lazy"
 import { ScienceFile } from "../../file/science"
+import { ArtifactFile } from "../../file/artifacts"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -260,6 +261,50 @@ export const FileRoutes = lazy(() =>
           },
         })
       },
+    )
+    .get(
+      "/file/artifacts",
+      describeRoute({
+        summary: "List local research artifacts",
+        description: "Discover notebooks, datasets, figures, reports, models, and scientific files in the project.",
+        operationId: "file.artifacts",
+        responses: {
+          200: {
+            description: "Research artifacts",
+            content: {
+              "application/json": {
+                schema: resolver(ArtifactFile.Info.array()),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => c.json(await File.artifacts()),
+    )
+    .get(
+      "/file/provenance",
+      describeRoute({
+        summary: "Get local file provenance",
+        description: "Read Git branch, dirty state, and latest commit metadata for a project file.",
+        operationId: "file.provenance",
+        responses: {
+          200: {
+            description: "Local provenance",
+            content: {
+              "application/json": {
+                schema: resolver(ArtifactFile.Provenance),
+              },
+            },
+          },
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          path: z.string(),
+        }),
+      ),
+      async (c) => c.json(await File.provenance(c.req.valid("query").path)),
     )
     .get(
       "/file/status",
