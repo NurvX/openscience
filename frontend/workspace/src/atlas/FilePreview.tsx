@@ -20,6 +20,8 @@ import { PdfViewer } from "@/science/renderers/documents/PdfViewer"
 import { ScienceArtifact } from "@/science/ScienceArtifact"
 import { detectScientificFile } from "@/science/files"
 import { NotebookView } from "@/notebook/NotebookView"
+import { DataTableView } from "@/data/DataTableView"
+import type { TableFormat } from "@/data/table"
 import { toast } from "@/atlas/Toast"
 import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, IconRefresh } from "@/atlas/shared/Icon"
 
@@ -102,7 +104,7 @@ const LANG: Record<string, string> = {
   log: "text",
 }
 
-type Kind = "markdown" | "notebook" | "pdf" | "image" | "science" | "code" | "binary"
+type Kind = "markdown" | "notebook" | "table" | "pdf" | "image" | "science" | "code" | "binary"
 
 type FileData = { content?: string; encoding?: string; mimeType?: string }
 
@@ -155,6 +157,11 @@ export function FileView(props: {
   const text = () => (!data() || isBinary() ? "" : (data()!.content ?? ""))
   const dirty = () => draft() !== savedText()
   const scientific = createMemo(() => (isBinary() ? undefined : detectScientificFile(e(), draft())))
+  const tabular = createMemo<TableFormat | undefined>(() => {
+    if (isBinary()) return
+    if (e() === "csv" || e() === "tsv" || e() === "jsonl") return e() as TableFormat
+    if (e() === "json" && draft().trimStart().startsWith("[")) return "json"
+  })
 
   const kind = createMemo<Kind>(() => {
     const x = e()
@@ -165,6 +172,7 @@ export function FileView(props: {
     }
     if (x === "md" || x === "markdown" || x === "mdx") return "markdown"
     if (x === "ipynb") return "notebook"
+    if (tabular()) return "table"
     if (x === "pdf") return "pdf"
     if (scientific()) return "science"
     // .tex / .latex / .sty / .cls are source files → highlighted "code" view
@@ -177,6 +185,7 @@ export function FileView(props: {
     const k = kind()
     if (k === "code") return LANG[e()] ?? e() ?? "text"
     if (k === "science") return scientific()?.format ?? e()
+    if (k === "table") return tabular() ?? e()
     return k
   }
 
@@ -221,7 +230,8 @@ export function FileView(props: {
     } catch {}
   }
 
-  const toggleable = () => kind() === "markdown" || kind() === "notebook" || kind() === "science" || kind() === "code"
+  const toggleable = () =>
+    kind() === "markdown" || kind() === "notebook" || kind() === "table" || kind() === "science" || kind() === "code"
 
   return (
     <div
@@ -426,6 +436,13 @@ export function FileView(props: {
                 />
               </Match>
 
+              {/* tabular data */}
+              <Match when={kind() === "table" && !showSource()}>
+                <Show when={tabular()}>
+                  {(format) => <DataTableView text={draft()} format={format()} name={name()} />}
+                </Show>
+              </Match>
+
               {/* pdf */}
               <Match when={kind() === "pdf"}>
                 <div style={{ padding: "14px" }}>
@@ -494,7 +511,12 @@ export function FileView(props: {
               </Match>
 
               {/* code / text — editable source, or highlighted read view */}
-              <Match when={(kind() === "code" || kind() === "science" || kind() === "notebook") && showSource()}>
+              <Match
+                when={
+                  (kind() === "code" || kind() === "science" || kind() === "notebook" || kind() === "table") &&
+                  showSource()
+                }
+              >
                 <textarea
                   value={draft()}
                   spellcheck={false}
@@ -595,6 +617,7 @@ export function FilePreview(props: { path: string; onClose: () => void }): JSX.E
 function langFor(k: Kind, x: string): string {
   if (k === "markdown") return "markdown"
   if (k === "notebook") return "json"
+  if (k === "table") return x === "jsonl" ? "json" : x
   return LANG[x] ?? "text"
 }
 
