@@ -56,3 +56,35 @@ test("PDF files rasterize their pages without an error", async ({ page, director
   expect(await canvas.evaluate((node: HTMLCanvasElement) => node.width * node.height)).toBeGreaterThan(0)
   await expect(viewer.locator('[data-slot="pdf-error"]')).toHaveCount(0)
 })
+
+test("XYZ files open as interactive 3D chemistry with source access", async ({ page, directory, gotoSession }) => {
+  await gotoSession()
+  await openFile(page, directory, "frontend/workspace/e2e/science/water.xyz")
+
+  const artifact = page.locator('[data-component="science-artifact"][data-kind="chem-3d"]')
+  await expect(artifact).toBeVisible()
+  await expect(artifact.locator('[data-component="mol-structure"]')).toBeVisible()
+
+  await page.getByTitle("raw source", { exact: true }).click()
+  await expect(page.getByTitle("rendered view", { exact: true })).toBeVisible()
+  await expect(page.locator("textarea")).toHaveValue(/water/)
+})
+
+test("PDB and SDF files select their molecular renderers", async ({ page, directory, gotoSession }) => {
+  await gotoSession()
+  await openFile(page, directory, "frontend/workspace/e2e/science/example.pdb")
+  await expect(page.locator('[data-component="science-artifact"][data-kind="protein-structure"]')).toBeVisible()
+
+  await openFile(page, directory, "frontend/workspace/e2e/science/ligand.sdf")
+  await expect(page.locator('[data-component="science-artifact"][data-kind="chem-3d"]')).toBeVisible()
+})
+
+test("aligned FASTA files open in the sequence alignment viewer", async ({ page, directory, gotoSession }) => {
+  await gotoSession()
+  await openFile(page, directory, "frontend/workspace/e2e/science/alignment.fasta")
+
+  const artifact = page.locator('[data-component="science-artifact"][data-kind="msa"]')
+  await expect(artifact).toBeVisible()
+  await expect(artifact.locator('[data-component="science-msa"]')).toBeVisible()
+  await expect(artifact).toContainText("2 seqs")
+})
