@@ -3,6 +3,7 @@ import { usePlatform } from "@/context/platform"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { centerTabs } from "@/atlas/store/centerTabs"
+import { uiStore } from "@/atlas/store/ui"
 import { toast } from "@/atlas/Toast"
 import {
   IconArchive,
@@ -17,7 +18,7 @@ import {
 } from "@/atlas/shared/Icon"
 import { FONT_CODE, FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import {
-  artifactKinds,
+  artifactActions,
   filterArtifacts,
   formatArtifactKind,
   groupArtifacts,
@@ -43,6 +44,31 @@ interface Provenance {
   }
 }
 
+interface Audit {
+  generated_at: string
+  score: number
+  status: "ready" | "warnings" | "blocked"
+  lockfiles: string[]
+  environments: string[]
+  notebooks: { total: number; valid: number; invalid: string[] }
+  artifacts: { total: number; nonempty: number; bytes: number }
+  checks: Array<{
+    id: string
+    label: string
+    status: "pass" | "warn" | "fail"
+    detail: string
+    weight: number
+  }>
+}
+
+type PublicationFormat = "html" | "pdf" | "docx" | "latex" | "pptx"
+
+interface PublicationCapabilities {
+  pandoc: boolean
+  pdf_engine?: string
+  formats: Record<PublicationFormat, boolean>
+}
+
 export function ArtifactGallery(props: { directory: string; onOpen: (path: string) => void }): JSX.Element {
   const sdk = useSDK()
   const platform = usePlatform()
@@ -51,6 +77,7 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
   const [kind, setKind] = createSignal<ArtifactKind | "all">("all")
   const [sort, setSort] = createSignal<ArtifactSort>("recent")
   const [selected, setSelected] = createSignal<string>()
+  const [auditOpen, setAuditOpen] = createSignal(false)
   const [refresh, setRefresh] = createSignal(0)
   const request = () => platform.fetch ?? fetch
   const url = (route: string, path?: string) =>
@@ -62,6 +89,14 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
       const response = await request()(url("/file/artifacts"))
       if (!response.ok) throw new Error(`artifact scan failed (${response.status})`)
       return normalizeArtifacts(await response.json())
+    },
+  )
+  const [audit, auditApi] = createResource(
+    () => [props.directory, refresh()] as const,
+    async () => {
+      const response = await request()(url("/file/reproducibility"))
+      if (!response.ok) throw new Error(`reproducibility audit failed (${response.status})`)
+      return (await response.json()) as Audit
     },
   )
   const rows = () => data.latest ?? []
@@ -93,6 +128,66 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
     prompt.context.add({ type: "file", path: item.path })
     centerTabs.showChat()
     toast.success("added to context", item.name)
+  }
+
+  const act = (item: ArtifactInfo, instruction: string) => {
+    prompt.context.add({ type: "file", path: item.path })
+    uiStore.setPrefill(instruction)
+    centerTabs.showChat()
+  }
+
+  const manifest = async () => {
+    const id = toast.info("building integrity manifest", "Hashing local research artifacts…")
+    const response = await request()(url("/file/manifest")).catch((error) => {
+      toast.error("manifest failed", error instanceof Error ? error.message : String(error))
+      return undefined
+    })
+    toast.dismiss(id)
+    if (!response) return
+    if (!response.ok) {
+      toast.error("manifest failed", `${response.status}`)
+      return
+    }
+    const object = URL.createObjectURL(await response.blob())
+    const anchor = document.createElement("a")
+    anchor.href = object
+    anchor.download = "openscience-artifact-manifest.json"
+    anchor.click()
+    URL.revokeObjectURL(object)
+    toast.success("integrity manifest ready", `${rows().length} artifacts`)
+  }
+
+  const publish = async (item: ArtifactInfo, format: PublicationFormat) => {
+    const id = toast.info(`exporting ${format.toUpperCase()}`, item.name)
+    const response = await request()(url("/file/publication"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: item.path, format }),
+    }).catch((error) => {
+      toast.error("publication export failed", error instanceof Error ? error.message : String(error))
+      return undefined
+    })
+    toast.dismiss(id)
+    if (!response) return
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "")
+      toast.error("publication export failed", detail || `${response.status}`)
+      return
+    }
+    const result = (await response.json()) as { path: string; format: PublicationFormat; size: number }
+    toast.success(`${format.toUpperCase()} ready`, result.path)
+    if (!["docx", "pptx"].includes(format)) {
+      props.onOpen(result.path)
+      return
+    }
+    const raw = await request()(url("/file/raw", result.path))
+    if (!raw.ok) return
+    const object = URL.createObjectURL(await raw.blob())
+    const anchor = document.createElement("a")
+    anchor.href = object
+    anchor.download = result.path.split("/").pop() || `report.${format}`
+    anchor.click()
+    URL.revokeObjectURL(object)
   }
 
   return (
@@ -178,6 +273,70 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
             )}
           </For>
         </div>
+        <button
+          type="button"
+          data-component="reproducibility-score"
+          data-status={audit.latest?.status ?? "loading"}
+          onClick={() => setAuditOpen((value) => !value)}
+          style={auditSummary(audit.latest?.status)}
+        >
+          <span style={auditScore(audit.latest?.status)}>
+            <Show when={!audit.loading} fallback="··">
+              {audit.latest?.score ?? 0}
+            </Show>
+          </span>
+          <span style={{ display: "grid", gap: "2px", flex: 1, "text-align": "left" }}>
+            <strong>Reproducibility</strong>
+            <small>
+              {audit.error
+                ? "audit unavailable"
+                : audit.latest?.status === "ready"
+                  ? "environment, notebooks, and code are ready"
+                  : audit.latest?.status === "blocked"
+                    ? "blocking gaps need attention"
+                    : "review the remaining warnings"}
+            </small>
+          </span>
+          <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+            {auditOpen() ? "hide" : "details"}
+          </span>
+        </button>
+        <Show when={auditOpen() && audit.latest}>
+          {(value) => (
+            <div data-component="reproducibility-audit" style={auditPanel()}>
+              <div style={{ display: "grid", gap: "6px" }}>
+                <For each={value().checks}>
+                  {(check) => (
+                    <div style={auditCheck()}>
+                      <span
+                        style={{
+                          color:
+                            check.status === "pass"
+                              ? "var(--color-success)"
+                              : check.status === "fail"
+                                ? "var(--color-error)"
+                                : "var(--color-warning)",
+                        }}
+                      >
+                        {check.status === "pass" ? "●" : check.status === "fail" ? "×" : "◇"}
+                      </span>
+                      <strong>{check.label}</strong>
+                      <span>{check.detail}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+              <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+                <button type="button" style={actionButton()} onClick={() => void auditApi.refetch()}>
+                  <IconRefresh size={11} /> run again
+                </button>
+                <button type="button" style={primaryButton()} onClick={() => void manifest()}>
+                  <IconDownload size={11} /> checksum manifest
+                </button>
+              </div>
+            </div>
+          )}
+        </Show>
       </div>
 
       <Show
@@ -242,6 +401,7 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
                       <ArtifactCard
                         item={item}
                         active={selected() === item.path}
+                        preview={url("/file/raw", item.path)}
                         onSelect={() => setSelected(item.path)}
                         onOpen={() => props.onOpen(item.path)}
                       />
@@ -261,6 +421,8 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
                     onDownload={() => void download(item())}
                     onCopy={() => void copy(item().path, item().path)}
                     onAttach={() => attach(item())}
+                    onAction={(instruction) => act(item(), instruction)}
+                    onPublish={(format) => void publish(item(), format)}
                   />
                 )}
               </Show>
@@ -275,6 +437,7 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
 function ArtifactCard(props: {
   item: ArtifactInfo
   active: boolean
+  preview: string
   onSelect: () => void
   onOpen: () => void
 }): JSX.Element {
@@ -301,7 +464,7 @@ function ArtifactCard(props: {
         transition: "border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease",
       }}
     >
-      <ArtifactVisual item={props.item} />
+      <ArtifactVisual item={props.item} preview={props.preview} />
       <div style={{ display: "grid", gap: "7px", padding: "10px 11px" }}>
         <div style={{ display: "flex", gap: "7px", "align-items": "center", "min-width": 0 }}>
           <span style={{ color: accent(props.item.kind), display: "inline-flex" }}>
@@ -334,8 +497,10 @@ function ArtifactCard(props: {
   )
 }
 
-function ArtifactVisual(props: { item: ArtifactInfo }): JSX.Element {
+function ArtifactVisual(props: { item: ArtifactInfo; preview: string }): JSX.Element {
   const seed = () => Array.from(props.item.path).reduce((total, value) => total + value.charCodeAt(0), 0)
+  const image = () =>
+    props.item.kind === "figure" && ["png", "jpg", "jpeg", "svg", "webp", "gif"].includes(props.item.format)
   return (
     <div
       style={{
@@ -346,20 +511,32 @@ function ArtifactVisual(props: { item: ArtifactInfo }): JSX.Element {
         "border-bottom": "1px solid var(--color-border)",
       }}
     >
-      <div style={{ position: "absolute", inset: "12px", display: "flex", "align-items": "flex-end", gap: "4px" }}>
-        <For each={Array.from({ length: 13 })}>
-          {(_, index) => (
-            <span
-              style={{
-                flex: 1,
-                height: `${18 + ((seed() + index() * 29) % 56)}%`,
-                "border-radius": "2px 2px 0 0",
-                background: `color-mix(in srgb, ${accent(props.item.kind)} ${22 + ((index() * 7) % 28)}%, transparent)`,
-              }}
-            />
-          )}
-        </For>
-      </div>
+      <Show
+        when={image()}
+        fallback={
+          <div style={{ position: "absolute", inset: "12px", display: "flex", "align-items": "flex-end", gap: "4px" }}>
+            <For each={Array.from({ length: 13 })}>
+              {(_, index) => (
+                <span
+                  style={{
+                    flex: 1,
+                    height: `${18 + ((seed() + index() * 29) % 56)}%`,
+                    "border-radius": "2px 2px 0 0",
+                    background: `color-mix(in srgb, ${accent(props.item.kind)} ${22 + ((index() * 7) % 28)}%, transparent)`,
+                  }}
+                />
+              )}
+            </For>
+          </div>
+        }
+      >
+        <img
+          src={props.preview}
+          alt=""
+          loading="lazy"
+          style={{ width: "100%", height: "100%", "object-fit": "cover", display: "block" }}
+        />
+      </Show>
       <span
         style={{
           position: "absolute",
@@ -399,6 +576,8 @@ function ArtifactDetail(props: {
   onDownload: () => void
   onCopy: () => void
   onAttach: () => void
+  onAction: (instruction: string) => void
+  onPublish: (format: PublicationFormat) => void
 }): JSX.Element {
   const [provenance] = createResource(
     () => [props.directory, props.item.path] as const,
@@ -408,6 +587,12 @@ function ArtifactDetail(props: {
       return (await response.json()) as Provenance
     },
   )
+  const publication = () => props.item.kind === "report" && ["md", "markdown"].includes(props.item.format.toLowerCase())
+  const [capabilities] = createResource(publication, async () => {
+    const response = await props.request(props.url("/file/publication/capabilities"))
+    if (!response.ok) throw new Error(`${response.status}`)
+    return (await response.json()) as PublicationCapabilities
+  })
   return (
     <aside
       data-component="artifact-detail"
@@ -479,6 +664,64 @@ function ArtifactDetail(props: {
           <Fact label="size" value={formatBytes(props.item.size)} />
           <Fact label="modified" value={new Date(props.item.modified).toLocaleString()} />
         </Section>
+        <Section title="What can I do with this file?">
+          <div style={{ display: "grid", gap: "6px" }}>
+            <For each={artifactActions(props.item)}>
+              {(action) => (
+                <button type="button" style={scienceAction()} onClick={() => props.onAction(action.prompt)}>
+                  <span style={{ color: accent(props.item.kind), display: "inline-flex" }}>
+                    <IconFlask size={12} />
+                  </span>
+                  <span style={{ display: "grid", gap: "2px", "text-align": "left" }}>
+                    <strong>{action.label}</strong>
+                    <small>{action.description}</small>
+                  </span>
+                </button>
+              )}
+            </For>
+          </div>
+        </Section>
+        <Show when={publication()}>
+          <Section title="Publication exports">
+            <div style={{ display: "grid", gap: "8px" }}>
+              <span style={{ ...muted(), "line-height": 1.5 }}>
+                Create timestamped local outputs with Pandoc. Relative figures and tables stay linked to this project.
+              </span>
+              <Show
+                when={capabilities.latest?.pandoc}
+                fallback={
+                  <span style={{ ...muted(), color: "var(--color-warning)" }}>
+                    Install Pandoc to enable HTML, PDF, Word, LaTeX, and PowerPoint exports.
+                  </span>
+                }
+              >
+                <div style={{ display: "grid", "grid-template-columns": "repeat(2, minmax(0, 1fr))", gap: "5px" }}>
+                  <For each={["html", "pdf", "docx", "latex", "pptx"] as PublicationFormat[]}>
+                    {(format) => (
+                      <button
+                        type="button"
+                        style={exportButton(capabilities.latest?.formats[format] ?? false)}
+                        disabled={!capabilities.latest?.formats[format]}
+                        title={
+                          format === "pdf" && !capabilities.latest?.formats.pdf
+                            ? "PDF needs a local TeX or Typst engine"
+                            : `export ${format}`
+                        }
+                        onClick={() => props.onPublish(format)}
+                      >
+                        <IconDownload size={10} />
+                        {format === "pptx" ? "PowerPoint" : format === "docx" ? "Word" : format.toUpperCase()}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <Show when={capabilities.latest?.pdf_engine}>
+                  <span style={muted()}>PDF engine · {capabilities.latest?.pdf_engine}</span>
+                </Show>
+              </Show>
+            </div>
+          </Section>
+        </Show>
         <Section title="Provenance">
           <Show when={!provenance.loading} fallback={<span style={muted()}>reading Git history…</span>}>
             <Show when={provenance()} fallback={<span style={muted()}>local file · no Git provenance</span>}>
@@ -753,6 +996,98 @@ function primaryButton(): JSX.CSSProperties {
     background: "var(--color-text)",
     color: "var(--color-bg)",
     border: "1px solid var(--color-text)",
+  }
+}
+
+function auditSummary(status?: Audit["status"]): JSX.CSSProperties {
+  const color =
+    status === "ready" ? "var(--color-success)" : status === "blocked" ? "var(--color-error)" : "var(--color-warning)"
+  return {
+    all: "unset",
+    cursor: "pointer",
+    display: "flex",
+    "align-items": "center",
+    gap: "9px",
+    padding: "8px 10px",
+    border: "1px solid var(--color-border)",
+    "border-radius": "7px",
+    background: `color-mix(in srgb, ${color} 4%, var(--color-bg-subtle))`,
+    color: "var(--color-text)",
+  }
+}
+
+function auditScore(status?: Audit["status"]): JSX.CSSProperties {
+  const color =
+    status === "ready" ? "var(--color-success)" : status === "blocked" ? "var(--color-error)" : "var(--color-warning)"
+  return {
+    width: "31px",
+    height: "31px",
+    display: "grid",
+    "place-items": "center",
+    "border-radius": "50%",
+    border: `1px solid color-mix(in srgb, ${color} 40%, var(--color-border))`,
+    background: `color-mix(in srgb, ${color} 9%, transparent)`,
+    color,
+    "font-family": FONT_MONO,
+    "font-size": "10px",
+    "font-weight": 700,
+  }
+}
+
+function auditPanel(): JSX.CSSProperties {
+  return {
+    display: "grid",
+    "grid-template-columns": "minmax(0, 1fr) auto",
+    gap: "12px",
+    padding: "10px",
+    border: "1px solid var(--color-border)",
+    "border-radius": "7px",
+    background: "var(--color-bg-subtle)",
+  }
+}
+
+function auditCheck(): JSX.CSSProperties {
+  return {
+    display: "grid",
+    "grid-template-columns": "12px 150px minmax(0, 1fr)",
+    gap: "7px",
+    "align-items": "baseline",
+    "font-family": FONT_SANS,
+    "font-size": "9px",
+    color: "var(--color-text-muted)",
+  }
+}
+
+function scienceAction(): JSX.CSSProperties {
+  return {
+    all: "unset",
+    cursor: "pointer",
+    display: "grid",
+    "grid-template-columns": "18px minmax(0, 1fr)",
+    gap: "6px",
+    padding: "7px",
+    "border-radius": "5px",
+    border: "1px solid var(--color-border)",
+    background: "var(--color-bg)",
+    color: "var(--color-text)",
+  }
+}
+
+function exportButton(enabled: boolean): JSX.CSSProperties {
+  return {
+    display: "inline-flex",
+    "align-items": "center",
+    "justify-content": "center",
+    gap: "5px",
+    padding: "6px 7px",
+    border: "1px solid var(--color-border)",
+    "border-radius": "5px",
+    background: "var(--color-bg)",
+    color: enabled ? "var(--color-text-muted)" : "var(--color-text-faint)",
+    opacity: enabled ? 1 : 0.45,
+    "font-family": FONT_SANS,
+    "font-size": "9px",
+    cursor: enabled ? "pointer" : "not-allowed",
   }
 }
 

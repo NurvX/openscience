@@ -17,6 +17,8 @@ import { FileWatcher } from "./watcher"
 import { createSearchCache } from "./search-cache"
 import { ScienceFile } from "./science"
 import { ArtifactFile } from "./artifacts"
+import { StarterFile } from "./starters"
+import { PublicationFile } from "./publication"
 
 export namespace File {
   const log = Log.create({ service: "file" })
@@ -375,6 +377,26 @@ export namespace File {
       throw new Error(`Access denied: path escapes project directory`)
     }
     return ArtifactFile.provenance(Instance.directory, file)
+  }
+
+  export async function reproducibility(): Promise<ArtifactFile.Audit> {
+    return ArtifactFile.audit(Instance.directory)
+  }
+
+  export async function manifest(): Promise<ArtifactFile.Manifest> {
+    return ArtifactFile.manifest(Instance.directory)
+  }
+
+  export async function starter(template: StarterFile.Template): Promise<StarterFile.Result> {
+    return StarterFile.create(Instance.directory, template)
+  }
+
+  export async function publicationCapabilities(): Promise<PublicationFile.Capabilities> {
+    return PublicationFile.capabilities()
+  }
+
+  export async function publication(input: PublicationFile.Input): Promise<PublicationFile.Result> {
+    return PublicationFile.render(Instance.directory, input)
   }
 
   export async function write(file: string, content: string): Promise<Content> {

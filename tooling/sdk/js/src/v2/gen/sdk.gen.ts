@@ -35,11 +35,16 @@ import type {
   FileArtifactsResponses,
   FileInspectResponses,
   FileListResponses,
+  FileManifestResponses,
   FilePartInput,
   FilePartSource,
   FileProvenanceResponses,
+  FilePublicationCapabilitiesResponses,
+  FilePublicationResponses,
   FileRawResponses,
   FileReadResponses,
+  FileReproducibilityResponses,
+  FileStarterResponses,
   FileStatusResponses,
   FileWriteResponses,
   FindFilesResponses,
@@ -3600,6 +3605,135 @@ export class File extends HeyApiClient {
       url: "/file/provenance",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Audit project reproducibility
+   *
+   * Check Git state, locked dependencies, environment specifications, notebook structure, and research artifacts.
+   */
+  public reproducibility<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FileReproducibilityResponses, unknown, ThrowOnError>({
+      url: "/file/reproducibility",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create an artifact integrity manifest
+   *
+   * Hash every discovered research artifact and return a portable, deterministic manifest.
+   */
+  public manifest<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FileManifestResponses, unknown, ThrowOnError>({
+      url: "/file/manifest",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create a local scientific starter project
+   *
+   * Materialize a valid notebook, sample data, and README without external downloads.
+   */
+  public starter<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      template?: "single-cell" | "dose-response" | "protein-structure"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "template" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileStarterResponses, unknown, ThrowOnError>({
+      url: "/file/starters",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Inspect local publication export support
+   *
+   * Detect Pandoc and a PDF engine before offering report export formats.
+   */
+  public publicationCapabilities<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FilePublicationCapabilitiesResponses, unknown, ThrowOnError>({
+      url: "/file/publication/capabilities",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Export a Markdown research report
+   *
+   * Create a timestamped HTML, PDF, DOCX, LaTeX, or PowerPoint publication artifact locally.
+   */
+  public publication<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      path?: string
+      format?: "html" | "pdf" | "docx" | "latex" | "pptx"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "path" },
+            { in: "body", key: "format" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FilePublicationResponses, unknown, ThrowOnError>({
+      url: "/file/publication",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 

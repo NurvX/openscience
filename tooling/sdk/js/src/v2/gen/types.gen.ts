@@ -5825,6 +5825,171 @@ export type FileProvenanceResponses = {
 
 export type FileProvenanceResponse = FileProvenanceResponses[keyof FileProvenanceResponses]
 
+export type FileReproducibilityData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/reproducibility"
+}
+
+export type FileReproducibilityResponses = {
+  /**
+   * Project reproducibility audit
+   */
+  200: {
+    generated_at: string
+    score: number
+    status: "ready" | "warnings" | "blocked"
+    git?: {
+      branch?: string
+      commit?: string
+      dirty: boolean
+    }
+    lockfiles: Array<string>
+    environments: Array<string>
+    notebooks: {
+      total: number
+      valid: number
+      invalid: Array<string>
+    }
+    artifacts: {
+      total: number
+      nonempty: number
+      bytes: number
+    }
+    checks: Array<{
+      id: string
+      label: string
+      status: "pass" | "warn" | "fail"
+      detail: string
+      weight: number
+    }>
+  }
+}
+
+export type FileReproducibilityResponse = FileReproducibilityResponses[keyof FileReproducibilityResponses]
+
+export type FileManifestData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/manifest"
+}
+
+export type FileManifestResponses = {
+  /**
+   * Artifact checksum manifest
+   */
+  200: {
+    format: "openscience.artifact-manifest.v1"
+    generated_at: string
+    digest: string
+    artifacts: Array<{
+      name: string
+      path: string
+      kind:
+        | "notebook"
+        | "dataset"
+        | "figure"
+        | "report"
+        | "structure"
+        | "sequence"
+        | "genomics"
+        | "spectrum"
+        | "model"
+        | "archive"
+      format: string
+      size: number
+      modified: number
+      sha256: string
+    }>
+  }
+}
+
+export type FileManifestResponse = FileManifestResponses[keyof FileManifestResponses]
+
+export type FileStarterData = {
+  body?: {
+    template: "single-cell" | "dose-response" | "protein-structure"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/starters"
+}
+
+export type FileStarterResponses = {
+  /**
+   * Created starter files
+   */
+  200: {
+    template: "single-cell" | "dose-response" | "protein-structure"
+    directory: string
+    files: Array<string>
+    notebook: string
+    readme: string
+  }
+}
+
+export type FileStarterResponse = FileStarterResponses[keyof FileStarterResponses]
+
+export type FilePublicationCapabilitiesData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/publication/capabilities"
+}
+
+export type FilePublicationCapabilitiesResponses = {
+  /**
+   * Available local publication formats
+   */
+  200: {
+    pandoc: boolean
+    pdf_engine?: string
+    formats: {
+      [key: string]: boolean
+    }
+  }
+}
+
+export type FilePublicationCapabilitiesResponse =
+  FilePublicationCapabilitiesResponses[keyof FilePublicationCapabilitiesResponses]
+
+export type FilePublicationData = {
+  body?: {
+    path: string
+    format: "html" | "pdf" | "docx" | "latex" | "pptx"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/publication"
+}
+
+export type FilePublicationResponses = {
+  /**
+   * Created publication artifact
+   */
+  200: {
+    path: string
+    format: "html" | "pdf" | "docx" | "latex" | "pptx"
+    size: number
+    created_at: string
+    engine: string
+  }
+}
+
+export type FilePublicationResponse = FilePublicationResponses[keyof FilePublicationResponses]
+
 export type FileStatusData = {
   body?: never
   path?: never

@@ -3,11 +3,13 @@ import { DateTime } from "luxon"
 import { useSync } from "@/context/sync"
 import { useModels } from "@/context/models"
 import { useSDK } from "@/context/sdk"
+import { usePlatform } from "@/context/platform"
 import { useDialog } from "@synsci/ui/context/dialog"
 import { getDirectory, getFilename } from "@synsci/util/path"
 import { DialogSettings } from "@/components/dialog-settings"
 import { centerTabs } from "@/atlas/store/centerTabs"
 import { uiStore } from "@/atlas/store/ui"
+import { toast } from "@/atlas/Toast"
 import {
   IconActivity,
   IconArrowRight,
@@ -21,7 +23,13 @@ import {
   IconRefresh,
   IconSearch,
 } from "@/atlas/shared/Icon"
-import { researchWorkflows, workflowPrompt, type ResearchWorkflow } from "@/components/session/research-launchpad"
+import {
+  researchStarters,
+  researchWorkflows,
+  workflowPrompt,
+  type ResearchStarter,
+  type ResearchWorkflow,
+} from "@/components/session/research-launchpad"
 
 const MAIN_WORKTREE = "main"
 const CREATE_WORKTREE = "create"
@@ -48,6 +56,7 @@ export function NewSessionView(props: NewSessionViewProps) {
   const sync = useSync()
   const models = useModels()
   const sdk = useSDK()
+  const platform = usePlatform()
   const dialog = useDialog()
   const noModel = createMemo(() => models.list().length === 0)
   const sandboxes = createMemo(() => sync.project?.sandboxes ?? [])
@@ -65,6 +74,7 @@ export function NewSessionView(props: NewSessionViewProps) {
         .catch(() => []),
   )
   const [workflowGroup, setWorkflowGroup] = createSignal<ResearchWorkflow["group"] | "all">("all")
+  const [creating, setCreating] = createSignal<ResearchStarter["id"]>()
   const visibleWorkflows = createMemo(() =>
     workflowGroup() === "all"
       ? researchWorkflows
@@ -88,6 +98,31 @@ export function NewSessionView(props: NewSessionViewProps) {
   const start = (workflow: ResearchWorkflow) => {
     uiStore.setPrefill(workflowPrompt(workflow, artifacts.latest?.length ?? 0))
     centerTabs.showChat()
+  }
+
+  const createStarter = async (starter: ResearchStarter) => {
+    setCreating(starter.id)
+    const request = platform.fetch ?? fetch
+    const endpoint = new URL(`${sdk.url.replace(/\/+$/, "")}/file/starters`)
+    endpoint.searchParams.set("directory", sdk.directory)
+    const response = await request(endpoint.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template: starter.id }),
+    }).catch((error) => {
+      toast.error("starter could not be created", error instanceof Error ? error.message : String(error))
+      return undefined
+    })
+    setCreating(undefined)
+    if (!response) return
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "")
+      toast.error("starter could not be created", detail || `${response.status}`)
+      return
+    }
+    const result = (await response.json()) as { notebook: string; files: string[] }
+    toast.success("starter project ready", `${result.files.length} local files created`)
+    centerTabs.openFile(sdk.directory, result.notebook)
   }
 
   return (
@@ -166,6 +201,47 @@ export function NewSessionView(props: NewSessionViewProps) {
             </button>
           </section>
         </Show>
+
+        <section class="research-launchpad__starters" aria-labelledby="research-starters-title">
+          <div class="research-launchpad__section-heading">
+            <div>
+              <h2 id="research-starters-title">Start with working science</h2>
+              <p>
+                Create a valid notebook, sample data, and a short local README in one click. No download or gateway.
+              </p>
+            </div>
+            <span class="research-launchpad__local-badge">local · reproducible</span>
+          </div>
+          <div class="research-launchpad__starter-grid">
+            <For each={researchStarters}>
+              {(starter) => (
+                <button
+                  type="button"
+                  class="research-launchpad__starter"
+                  data-starter={starter.id}
+                  disabled={Boolean(creating())}
+                  onClick={() => void createStarter(starter)}
+                  style={{ "--starter-accent": starter.accent }}
+                >
+                  <span class="research-launchpad__starter-visual">
+                    <For each={Array.from({ length: 9 })}>
+                      {(_, index) => <i style={{ height: `${22 + ((index() * 31 + starter.title.length) % 65)}%` }} />}
+                    </For>
+                  </span>
+                  <span class="research-launchpad__starter-copy">
+                    <strong>{starter.title}</strong>
+                    <span>{starter.description}</span>
+                    <small>{starter.files.join(" · ")}</small>
+                  </span>
+                  <span class="research-launchpad__starter-action">
+                    {creating() === starter.id ? "creating…" : "create starter"}
+                    <IconArrowRight size={12} strokeWidth={1.7} />
+                  </span>
+                </button>
+              )}
+            </For>
+          </div>
+        </section>
 
         <section class="research-launchpad__workflows" aria-labelledby="research-workflows-title">
           <div class="research-launchpad__section-heading">

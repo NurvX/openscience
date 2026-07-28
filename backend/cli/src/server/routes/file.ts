@@ -8,6 +8,8 @@ import { Instance } from "../../project/instance"
 import { lazy } from "../../util/lazy"
 import { ScienceFile } from "../../file/science"
 import { ArtifactFile } from "../../file/artifacts"
+import { StarterFile } from "../../file/starters"
+import { PublicationFile } from "../../file/publication"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -305,6 +307,87 @@ export const FileRoutes = lazy(() =>
         }),
       ),
       async (c) => c.json(await File.provenance(c.req.valid("query").path)),
+    )
+    .get(
+      "/file/reproducibility",
+      describeRoute({
+        summary: "Audit project reproducibility",
+        description:
+          "Check Git state, locked dependencies, environment specifications, notebook structure, and research artifacts.",
+        operationId: "file.reproducibility",
+        responses: {
+          200: {
+            description: "Project reproducibility audit",
+            content: { "application/json": { schema: resolver(ArtifactFile.Audit) } },
+          },
+        },
+      }),
+      async (c) => c.json(await File.reproducibility()),
+    )
+    .get(
+      "/file/manifest",
+      describeRoute({
+        summary: "Create an artifact integrity manifest",
+        description: "Hash every discovered research artifact and return a portable, deterministic manifest.",
+        operationId: "file.manifest",
+        responses: {
+          200: {
+            description: "Artifact checksum manifest",
+            content: { "application/json": { schema: resolver(ArtifactFile.Manifest) } },
+          },
+        },
+      }),
+      async (c) => {
+        c.header("Content-Disposition", 'attachment; filename="openscience-artifact-manifest.json"')
+        return c.json(await File.manifest())
+      },
+    )
+    .post(
+      "/file/starters",
+      describeRoute({
+        summary: "Create a local scientific starter project",
+        description: "Materialize a valid notebook, sample data, and README without external downloads.",
+        operationId: "file.starter",
+        responses: {
+          200: {
+            description: "Created starter files",
+            content: { "application/json": { schema: resolver(StarterFile.Result) } },
+          },
+        },
+      }),
+      validator("json", z.object({ template: StarterFile.Template })),
+      async (c) => c.json(await File.starter(c.req.valid("json").template)),
+    )
+    .get(
+      "/file/publication/capabilities",
+      describeRoute({
+        summary: "Inspect local publication export support",
+        description: "Detect Pandoc and a PDF engine before offering report export formats.",
+        operationId: "file.publicationCapabilities",
+        responses: {
+          200: {
+            description: "Available local publication formats",
+            content: { "application/json": { schema: resolver(PublicationFile.Capabilities) } },
+          },
+        },
+      }),
+      async (c) => c.json(await File.publicationCapabilities()),
+    )
+    .post(
+      "/file/publication",
+      describeRoute({
+        summary: "Export a Markdown research report",
+        description: "Create a timestamped HTML, PDF, DOCX, LaTeX, or PowerPoint publication artifact locally.",
+        operationId: "file.publication",
+        responses: {
+          200: {
+            description: "Created publication artifact",
+            content: { "application/json": { schema: resolver(PublicationFile.Result) } },
+          },
+        },
+      }),
+      validator("json", PublicationFile.Input),
+      async (c) => c.json(await File.publication(c.req.valid("json"))),
     )
     .get(
       "/file/status",

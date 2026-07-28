@@ -385,7 +385,7 @@ function TerminalTab(): JSX.Element {
 }
 
 function CollapsedRail(props: {
-  tabs: { k: RightPaneTab; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[]
+  tabs: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[]
   onOpen: (t?: RightPaneTab) => void
 }): JSX.Element {
   return (
@@ -402,13 +402,18 @@ function CollapsedRail(props: {
         background: "var(--color-bg-subtle)",
       }}
     >
-      <button onClick={() => props.onOpen()} title="show panel" style={railBtn()}>
+      <button onClick={() => props.onOpen()} title="show panel" aria-label="show panel" style={railBtn()}>
         <IconChevronLeft size={14} strokeWidth={1.5} />
       </button>
       <span style={{ width: "18px", height: "1px", background: "var(--color-border)", margin: "4px 0" }} />
       <For each={props.tabs}>
         {(t) => (
-          <button onClick={() => props.onOpen(t.k)} title={t.k} style={railBtn()}>
+          <button
+            onClick={() => props.onOpen(t.k)}
+            title={t.label ?? t.k}
+            aria-label={t.label ?? t.k}
+            style={railBtn()}
+          >
             <t.Icon size={15} strokeWidth={1.5} />
           </button>
         )}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { filterArtifacts, groupArtifacts, normalizeArtifacts, sortArtifacts } from "./model"
+import { artifactActions, filterArtifacts, groupArtifacts, normalizeArtifacts, sortArtifacts } from "./model"
 
 const rows = normalizeArtifacts([
   { name: "analysis.ipynb", path: "analysis.ipynb", kind: "notebook", format: "ipynb", size: 20, modified: 10 },
@@ -31,5 +31,20 @@ describe("artifact gallery model", () => {
     expect(sortArtifacts(rows, "size").map((row) => row.name)).toEqual(["figure.png", "analysis.ipynb", "counts.csv"])
     expect(sortArtifacts(rows, "name").map((row) => row.name)).toEqual(["analysis.ipynb", "counts.csv", "figure.png"])
     expect(rows[0]?.name).toBe("analysis.ipynb")
+  })
+
+  test("offers scientific actions tailored to each artifact kind", () => {
+    expect(artifactActions(rows[2]!).map((action) => action.id)).toEqual(["inspect-quality", "visualize", "analyze"])
+    expect(
+      artifactActions({
+        name: "protein.pdb",
+        path: "protein.pdb",
+        kind: "structure",
+        format: "pdb",
+        size: 100,
+        modified: 1,
+      }).map((action) => action.id),
+    ).toEqual(["inspect-structure", "prepare-docking", "design"])
+    expect(artifactActions(rows[2]!)[0]?.prompt).toContain("results/counts.csv")
   })
 })

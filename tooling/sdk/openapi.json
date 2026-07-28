@@ -9066,6 +9066,535 @@
         ]
       }
     },
+    "/file/reproducibility": {
+      "get": {
+        "operationId": "file.reproducibility",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Audit project reproducibility",
+        "description": "Check Git state, locked dependencies, environment specifications, notebook structure, and research artifacts.",
+        "responses": {
+          "200": {
+            "description": "Project reproducibility audit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generated_at": {
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "warnings",
+                        "blocked"
+                      ]
+                    },
+                    "git": {
+                      "type": "object",
+                      "properties": {
+                        "branch": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        },
+                        "dirty": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "dirty"
+                      ]
+                    },
+                    "lockfiles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "environments": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "notebooks": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "valid": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "invalid": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "valid",
+                        "invalid"
+                      ]
+                    },
+                    "artifacts": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "nonempty": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "nonempty",
+                        "bytes"
+                      ]
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "pass",
+                              "warn",
+                              "fail"
+                            ]
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "weight": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "status",
+                          "detail",
+                          "weight"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "generated_at",
+                    "score",
+                    "status",
+                    "lockfiles",
+                    "environments",
+                    "notebooks",
+                    "artifacts",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.reproducibility({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/manifest": {
+      "get": {
+        "operationId": "file.manifest",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Create an artifact integrity manifest",
+        "description": "Hash every discovered research artifact and return a portable, deterministic manifest.",
+        "responses": {
+          "200": {
+            "description": "Artifact checksum manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "const": "openscience.artifact-manifest.v1"
+                    },
+                    "generated_at": {
+                      "type": "string"
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "artifacts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "notebook",
+                              "dataset",
+                              "figure",
+                              "report",
+                              "structure",
+                              "sequence",
+                              "genomics",
+                              "spectrum",
+                              "model",
+                              "archive"
+                            ]
+                          },
+                          "format": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "number"
+                          },
+                          "modified": {
+                            "type": "number"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "path",
+                          "kind",
+                          "format",
+                          "size",
+                          "modified",
+                          "sha256"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "generated_at",
+                    "digest",
+                    "artifacts"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.manifest({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/starters": {
+      "post": {
+        "operationId": "file.starter",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Create a local scientific starter project",
+        "description": "Materialize a valid notebook, sample data, and README without external downloads.",
+        "responses": {
+          "200": {
+            "description": "Created starter files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "template": {
+                      "type": "string",
+                      "enum": [
+                        "single-cell",
+                        "dose-response",
+                        "protein-structure"
+                      ]
+                    },
+                    "directory": {
+                      "type": "string"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "notebook": {
+                      "type": "string"
+                    },
+                    "readme": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "template",
+                    "directory",
+                    "files",
+                    "notebook",
+                    "readme"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "template": {
+                    "type": "string",
+                    "enum": [
+                      "single-cell",
+                      "dose-response",
+                      "protein-structure"
+                    ]
+                  }
+                },
+                "required": [
+                  "template"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.starter({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/publication/capabilities": {
+      "get": {
+        "operationId": "file.publicationCapabilities",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Inspect local publication export support",
+        "description": "Detect Pandoc and a PDF engine before offering report export formats.",
+        "responses": {
+          "200": {
+            "description": "Available local publication formats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pandoc": {
+                      "type": "boolean"
+                    },
+                    "pdf_engine": {
+                      "type": "string"
+                    },
+                    "formats": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "enum": [
+                          "html",
+                          "pdf",
+                          "docx",
+                          "latex",
+                          "pptx"
+                        ]
+                      },
+                      "additionalProperties": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "required": [
+                    "pandoc",
+                    "formats"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.publicationCapabilities({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/publication": {
+      "post": {
+        "operationId": "file.publication",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Export a Markdown research report",
+        "description": "Create a timestamped HTML, PDF, DOCX, LaTeX, or PowerPoint publication artifact locally.",
+        "responses": {
+          "200": {
+            "description": "Created publication artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "html",
+                        "pdf",
+                        "docx",
+                        "latex",
+                        "pptx"
+                      ]
+                    },
+                    "size": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "engine": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "format",
+                    "size",
+                    "created_at",
+                    "engine"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "html",
+                      "pdf",
+                      "docx",
+                      "latex",
+                      "pptx"
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "format"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.publication({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/file/status": {
       "get": {
         "operationId": "file.status",

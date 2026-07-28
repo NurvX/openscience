@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { researchWorkflows, workflowGroups, workflowPrompt } from "./research-launchpad"
+import { researchStarters, researchWorkflows, workflowGroups, workflowPrompt } from "./research-launchpad"
 
 describe("research launchpad", () => {
   test("ships launch-ready workflows across the core scientific loop", () => {
@@ -57,5 +57,10 @@ describe("research launchpad", () => {
     expect(workflowPrompt(workflow, 0)).toBe(workflow.prompt)
     expect(workflowPrompt(workflow, 12)).toContain("12 research artifacts")
     expect(workflowPrompt(workflow, 12)).toContain(workflow.prompt)
+  })
+
+  test("ships local-first starter projects with valid backend template ids", () => {
+    expect(researchStarters.map((starter) => starter.id)).toEqual(["single-cell", "dose-response", "protein-structure"])
+    expect(researchStarters.every((starter) => starter.files.length >= 2)).toBe(true)
   })
 })
