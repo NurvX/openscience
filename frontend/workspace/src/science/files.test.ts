@@ -91,7 +91,9 @@ describe("scientific file viewer integration", () => {
 
     expect(preview).toContain('import { detectScientificFile } from "@/science/files"')
     expect(preview).toContain('import { ScienceArtifact } from "@/science/ScienceArtifact"')
-    expect(preview).toContain('type Kind = "markdown" | "pdf" | "image" | "science" | "code" | "binary"')
+    expect(preview).toContain(
+      'type Kind = "markdown" | "notebook" | "pdf" | "image" | "science" | "code" | "binary"',
+    )
     expect(preview).toContain("<ScienceArtifact")
   })
 })
