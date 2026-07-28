@@ -19,6 +19,8 @@ import { FONT_MONO, FONT_SANS, FONT_CODE } from "@/styles/tokens"
 import { PdfViewer } from "@/science/renderers/documents/PdfViewer"
 import { ScienceArtifact } from "@/science/ScienceArtifact"
 import { detectScientificFile } from "@/science/files"
+import { ScientificDataView } from "@/science/formats/ScientificDataView"
+import { detectBiologicalFormat } from "@/science/formats/biological"
 import { NotebookView } from "@/notebook/NotebookView"
 import { DataTableView } from "@/data/DataTableView"
 import type { TableFormat } from "@/data/table"
@@ -104,7 +106,7 @@ const LANG: Record<string, string> = {
   log: "text",
 }
 
-type Kind = "markdown" | "notebook" | "table" | "pdf" | "image" | "science" | "code" | "binary"
+type Kind = "markdown" | "notebook" | "table" | "scientific-data" | "pdf" | "image" | "science" | "code" | "binary"
 
 type FileData = { content?: string; encoding?: string; mimeType?: string }
 
@@ -157,6 +159,7 @@ export function FileView(props: {
   const text = () => (!data() || isBinary() ? "" : (data()!.content ?? ""))
   const dirty = () => draft() !== savedText()
   const scientific = createMemo(() => (isBinary() ? undefined : detectScientificFile(e(), draft())))
+  const biological = createMemo(() => (isBinary() ? undefined : detectBiologicalFormat(e())))
   const tabular = createMemo<TableFormat | undefined>(() => {
     if (isBinary()) return
     if (e() === "csv" || e() === "tsv" || e() === "jsonl") return e() as TableFormat
@@ -173,6 +176,7 @@ export function FileView(props: {
     if (x === "md" || x === "markdown" || x === "mdx") return "markdown"
     if (x === "ipynb") return "notebook"
     if (tabular()) return "table"
+    if (biological()) return "scientific-data"
     if (x === "pdf") return "pdf"
     if (scientific()) return "science"
     // .tex / .latex / .sty / .cls are source files → highlighted "code" view
@@ -185,6 +189,7 @@ export function FileView(props: {
     const k = kind()
     if (k === "code") return LANG[e()] ?? e() ?? "text"
     if (k === "science") return scientific()?.format ?? e()
+    if (k === "scientific-data") return biological() ?? e()
     if (k === "table") return tabular() ?? e()
     return k
   }
@@ -231,7 +236,12 @@ export function FileView(props: {
   }
 
   const toggleable = () =>
-    kind() === "markdown" || kind() === "notebook" || kind() === "table" || kind() === "science" || kind() === "code"
+    kind() === "markdown" ||
+    kind() === "notebook" ||
+    kind() === "table" ||
+    kind() === "scientific-data" ||
+    kind() === "science" ||
+    kind() === "code"
 
   return (
     <div
@@ -443,6 +453,13 @@ export function FileView(props: {
                 </Show>
               </Match>
 
+              {/* genomic, alignment, and mass-spectrometry data */}
+              <Match when={kind() === "scientific-data" && !showSource()}>
+                <Show when={biological()}>
+                  {(format) => <ScientificDataView text={draft()} format={format()} name={name()} />}
+                </Show>
+              </Match>
+
               {/* pdf */}
               <Match when={kind() === "pdf"}>
                 <div style={{ padding: "14px" }}>
@@ -513,7 +530,11 @@ export function FileView(props: {
               {/* code / text — editable source, or highlighted read view */}
               <Match
                 when={
-                  (kind() === "code" || kind() === "science" || kind() === "notebook" || kind() === "table") &&
+                  (kind() === "code" ||
+                    kind() === "science" ||
+                    kind() === "scientific-data" ||
+                    kind() === "notebook" ||
+                    kind() === "table") &&
                   showSource()
                 }
               >
