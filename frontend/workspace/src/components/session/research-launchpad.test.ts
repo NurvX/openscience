@@ -5,12 +5,27 @@ describe("research launchpad", () => {
   test("ships launch-ready workflows across the core scientific loop", () => {
     expect(researchWorkflows.map((workflow) => workflow.id)).toEqual([
       "analyze-data",
-      "run-notebook",
+      "single-cell",
+      "differential-expression",
       "inspect-structure",
       "sequence-qc",
+      "variant-analysis",
+      "assay-analysis",
+      "image-analysis",
+      "proteomics",
+      "run-notebook",
+      "protein-design",
+      "molecular-docking",
+      "molecular-dynamics",
+      "train-model",
+      "run-pipeline",
       "survey-literature",
+      "clinical-trials",
+      "target-prioritization",
       "reproduce-result",
       "compare-runs",
+      "verify-citations",
+      "build-figure",
       "write-report",
     ])
     expect(new Set(researchWorkflows.map((workflow) => workflow.group))).toEqual(
@@ -24,7 +39,17 @@ describe("research launchpad", () => {
       workflowGroups()
         .find((group) => group.id === "analyze")
         ?.workflows.map((workflow) => workflow.id),
-    ).toEqual(["analyze-data", "inspect-structure", "sequence-qc"])
+    ).toEqual([
+      "analyze-data",
+      "single-cell",
+      "differential-expression",
+      "inspect-structure",
+      "sequence-qc",
+      "variant-analysis",
+      "assay-analysis",
+      "image-analysis",
+      "proteomics",
+    ])
   })
 
   test("adds project context to workflow prompts when artifacts are available", () => {

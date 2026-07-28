@@ -1434,6 +1434,56 @@ button.research-launchpad__status-item:hover {
   color: var(--color-text);
 }
 
+.research-launchpad__workflow-filters {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.research-launchpad__workflow-filters button {
+  all: unset;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface-solid) 68%, transparent);
+  color: var(--color-text-muted);
+  font-family: var(--font-family-sans);
+  font-size: 10px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.research-launchpad__workflow-filters button:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.research-launchpad__workflow-filters button[data-active="true"] {
+  border-color: color-mix(in srgb, var(--color-accent) 46%, var(--color-border));
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+}
+
+.research-launchpad__workflow-filters button span {
+  min-width: 16px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  font-family: var(--font-family-mono);
+  font-size: 8px;
+  text-align: center;
+}
+
 .research-launchpad__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

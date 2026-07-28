@@ -49,6 +49,7 @@ export namespace Review {
     /** Who recorded it (agent name). */
     reviewer?: string
     sessionID?: string
+    directory?: string
   }): Promise<ReviewResult> {
     const relation = input.verdict ?? "refutes"
     const node = await Provenance.record({
@@ -64,6 +65,7 @@ export namespace Review {
         verdict: relation,
         reviewer: input.reviewer ?? "reviewer",
         sessionID: input.sessionID,
+        directory: input.directory,
       },
     })
     await Provenance.link({ from: node.id, to: input.target, relation })

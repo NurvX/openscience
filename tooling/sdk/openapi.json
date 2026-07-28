@@ -2804,6 +2804,227 @@
                       },
                       "error": {
                         "type": "string"
+                      },
+                      "resources": {
+                        "type": "object",
+                        "properties": {
+                          "cpus": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1024
+                          },
+                          "gpus": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 128
+                          },
+                          "memory_gb": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "maximum": 100000
+                          },
+                          "time_minutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 43200
+                          },
+                          "partition": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          }
+                        }
+                      },
+                      "modules": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "container": {
+                        "type": "string"
+                      },
+                      "artifact_patterns": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "artifacts": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "path": {
+                              "type": "string"
+                            },
+                            "size": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            },
+                            "modified_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "path",
+                            "size",
+                            "sha256",
+                            "modified_at"
+                          ]
+                        }
+                      },
+                      "checkpoint_path": {
+                        "type": "string"
+                      },
+                      "checkpoint": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          },
+                          "modified_at": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "size",
+                          "sha256",
+                          "modified_at"
+                        ]
+                      },
+                      "reproducibility": {
+                        "type": "object",
+                        "properties": {
+                          "captured_at": {
+                            "type": "string"
+                          },
+                          "command": {
+                            "type": "string"
+                          },
+                          "cwd": {
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string"
+                          },
+                          "arch": {
+                            "type": "string"
+                          },
+                          "bun": {
+                            "type": "string"
+                          },
+                          "node": {
+                            "type": "string"
+                          },
+                          "python": {
+                            "type": "string"
+                          },
+                          "git": {
+                            "type": "object",
+                            "properties": {
+                              "branch": {
+                                "type": "string"
+                              },
+                              "commit": {
+                                "type": "string"
+                              },
+                              "dirty": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "dirty"
+                            ]
+                          },
+                          "lockfiles": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string"
+                                },
+                                "size": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "sha256": {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$"
+                                },
+                                "modified_at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "path",
+                                "size",
+                                "sha256",
+                                "modified_at"
+                              ]
+                            }
+                          },
+                          "resources": {
+                            "type": "object",
+                            "properties": {
+                              "cpus": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 1024
+                              },
+                              "gpus": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 128
+                              },
+                              "memory_gb": {
+                                "type": "number",
+                                "minimum": 0.1,
+                                "maximum": 100000
+                              },
+                              "time_minutes": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 43200
+                              },
+                              "partition": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              }
+                            }
+                          }
+                        },
+                        "required": [
+                          "captured_at",
+                          "command",
+                          "cwd",
+                          "platform",
+                          "arch",
+                          "bun",
+                          "node",
+                          "lockfiles"
+                        ]
+                      },
+                      "capture_error": {
+                        "type": "string"
                       }
                     },
                     "required": [
@@ -2934,6 +3155,227 @@
                     },
                     "error": {
                       "type": "string"
+                    },
+                    "resources": {
+                      "type": "object",
+                      "properties": {
+                        "cpus": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1024
+                        },
+                        "gpus": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 128
+                        },
+                        "memory_gb": {
+                          "type": "number",
+                          "minimum": 0.1,
+                          "maximum": 100000
+                        },
+                        "time_minutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 43200
+                        },
+                        "partition": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        }
+                      }
+                    },
+                    "modules": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "container": {
+                      "type": "string"
+                    },
+                    "artifact_patterns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "artifacts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          },
+                          "modified_at": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "size",
+                          "sha256",
+                          "modified_at"
+                        ]
+                      }
+                    },
+                    "checkpoint_path": {
+                      "type": "string"
+                    },
+                    "checkpoint": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "size": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "modified_at": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "size",
+                        "sha256",
+                        "modified_at"
+                      ]
+                    },
+                    "reproducibility": {
+                      "type": "object",
+                      "properties": {
+                        "captured_at": {
+                          "type": "string"
+                        },
+                        "command": {
+                          "type": "string"
+                        },
+                        "cwd": {
+                          "type": "string"
+                        },
+                        "platform": {
+                          "type": "string"
+                        },
+                        "arch": {
+                          "type": "string"
+                        },
+                        "bun": {
+                          "type": "string"
+                        },
+                        "node": {
+                          "type": "string"
+                        },
+                        "python": {
+                          "type": "string"
+                        },
+                        "git": {
+                          "type": "object",
+                          "properties": {
+                            "branch": {
+                              "type": "string"
+                            },
+                            "commit": {
+                              "type": "string"
+                            },
+                            "dirty": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "dirty"
+                          ]
+                        },
+                        "lockfiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "modified_at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "size",
+                              "sha256",
+                              "modified_at"
+                            ]
+                          }
+                        },
+                        "resources": {
+                          "type": "object",
+                          "properties": {
+                            "cpus": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 1024
+                            },
+                            "gpus": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 128
+                            },
+                            "memory_gb": {
+                              "type": "number",
+                              "minimum": 0.1,
+                              "maximum": 100000
+                            },
+                            "time_minutes": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 43200
+                            },
+                            "partition": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "captured_at",
+                        "command",
+                        "cwd",
+                        "platform",
+                        "arch",
+                        "bun",
+                        "node",
+                        "lockfiles"
+                      ]
+                    },
+                    "capture_error": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -3011,6 +3453,64 @@
                         ]
                       }
                     ]
+                  },
+                  "resources": {
+                    "type": "object",
+                    "properties": {
+                      "cpus": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1024
+                      },
+                      "gpus": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 128
+                      },
+                      "memory_gb": {
+                        "type": "number",
+                        "minimum": 0.1,
+                        "maximum": 100000
+                      },
+                      "time_minutes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 43200
+                      },
+                      "partition": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      }
+                    }
+                  },
+                  "modules": {
+                    "maxItems": 64,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 240
+                    }
+                  },
+                  "container": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "artifacts": {
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2000
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
                   }
                 },
                 "required": [
@@ -3221,6 +3721,227 @@
                       "maximum": 9007199254740991
                     },
                     "error": {
+                      "type": "string"
+                    },
+                    "resources": {
+                      "type": "object",
+                      "properties": {
+                        "cpus": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1024
+                        },
+                        "gpus": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 128
+                        },
+                        "memory_gb": {
+                          "type": "number",
+                          "minimum": 0.1,
+                          "maximum": 100000
+                        },
+                        "time_minutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 43200
+                        },
+                        "partition": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        }
+                      }
+                    },
+                    "modules": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "container": {
+                      "type": "string"
+                    },
+                    "artifact_patterns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "artifacts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          },
+                          "modified_at": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "size",
+                          "sha256",
+                          "modified_at"
+                        ]
+                      }
+                    },
+                    "checkpoint_path": {
+                      "type": "string"
+                    },
+                    "checkpoint": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "size": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "modified_at": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "size",
+                        "sha256",
+                        "modified_at"
+                      ]
+                    },
+                    "reproducibility": {
+                      "type": "object",
+                      "properties": {
+                        "captured_at": {
+                          "type": "string"
+                        },
+                        "command": {
+                          "type": "string"
+                        },
+                        "cwd": {
+                          "type": "string"
+                        },
+                        "platform": {
+                          "type": "string"
+                        },
+                        "arch": {
+                          "type": "string"
+                        },
+                        "bun": {
+                          "type": "string"
+                        },
+                        "node": {
+                          "type": "string"
+                        },
+                        "python": {
+                          "type": "string"
+                        },
+                        "git": {
+                          "type": "object",
+                          "properties": {
+                            "branch": {
+                              "type": "string"
+                            },
+                            "commit": {
+                              "type": "string"
+                            },
+                            "dirty": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "dirty"
+                          ]
+                        },
+                        "lockfiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "modified_at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "size",
+                              "sha256",
+                              "modified_at"
+                            ]
+                          }
+                        },
+                        "resources": {
+                          "type": "object",
+                          "properties": {
+                            "cpus": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 1024
+                            },
+                            "gpus": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 128
+                            },
+                            "memory_gb": {
+                              "type": "number",
+                              "minimum": 0.1,
+                              "maximum": 100000
+                            },
+                            "time_minutes": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 43200
+                            },
+                            "partition": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "captured_at",
+                        "command",
+                        "cwd",
+                        "platform",
+                        "arch",
+                        "bun",
+                        "node",
+                        "lockfiles"
+                      ]
+                    },
+                    "capture_error": {
                       "type": "string"
                     }
                   },
@@ -8597,6 +9318,287 @@
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.notebook.interrupt({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/provenance": {
+      "get": {
+        "operationId": "provenance.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List the project provenance graph",
+        "description": "Returns project-scoped artifacts, runs, sources, claims, reviewer findings, and typed edges.",
+        "responses": {
+          "200": {
+            "description": "Project provenance graph"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/provenance/nodes": {
+      "post": {
+        "operationId": "provenance.record",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Record a project provenance node",
+        "responses": {
+          "200": {
+            "description": "Recorded node"
+          },
+          "400": {
+            "description": "Invalid link target"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "artifact",
+                      "run",
+                      "source",
+                      "claim"
+                    ]
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240
+                  },
+                  "artifact_type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "content_hash": {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "tool": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "error"
+                    ]
+                  },
+                  "meta": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  },
+                  "derived_from": {
+                    "type": "string"
+                  },
+                  "relation": {
+                    "default": "derived-from",
+                    "type": "string",
+                    "enum": [
+                      "produced",
+                      "consumed",
+                      "derived-from",
+                      "supports",
+                      "refutes"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "label"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.record({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/provenance/reviews": {
+      "post": {
+        "operationId": "provenance.review",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Record a reviewer finding",
+        "responses": {
+          "200": {
+            "description": "Recorded finding"
+          },
+          "400": {
+            "description": "Invalid target"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string"
+                  },
+                  "claim": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 10000
+                  },
+                  "issue": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 10000
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "blocking",
+                      "major",
+                      "minor",
+                      "info"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 20000
+                  },
+                  "verdict": {
+                    "default": "refutes",
+                    "type": "string",
+                    "enum": [
+                      "refutes",
+                      "supports"
+                    ]
+                  }
+                },
+                "required": [
+                  "target",
+                  "claim",
+                  "issue",
+                  "severity",
+                  "evidence"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.review({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/provenance/export": {
+      "get": {
+        "operationId": "provenance.export",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Export a project provenance audit",
+        "responses": {
+          "200": {
+            "description": "Portable JSON audit packet"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.export({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/provenance/{id}": {
+      "get": {
+        "operationId": "provenance.trace",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Trace a provenance node",
+        "responses": {
+          "200": {
+            "description": "Connected lineage"
+          },
+          "404": {
+            "description": "Node not found"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.trace({\n  ...\n})"
           }
         ]
       }

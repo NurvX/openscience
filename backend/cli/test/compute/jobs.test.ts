@@ -22,6 +22,15 @@ describe("ComputeJobs command adapters", () => {
         name: "RNA benchmark",
         command: "python train.py --label 'A B'",
         cwd: "/scratch/team project",
+        resources: {
+          cpus: 8,
+          gpus: 2,
+          memory_gb: 48,
+          time_minutes: 95,
+          partition: "gpu-long",
+        },
+        modules: ["cuda/12.4", "python/3.12"],
+        container: "/containers/research image.sif",
       },
       host,
     )
@@ -29,13 +38,32 @@ describe("ComputeJobs command adapters", () => {
     expect(command.argv.slice(0, 7)).toEqual(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-p", "2222"])
     expect(command.argv).toContain("researcher@hpc.example.org")
     expect(command.argv.at(-1)).toContain("sbatch --wait --parsable")
+    expect(command.argv.at(-1)).toContain("--cpus-per-task=8")
+    expect(command.argv.at(-1)).toContain("--gres=gpu:2")
+    expect(command.argv.at(-1)).toContain("--mem=48G")
+    expect(command.argv.at(-1)).toContain("--time=01:35:00")
+    expect(command.argv.at(-1)).toContain("--partition='gpu-long'")
+    expect(command.argv.at(-1)).toContain("module load")
+    expect(command.argv.at(-1)).toContain("cuda/12.4")
+    expect(command.argv.at(-1)).toContain("python/3.12")
+    expect(command.argv.at(-1)).toContain("apptainer exec")
+    expect(command.argv.at(-1)).toContain("/containers/research image.sif")
     expect(command.argv.at(-1)).toContain("os-job-123")
     expect(command.argv.at(-1)).toContain("python train.py")
   })
 
   test("builds PBS and direct SSH adapters from the same profile", () => {
-    const input = { id: "job-9", name: "Variant call", command: "bash pipeline.sh", cwd: "/work" }
-    expect(ComputeJobs.command(input, { ...host, scheduler: "pbs" }).argv.at(-1)).toContain("qsub")
+    const input = {
+      id: "job-9",
+      name: "Variant call",
+      command: "bash pipeline.sh",
+      cwd: "/work",
+      resources: { cpus: 4, gpus: 1, memory_gb: 16, time_minutes: 30 },
+    }
+    const pbs = ComputeJobs.command(input, { ...host, scheduler: "pbs" }).argv.at(-1)
+    expect(pbs).toContain("qsub")
+    expect(pbs).toContain("select=1:ncpus=4:ngpus=1:mem=16gb")
+    expect(pbs).toContain("walltime=00:30:00")
     expect(ComputeJobs.command(input, { ...host, scheduler: "none" }).argv.at(-1)).toContain("exec")
   })
 })
@@ -58,6 +86,49 @@ describe("ComputeJobs local lifecycle", () => {
     expect(finished.status).toBe("succeeded")
     expect(finished.exit_code).toBe(0)
     expect(await ComputeJobs.log(job.id, { root })).toContain("alpha\nbeta")
+    expect(finished.reproducibility).toMatchObject({
+      platform: process.platform,
+      arch: process.arch,
+      command: "printf 'alpha\\nbeta\\n'",
+    })
+  })
+
+  test("captures output artifacts, checksums, lockfiles, and checkpoints", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const root = path.join(tmp.path, "state")
+    await Bun.write(path.join(tmp.path, "requirements.txt"), "numpy==2.2.0\n")
+    const job = await ComputeJobs.start(
+      {
+        name: "artifact capture",
+        command:
+          "mkdir -p outputs checkpoints && printf 'metric,value\\nloss,0.1\\n' > outputs/results.csv && printf model > checkpoints/latest.ckpt",
+        cwd: tmp.path,
+        target: { kind: "local" },
+        artifacts: ["outputs/**/*.csv"],
+        checkpoint: "checkpoints/latest.ckpt",
+        resources: { cpus: 2, memory_gb: 4 },
+      },
+      { root },
+    )
+
+    const finished = await ComputeJobs.wait(job.id, { root, timeout: 5_000 })
+    expect(finished.artifacts).toHaveLength(1)
+    expect(finished.artifacts?.[0]).toMatchObject({
+      path: "outputs/results.csv",
+      size: 22,
+    })
+    expect(finished.artifacts?.[0]?.sha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(finished.checkpoint).toMatchObject({
+      path: "checkpoints/latest.ckpt",
+      size: 5,
+    })
+    expect(finished.reproducibility?.git?.dirty).toBe(true)
+    expect(finished.reproducibility?.lockfiles).toContainEqual(
+      expect.objectContaining({
+        path: "requirements.txt",
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    )
   })
 
   test("cancels a running local process tree", async () => {

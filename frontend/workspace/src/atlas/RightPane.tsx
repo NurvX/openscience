@@ -8,6 +8,7 @@ import { uiStore, type RightPaneTab } from "@/atlas/store/ui"
 import { SkillLibraryDialog } from "@/atlas/SkillsBrowser"
 import { AtlasCanvas } from "@/atlas/AtlasCanvas"
 import { ComputeJobs } from "@/atlas/ComputeJobs"
+import { EvidenceGraph } from "@/atlas/EvidenceGraph"
 import { toast } from "@/atlas/Toast"
 import {
   IconLayoutGrid,
@@ -17,6 +18,7 @@ import {
   IconSettings,
   IconTerminal,
   IconActivity,
+  IconNetwork,
 } from "@/atlas/shared/Icon"
 
 const RIGHT_PANE_WIDTH_KEY = "thesis-right-pane-width-v1"
@@ -49,6 +51,7 @@ export function RightPane(): JSX.Element {
   const TABS: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[] =
     [
       { k: "canvas", label: "atlas", Icon: IconLayoutGrid },
+      { k: "evidence", Icon: IconNetwork },
       { k: "jobs", Icon: IconActivity },
       { k: "terminal", Icon: IconTerminal },
     ]
@@ -226,6 +229,9 @@ export function RightPane(): JSX.Element {
           </KeepAlive>
           <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
             <ComputeJobs />
+          </KeepAlive>
+          <KeepAlive show={tab() === "evidence"} mounted={visited().has("evidence")}>
+            <EvidenceGraph />
           </KeepAlive>
           <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
             <TerminalTab />

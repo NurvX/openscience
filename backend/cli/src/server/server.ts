@@ -30,6 +30,7 @@ import { PtyRoutes } from "./routes/pty"
 import { McpRoutes } from "./routes/mcp"
 import { FileRoutes } from "./routes/file"
 import { NotebookRoutes } from "./routes/notebook"
+import { ProvenanceRoutes } from "./routes/provenance"
 import { ConfigRoutes } from "./routes/config"
 import { ExperimentalRoutes } from "./routes/experimental"
 import { ProviderRoutes } from "./routes/provider"
@@ -280,6 +281,7 @@ export namespace Server {
         .route("/provider", ProviderRoutes())
         .route("/", FileRoutes())
         .route("/notebook", NotebookRoutes())
+        .route("/provenance", ProvenanceRoutes())
         .route("/mcp", McpRoutes())
         .route("/settings/skills", SettingsSkillsRoutes())
         .route("/settings/memory", MemorySettingsRoutes())

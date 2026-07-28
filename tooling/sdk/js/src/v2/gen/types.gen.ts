@@ -3226,6 +3226,58 @@ export type SettingsComputeJobsListResponses = {
     exit_code?: number | null
     pid?: number
     error?: string
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifact_patterns?: Array<string>
+    artifacts?: Array<{
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }>
+    checkpoint_path?: string
+    checkpoint?: {
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }
+    reproducibility?: {
+      captured_at: string
+      command: string
+      cwd: string
+      platform: string
+      arch: string
+      bun: string
+      node: string
+      python?: string
+      git?: {
+        branch?: string
+        commit?: string
+        dirty: boolean
+      }
+      lockfiles: Array<{
+        path: string
+        size: number
+        sha256: string
+        modified_at: string
+      }>
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+    }
+    capture_error?: string
   }>
 }
 
@@ -3244,6 +3296,17 @@ export type SettingsComputeJobsStartData = {
           kind: "ssh"
           host_id: string
         }
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifacts?: Array<string>
+    checkpoint?: string
   }
   path?: never
   query?: never
@@ -3285,6 +3348,58 @@ export type SettingsComputeJobsStartResponses = {
     exit_code?: number | null
     pid?: number
     error?: string
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifact_patterns?: Array<string>
+    artifacts?: Array<{
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }>
+    checkpoint_path?: string
+    checkpoint?: {
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }
+    reproducibility?: {
+      captured_at: string
+      command: string
+      cwd: string
+      platform: string
+      arch: string
+      bun: string
+      node: string
+      python?: string
+      git?: {
+        branch?: string
+        commit?: string
+        dirty: boolean
+      }
+      lockfiles: Array<{
+        path: string
+        size: number
+        sha256: string
+        modified_at: string
+      }>
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+    }
+    capture_error?: string
   }
 }
 
@@ -3383,6 +3498,58 @@ export type SettingsComputeJobsCancelResponses = {
     exit_code?: number | null
     pid?: number
     error?: string
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifact_patterns?: Array<string>
+    artifacts?: Array<{
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }>
+    checkpoint_path?: string
+    checkpoint?: {
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }
+    reproducibility?: {
+      captured_at: string
+      command: string
+      cwd: string
+      platform: string
+      arch: string
+      bun: string
+      node: string
+      python?: string
+      git?: {
+        branch?: string
+        commit?: string
+        dirty: boolean
+      }
+      lockfiles: Array<{
+        path: string
+        size: number
+        sha256: string
+        modified_at: string
+      }>
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+    }
+    capture_error?: string
   }
 }
 
@@ -5749,6 +5916,130 @@ export type NotebookInterruptData = {
 export type NotebookInterruptResponses = {
   /**
    * Kernel state
+   */
+  200: unknown
+}
+
+export type ProvenanceListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance"
+}
+
+export type ProvenanceListResponses = {
+  /**
+   * Project provenance graph
+   */
+  200: unknown
+}
+
+export type ProvenanceRecordData = {
+  body?: {
+    kind: "artifact" | "run" | "source" | "claim"
+    label: string
+    artifact_type?: string
+    path?: string
+    content_hash?: string
+    size?: number
+    tool?: string
+    status?: "ok" | "error"
+    meta?: {
+      [key: string]: unknown
+    }
+    derived_from?: string
+    relation?: "produced" | "consumed" | "derived-from" | "supports" | "refutes"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/nodes"
+}
+
+export type ProvenanceRecordErrors = {
+  /**
+   * Invalid link target
+   */
+  400: unknown
+}
+
+export type ProvenanceRecordResponses = {
+  /**
+   * Recorded node
+   */
+  200: unknown
+}
+
+export type ProvenanceReviewData = {
+  body?: {
+    target: string
+    claim: string
+    issue: string
+    severity: "blocking" | "major" | "minor" | "info"
+    evidence: string
+    verdict?: "refutes" | "supports"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/reviews"
+}
+
+export type ProvenanceReviewErrors = {
+  /**
+   * Invalid target
+   */
+  400: unknown
+}
+
+export type ProvenanceReviewResponses = {
+  /**
+   * Recorded finding
+   */
+  200: unknown
+}
+
+export type ProvenanceExportData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/export"
+}
+
+export type ProvenanceExportResponses = {
+  /**
+   * Portable JSON audit packet
+   */
+  200: unknown
+}
+
+export type ProvenanceTraceData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/{id}"
+}
+
+export type ProvenanceTraceErrors = {
+  /**
+   * Node not found
+   */
+  404: unknown
+}
+
+export type ProvenanceTraceResponses = {
+  /**
+   * Connected lineage
    */
   200: unknown
 }

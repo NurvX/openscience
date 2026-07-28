@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import crypto from "node:crypto"
+import { createReadStream } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import z from "zod"
@@ -41,11 +42,59 @@ export namespace ComputeJobs {
   ])
   export type Target = z.infer<typeof Target>
 
+  export const Resources = z.object({
+    cpus: z.number().int().min(1).max(1024).optional(),
+    gpus: z.number().int().min(0).max(128).optional(),
+    memory_gb: z.number().min(0.1).max(100_000).optional(),
+    time_minutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(60 * 24 * 30)
+      .optional(),
+    partition: z.string().trim().min(1).max(120).optional(),
+  })
+  export type Resources = z.infer<typeof Resources>
+
+  export const Artifact = z.object({
+    path: z.string(),
+    size: z.number().int().nonnegative(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    modified_at: z.string(),
+  })
+  export type Artifact = z.infer<typeof Artifact>
+
+  export const Reproducibility = z.object({
+    captured_at: z.string(),
+    command: z.string(),
+    cwd: z.string(),
+    platform: z.string(),
+    arch: z.string(),
+    bun: z.string(),
+    node: z.string(),
+    python: z.string().optional(),
+    git: z
+      .object({
+        branch: z.string().optional(),
+        commit: z.string().optional(),
+        dirty: z.boolean(),
+      })
+      .optional(),
+    lockfiles: Artifact.array(),
+    resources: Resources.optional(),
+  })
+  export type Reproducibility = z.infer<typeof Reproducibility>
+
   export const Input = z.object({
     name: z.string().trim().min(1).max(120),
     command: z.string().trim().min(1).max(100_000),
     cwd: z.string().optional(),
     target: Target,
+    resources: Resources.optional(),
+    modules: z.array(z.string().trim().min(1).max(240)).max(64).optional(),
+    container: z.string().trim().min(1).max(2_000).optional(),
+    artifacts: z.array(z.string().trim().min(1).max(2_000)).max(100).optional(),
+    checkpoint: z.string().trim().min(1).max(2_000).optional(),
   })
   export type Input = z.infer<typeof Input>
 
@@ -67,6 +116,15 @@ export namespace ComputeJobs {
     exit_code: z.number().int().nullable().optional(),
     pid: z.number().int().positive().optional(),
     error: z.string().optional(),
+    resources: Resources.optional(),
+    modules: z.array(z.string()).optional(),
+    container: z.string().optional(),
+    artifact_patterns: z.array(z.string()).optional(),
+    artifacts: Artifact.array().optional(),
+    checkpoint_path: z.string().optional(),
+    checkpoint: Artifact.optional(),
+    reproducibility: Reproducibility.optional(),
+    capture_error: z.string().optional(),
   })
   export type Job = z.infer<typeof Job>
 
@@ -205,32 +263,100 @@ export namespace ComputeJobs {
     return clean || "job"
   }
 
-  function remote(input: { id: string; name: string; command: string; cwd?: string }, host: Host): string {
+  function clock(minutes: number): string {
+    const hours = Math.floor(minutes / 60)
+    const mins = minutes % 60
+    return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:00`
+  }
+
+  function workload(input: { command: string; modules?: string[]; container?: string }): string {
+    const modules = input.modules?.length ? `module load ${input.modules.map(quote).join(" ")}` : undefined
+    const command = input.container
+      ? `apptainer exec ${quote(input.container)} bash -lc ${quote(input.command)}`
+      : input.command
+    return [modules, command].filter((part): part is string => !!part).join(" && ")
+  }
+
+  function slurm(input: { resources?: Resources }): string[] {
+    const resources = input.resources
+    if (!resources) return []
+    return [
+      resources.cpus ? `--cpus-per-task=${resources.cpus}` : undefined,
+      resources.gpus ? `--gres=gpu:${resources.gpus}` : undefined,
+      resources.memory_gb ? `--mem=${resources.memory_gb}G` : undefined,
+      resources.time_minutes ? `--time=${clock(resources.time_minutes)}` : undefined,
+      resources.partition ? `--partition=${quote(resources.partition)}` : undefined,
+    ].filter((part): part is string => !!part)
+  }
+
+  function pbs(input: { resources?: Resources }): string[] {
+    const resources = input.resources
+    if (!resources) return []
+    const select = [
+      "select=1",
+      resources.cpus ? `ncpus=${resources.cpus}` : undefined,
+      resources.gpus ? `ngpus=${resources.gpus}` : undefined,
+      resources.memory_gb ? `mem=${resources.memory_gb}gb` : undefined,
+    ]
+      .filter((part): part is string => !!part)
+      .join(":")
+    return [
+      select === "select=1" ? undefined : `-l ${quote(select)}`,
+      resources.time_minutes ? `-l ${quote(`walltime=${clock(resources.time_minutes)}`)}` : undefined,
+    ].filter((part): part is string => !!part)
+  }
+
+  function remote(
+    input: {
+      id: string
+      name: string
+      command: string
+      cwd?: string
+      resources?: Resources
+      modules?: string[]
+      container?: string
+    },
+    host: Host,
+  ): string {
     const cwd = input.cwd || host.workdir || "."
     const job = `os-${input.id}`
     const folder = `.openscience/jobs`
     const log = `${folder}/${input.id}.log`
     const enter = `cd ${quote(cwd)} && mkdir -p ${quote(folder)}`
+    const run = workload(input)
     if (host.scheduler === "slurm") {
       return [
         enter,
-        `sbatch --wait --parsable --job-name=${quote(job)} --output=${quote(log)} --error=${quote(log)} --wrap=${quote(input.command)}`,
+        [
+          "sbatch --wait --parsable",
+          `--job-name=${quote(job)}`,
+          `--output=${quote(log)}`,
+          `--error=${quote(log)}`,
+          ...slurm(input),
+          `--wrap=${quote(run)}`,
+        ].join(" "),
         "code=$?",
         `test -f ${quote(log)} && cat ${quote(log)}`,
         "exit $code",
       ].join("; ")
     }
     if (host.scheduler === "pbs") {
-      const script = `#!/usr/bin/env bash\nset -o pipefail\n${input.command}\n`
+      const script = `#!/usr/bin/env bash\nset -o pipefail\n${run}\n`
       return [
         enter,
-        `printf %s ${quote(script)} | qsub -W block=true -N ${quote(name(job))} -j oe -o ${quote(log)}`,
+        [
+          `printf %s ${quote(script)} | qsub -W block=true`,
+          `-N ${quote(name(job))}`,
+          "-j oe",
+          `-o ${quote(log)}`,
+          ...pbs(input),
+        ].join(" "),
         "code=$?",
         `test -f ${quote(log)} && cat ${quote(log)}`,
         "exit $code",
       ].join("; ")
     }
-    return `${enter} && exec bash -lc ${quote(input.command)}`
+    return `${enter} && exec bash -lc ${quote(run)}`
   }
 
   function ssh(host: Host, script: string): string[] {
@@ -241,7 +367,15 @@ export namespace ComputeJobs {
   }
 
   export function command(
-    input: { id: string; name: string; command: string; cwd?: string },
+    input: {
+      id: string
+      name: string
+      command: string
+      cwd?: string
+      resources?: Resources
+      modules?: string[]
+      container?: string
+    },
     host?: Host,
   ): { argv: string[]; scheduler: Scheduler; label: string } {
     if (!host) {
@@ -255,6 +389,113 @@ export namespace ComputeJobs {
       argv: ssh(host, remote(input, host)),
       scheduler: host.scheduler,
       label: host.label,
+    }
+  }
+
+  async function output(argv: string[], cwd: string): Promise<string | undefined> {
+    const proc = Bun.spawn(argv, {
+      cwd,
+      env: await OpenScience.subprocessEnv(process.env),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+    })
+    const [code, text] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
+    if (code !== 0) return
+    return text.trim() || undefined
+  }
+
+  function inside(root: string, file: string): string | undefined {
+    const target = path.resolve(root, file)
+    const relative = path.relative(root, target)
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return
+    return relative
+  }
+
+  async function fingerprint(root: string, file: string): Promise<Artifact | undefined> {
+    const relative = inside(root, file)
+    if (!relative) return
+    const target = path.join(root, relative)
+    const stat = await fs.stat(target).catch(() => undefined)
+    if (!stat?.isFile()) return
+    const hash = new Bun.CryptoHasher("sha256")
+    for await (const chunk of createReadStream(target)) hash.update(chunk)
+    return Artifact.parse({
+      path: relative.split(path.sep).join("/"),
+      size: stat.size,
+      sha256: hash.digest("hex"),
+      modified_at: stat.mtime.toISOString(),
+    })
+  }
+
+  async function artifacts(root: string, patterns: string[]): Promise<Artifact[]> {
+    const files = new Set<string>()
+    for (const pattern of patterns) {
+      if (!inside(root, pattern.replaceAll("*", "x"))) continue
+      const glob = new Bun.Glob(pattern)
+      for await (const file of glob.scan({ cwd: root, dot: true, onlyFiles: true })) {
+        files.add(file)
+        if (files.size >= 200) break
+      }
+      if (files.size >= 200) break
+    }
+    const values = await Promise.all([...files].toSorted().map((file) => fingerprint(root, file)))
+    return values.filter((item): item is Artifact => !!item)
+  }
+
+  const lockfiles = [
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "requirements.txt",
+    "environment.yml",
+    "environment.yaml",
+    "renv.lock",
+    "Manifest.toml",
+    "Cargo.lock",
+  ]
+
+  async function reproduce(job: Job): Promise<Reproducibility> {
+    const cwd = path.resolve(job.cwd ?? process.cwd())
+    const [branch, commit, status, python, capturedLocks] = await Promise.all([
+      output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd),
+      output(["git", "rev-parse", "HEAD"], cwd),
+      output(["git", "status", "--porcelain"], cwd),
+      output(["python3", "--version"], cwd),
+      Promise.all(lockfiles.map((file) => fingerprint(cwd, file))),
+    ])
+    const git = branch || commit || status !== undefined ? { branch, commit, dirty: !!status } : undefined
+    return Reproducibility.parse({
+      captured_at: new Date().toISOString(),
+      command: job.command,
+      cwd,
+      platform: process.platform,
+      arch: process.arch,
+      bun: Bun.version,
+      node: process.version,
+      python,
+      git,
+      lockfiles: capturedLocks.filter((item): item is Artifact => !!item),
+      resources: job.resources,
+    })
+  }
+
+  async function capture(job: Job): Promise<Pick<Job, "artifacts" | "checkpoint" | "reproducibility">> {
+    const cwd = path.resolve(job.cwd ?? process.cwd())
+    const [found, checkpoint, reproducibility] = await Promise.all([
+      artifacts(cwd, job.artifact_patterns ?? []),
+      job.checkpoint_path ? fingerprint(cwd, job.checkpoint_path) : undefined,
+      reproduce(job),
+    ])
+    return {
+      artifacts: found,
+      checkpoint,
+      reproducibility,
     }
   }
 
@@ -350,15 +591,25 @@ export namespace ComputeJobs {
       proc.once("error", (error) => resolve({ code: null, error: error.message }))
       proc.once("exit", (code) => resolve({ code }))
     })
-    active.delete(keyOf(root, job.id))
-    const final = (await list({ root })).find((item) => item.id === job.id)
-    if (final?.status === "cancelled") return
+    const final = await get(job.id, { root })
+    if (final?.status === "cancelled") {
+      active.delete(keyOf(root, job.id))
+      return
+    }
+    const captureResult = host
+      ? undefined
+      : await capture(job)
+          .then((value) => ({ ...value, capture_error: undefined }))
+          .catch((error) => ({
+            capture_error: error instanceof Error ? error.message : String(error),
+          }))
     await patch(root, job.id, {
       status: result.code === 0 ? "succeeded" : "failed",
       completed_at: new Date().toISOString(),
       exit_code: result.code,
       error: result.error,
-    })
+      ...captureResult,
+    }).finally(() => active.delete(keyOf(root, job.id)))
   }
 
   export async function start(input: Input, options: Options = {}): Promise<Job> {
@@ -379,6 +630,11 @@ export namespace ComputeJobs {
       scheduler: spec.scheduler,
       status: "queued",
       created_at: new Date().toISOString(),
+      resources: parsed.resources,
+      modules: parsed.modules,
+      container: parsed.container,
+      artifact_patterns: parsed.artifacts,
+      checkpoint_path: parsed.checkpoint,
     })
     await change(root, (jobs) => {
       jobs.push(job)

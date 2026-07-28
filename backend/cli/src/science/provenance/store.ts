@@ -72,6 +72,7 @@ interface Graph {
 }
 
 const STORE_PATH = path.join(Global.Path.data, "provenance", "graph.json")
+const lock = { current: Promise.resolve() as Promise<unknown> }
 
 async function sha256(input: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input))
@@ -80,8 +81,18 @@ async function sha256(input: string): Promise<string> {
 
 /** Deterministic content id from a node's identifying payload. */
 export async function contentId(payload: unknown): Promise<string> {
-  const canonical = JSON.stringify(payload, Object.keys(payload as object).sort())
+  const canonical = JSON.stringify(stable(payload))
   return (await sha256(canonical)).slice(0, 16)
+}
+
+function stable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stable)
+  if (!value || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, stable(item)]),
+  )
 }
 
 async function load(): Promise<Graph> {
@@ -98,25 +109,49 @@ async function save(graph: Graph): Promise<void> {
   await Bun.write(STORE_PATH, JSON.stringify(graph, null, 2))
 }
 
+async function mutate<T>(fn: (graph: Graph) => Promise<T> | T): Promise<T> {
+  const task = lock.current
+    .catch(() => undefined)
+    .then(async () => {
+      const graph = await load()
+      const result = await fn(graph)
+      await save(graph)
+      return result
+    })
+  lock.current = task
+  return task
+}
+
+function belongs(node: Node, directory: string): boolean {
+  const root = path.resolve(directory)
+  const nodeDirectory = node.meta?.directory
+  if (typeof nodeDirectory === "string" && path.resolve(nodeDirectory) === root) return true
+  if (node.kind !== "artifact" || !("path" in node) || !node.path || !path.isAbsolute(node.path)) return false
+  const relative = path.relative(root, path.resolve(node.path))
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+}
+
 export namespace Provenance {
   /** Record a node. If `id` is omitted it is content-addressed from the node body. */
   export async function record(node: Omit<Node, "id" | "recordedAt"> & { id?: string }): Promise<Node> {
-    const graph = await load()
-    const recordedAt = new Date().toISOString()
-    const id = node.id ?? (await contentId({ ...node }))
-    const full = { ...node, id, recordedAt } as Node
-    graph.nodes[id] = full
-    await save(graph)
-    return full
+    return mutate(async (graph) => {
+      const recordedAt = new Date().toISOString()
+      const id = node.id ?? (await contentId({ ...node }))
+      const full = { ...node, id, recordedAt } as Node
+      graph.nodes[id] = full
+      return full
+    })
   }
 
   /** Link two existing nodes with a typed edge. */
   export async function link(edge: Edge): Promise<Edge> {
-    const graph = await load()
-    const exists = graph.edges.some((e) => e.from === edge.from && e.to === edge.to && e.relation === edge.relation)
-    if (!exists) graph.edges.push(edge)
-    await save(graph)
-    return edge
+    return mutate((graph) => {
+      if (!graph.nodes[edge.from]) throw new Error(`Provenance node ${edge.from} was not found`)
+      if (!graph.nodes[edge.to]) throw new Error(`Provenance node ${edge.to} was not found`)
+      const exists = graph.edges.some((e) => e.from === edge.from && e.to === edge.to && e.relation === edge.relation)
+      if (!exists) graph.edges.push(edge)
+      return edge
+    })
   }
 
   /** Fetch a single node by id. */
@@ -158,6 +193,34 @@ export namespace Provenance {
   export async function list(): Promise<Node[]> {
     const graph = await load()
     return Object.values(graph.nodes)
+  }
+
+  /** Return only nodes belonging to a project plus their directly or transitively linked evidence. */
+  export async function project(directory: string): Promise<{ nodes: Node[]; edges: Edge[] }> {
+    const graph = await load()
+    const seen = new Set(
+      Object.values(graph.nodes)
+        .filter((node) => belongs(node, directory))
+        .map((node) => node.id),
+    )
+    const queue = [...seen]
+    while (queue.length) {
+      const id = queue.shift()!
+      for (const edge of graph.edges) {
+        if (edge.from !== id && edge.to !== id) continue
+        const next = edge.from === id ? edge.to : edge.from
+        const node = graph.nodes[next]
+        if (seen.has(next) || !node) continue
+        const owner = node.meta?.directory
+        if (typeof owner === "string" && !belongs(node, directory)) continue
+        seen.add(next)
+        queue.push(next)
+      }
+    }
+    return {
+      nodes: [...seen].map((id) => graph.nodes[id]).filter((node): node is Node => !!node),
+      edges: graph.edges.filter((edge) => seen.has(edge.from) && seen.has(edge.to)),
+    }
   }
 
   export const path_ = STORE_PATH

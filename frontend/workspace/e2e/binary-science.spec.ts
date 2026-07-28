@@ -42,3 +42,64 @@ test("inspects and streams scientific binary containers", async ({ page, gotoSes
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test("renders an H5AD embedding with categorical cell labels", async ({ page, gotoSession }) => {
+  const directory = mkdtempSync(path.join(tmpdir(), "openscience-h5ad-embedding-e2e-"))
+  writeFileSync(
+    path.join(directory, "atlas.h5ad"),
+    Uint8Array.from([0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
+  )
+
+  await page.route("**/file/inspect?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        format: "h5ad",
+        name: "atlas.h5ad",
+        size: 12,
+        modified: Date.now(),
+        signature: true,
+        tool: { name: "h5py", available: true, detail: "inspected locally" },
+        details: {
+          summary: {
+            matrix: [4, 3],
+            observations: 4,
+            variables: 3,
+            embeddings: ["X_umap"],
+          },
+          groups: ["obs", "var", "obsm"],
+          datasets: [{ path: "obsm/X_umap", shape: [4, 2], dtype: "float32", bytes: 32 }],
+          embedding: {
+            name: "X_umap",
+            label: "cell_type",
+            total: 4,
+            points: [
+              { x: -2, y: 1, label: "T cell" },
+              { x: -1, y: 2, label: "T cell" },
+              { x: 2, y: -1, label: "B cell" },
+              { x: 3, y: -2, label: "B cell" },
+            ],
+          },
+        },
+      }),
+    })
+  })
+
+  try {
+    await gotoSession()
+    await page.getByRole("tab", { name: "Files", exact: true }).click()
+    const location = page.getByPlaceholder("/absolute/path")
+    await location.fill(directory)
+    await location.press("Enter")
+    await page.getByPlaceholder("filter this folder…").fill("atlas.h5ad")
+    await page.getByRole("button", { name: /^atlas\.h5ad\b/ }).click()
+
+    const h5ad = page.locator('[data-component="binary-science"][data-format="h5ad"]')
+    await expect(h5ad.getByText("Embedding preview", { exact: true })).toBeVisible()
+    await expect(h5ad.getByRole("img", { name: "X_umap embedding scatter plot" })).toBeVisible()
+    await expect(h5ad.getByText("T cell", { exact: true })).toBeVisible()
+    await expect(h5ad.getByText("B cell", { exact: true })).toBeVisible()
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

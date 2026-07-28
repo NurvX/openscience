@@ -15,6 +15,19 @@ export interface BinaryInspection {
   details: Record<string, unknown>
 }
 
+export interface EmbeddingPoint {
+  x: number
+  y: number
+  label?: string
+}
+
+export interface Embedding {
+  name: string
+  label?: string
+  total: number
+  points: EmbeddingPoint[]
+}
+
 const formats = new Set<BinaryScienceFormat>(["bam", "cram", "h5ad", "loom"])
 
 export function detectBinaryScienceFormat(extension: string): BinaryScienceFormat | undefined {
@@ -68,4 +81,22 @@ export function numbers(value: unknown): number[] {
 export function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {}
   return value as Record<string, unknown>
+}
+
+export function embedding(value: unknown): Embedding | undefined {
+  const data = object(value)
+  const points = objects(data.points)
+    .map((point) => ({
+      x: typeof point.x === "number" ? point.x : Number.NaN,
+      y: typeof point.y === "number" ? point.y : Number.NaN,
+      label: typeof point.label === "string" ? point.label : undefined,
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+  if (!points.length) return
+  return {
+    name: typeof data.name === "string" ? data.name : "embedding",
+    label: typeof data.label === "string" ? data.label : undefined,
+    total: typeof data.total === "number" ? data.total : points.length,
+    points,
+  }
 }

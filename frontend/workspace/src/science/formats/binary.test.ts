@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { detectBinaryScienceFormat, formatBytes, normalizeInspection } from "./binary"
+import { detectBinaryScienceFormat, embedding, formatBytes, normalizeInspection } from "./binary"
 
 const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8")
 
@@ -36,6 +36,29 @@ describe("binary scientific format helpers", () => {
       tool: { name: "samtools", available: false },
     })
   })
+
+  test("normalizes finite embedding previews and preserves categorical labels", () => {
+    expect(
+      embedding({
+        name: "X_umap",
+        label: "cell_type",
+        total: 10_000,
+        points: [
+          { x: 1, y: 2, label: "T cell" },
+          { x: Number.NaN, y: 3, label: "invalid" },
+          { x: -4, y: 5, label: "B cell" },
+        ],
+      }),
+    ).toEqual({
+      name: "X_umap",
+      label: "cell_type",
+      total: 10_000,
+      points: [
+        { x: 1, y: 2, label: "T cell" },
+        { x: -4, y: 5, label: "B cell" },
+      ],
+    })
+  })
 })
 
 describe("binary scientific workbench integration", () => {
@@ -49,5 +72,6 @@ describe("binary scientific workbench integration", () => {
     expect(view).toContain("/file/inspect?")
     expect(view).toContain("Dataset inventory")
     expect(view).toContain("Reference coverage")
+    expect(view).toContain("Embedding preview")
   })
 })

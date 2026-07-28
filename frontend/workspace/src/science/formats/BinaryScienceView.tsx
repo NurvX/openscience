@@ -4,6 +4,7 @@ import { useSDK } from "@/context/sdk"
 import { FONT_CODE, FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import {
   formatBytes,
+  embedding as parseEmbedding,
   normalizeInspection,
   numbers,
   object,
@@ -11,6 +12,7 @@ import {
   strings,
   type BinaryInspection,
   type BinaryScienceFormat,
+  type Embedding,
 } from "./binary"
 
 export function BinaryScienceView(props: {
@@ -222,6 +224,7 @@ function Hdf5(props: { file: BinaryInspection }): JSX.Element {
   const layers = () => strings(summary().layers)
   const row = () => strings(summary().row_attributes)
   const column = () => strings(summary().column_attributes)
+  const embedding = () => parseEmbedding(props.file.details.embedding)
   return (
     <>
       <Show when={props.file.tool.available}>
@@ -249,6 +252,7 @@ function Hdf5(props: { file: BinaryInspection }): JSX.Element {
           />
           <Metric label="datasets" value={String(datasets().length)} detail={`${groups().length} groups`} />
         </div>
+        <Show when={embedding()}>{(value) => <EmbeddingPlot value={value()} />}</Show>
         <Show when={embeddings().length || layers().length || row().length || column().length}>
           <Panel title="Scientific schema" note="Analysis-ready structures">
             <div style={{ display: "grid", gap: "10px" }}>
@@ -294,6 +298,128 @@ function Hdf5(props: { file: BinaryInspection }): JSX.Element {
       </Show>
     </>
   )
+}
+
+function EmbeddingPlot(props: { value: Embedding }): JSX.Element {
+  const extent = () => {
+    const xs = props.value.points.map((point) => point.x)
+    const ys = props.value.points.map((point) => point.y)
+    return {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys),
+    }
+  }
+  const point = (value: number, min: number, max: number, start: number, span: number) =>
+    start + ((value - min) / Math.max(Number.EPSILON, max - min)) * span
+  const labels = () => {
+    const counts = new Map<string, number>()
+    for (const item of props.value.points) {
+      if (!item.label) continue
+      counts.set(item.label, (counts.get(item.label) ?? 0) + 1)
+    }
+    return [...counts.entries()].toSorted((a, b) => b[1] - a[1])
+  }
+  return (
+    <Panel
+      title="Embedding preview"
+      note={`${props.value.name} · ${props.value.points.length.toLocaleString()} of ${props.value.total.toLocaleString()} observations`}
+    >
+      <div
+        style={{
+          display: "grid",
+          "grid-template-columns": labels().length ? "minmax(0, 1fr) 150px" : "1fr",
+          gap: "12px",
+        }}
+      >
+        <svg
+          viewBox="0 0 720 360"
+          role="img"
+          aria-label={`${props.value.name} embedding scatter plot`}
+          style={{
+            width: "100%",
+            "min-height": "260px",
+            border: "1px solid var(--color-border)",
+            "border-radius": "6px",
+            background:
+              "radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--color-text-faint) 16%, transparent) 1px, transparent 0)",
+            "background-size": "18px 18px",
+          }}
+        >
+          <line x1="32" y1="330" x2="700" y2="330" stroke="var(--color-border-strong)" stroke-width="1" />
+          <line x1="32" y1="18" x2="32" y2="330" stroke="var(--color-border-strong)" stroke-width="1" />
+          <For each={props.value.points}>
+            {(item) => (
+              <circle
+                cx={point(item.x, extent().minX, extent().maxX, 40, 650)}
+                cy={point(item.y, extent().maxY, extent().minY, 24, 296)}
+                r={props.value.points.length > 1_500 ? 1.65 : 2.15}
+                fill={item.label ? color(item.label) : "var(--color-accent)"}
+                fill-opacity="0.72"
+              >
+                <title>
+                  {item.label ? `${item.label} · ` : ""}
+                  {item.x.toFixed(3)}, {item.y.toFixed(3)}
+                </title>
+              </circle>
+            )}
+          </For>
+          <text x="690" y="350" fill="var(--color-text-faint)" font-size="10" font-family={FONT_MONO}>
+            {props.value.name} 1
+          </text>
+          <text
+            x="12"
+            y="28"
+            fill="var(--color-text-faint)"
+            font-size="10"
+            font-family={FONT_MONO}
+            transform="rotate(-90 12 28)"
+          >
+            {props.value.name} 2
+          </text>
+        </svg>
+        <Show when={labels().length}>
+          <div style={{ display: "flex", "flex-direction": "column", gap: "7px", "min-width": 0 }}>
+            <span style={{ ...muted(), "font-size": "9px", "text-transform": "uppercase", "letter-spacing": "0.06em" }}>
+              {props.value.label ?? "groups"}
+            </span>
+            <For each={labels().slice(0, 14)}>
+              {(item) => (
+                <div
+                  style={{
+                    display: "grid",
+                    "grid-template-columns": "7px minmax(0, 1fr) auto",
+                    gap: "6px",
+                    "align-items": "center",
+                    "font-family": FONT_MONO,
+                    "font-size": "9px",
+                    color: "var(--color-text-muted)",
+                  }}
+                >
+                  <span style={{ width: "7px", height: "7px", "border-radius": "50%", background: color(item[0]) }} />
+                  <span style={{ overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap" }}>
+                    {item[0]}
+                  </span>
+                  <span style={{ color: "var(--color-text-faint)" }}>{item[1].toLocaleString()}</span>
+                </div>
+              )}
+            </For>
+            <Show when={labels().length > 14}>
+              <span style={muted()}>+{labels().length - 14} more groups</span>
+            </Show>
+          </div>
+        </Show>
+      </div>
+    </Panel>
+  )
+}
+
+const palette = ["#5c7cfa", "#2f9e74", "#e6a23c", "#9c6ade", "#e8590c", "#0ca678", "#d6336c", "#1098ad"]
+
+function color(value: string): string {
+  const hash = [...value].reduce((total, char) => (total * 31 + char.charCodeAt(0)) >>> 0, 0)
+  return palette[hash % palette.length]!
 }
 
 function Alignment(props: { file: BinaryInspection }): JSX.Element {

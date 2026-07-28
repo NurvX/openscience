@@ -43,6 +43,25 @@ def clean(value):
         return [clean(item) for item in value[:50]]
     return str(value)
 
+def text(value):
+    value = clean(value)
+    return str(value) if value is not None else ""
+
+def labels(handle, key, indices):
+    if not key or "obs" not in handle:
+        return []
+    value = handle["obs"].get(key)
+    if value is None:
+        return []
+    try:
+        if isinstance(value, h5py.Group) and "codes" in value and "categories" in value:
+            codes = value["codes"][indices]
+            categories = value["categories"][:]
+            return [text(categories[int(code)]) if int(code) >= 0 and int(code) < len(categories) else "" for code in codes]
+        return [text(item) for item in value[indices]]
+    except Exception:
+        return []
+
 with h5py.File(target, "r") as handle:
     result["attributes"] = {str(key): clean(value) for key, value in list(handle.attrs.items())[:50]}
 
@@ -78,12 +97,55 @@ with h5py.File(target, "r") as handle:
         result["summary"].setdefault("variables", int(matrix.shape[1]))
     if "obsm" in handle:
         result["summary"]["embeddings"] = list(handle["obsm"].keys())[:100]
+        preferred = ["X_umap", "X_tsne", "X_pca", "spatial"]
+        names = list(handle["obsm"].keys())
+        selected = next((name for name in preferred if name in names), names[0] if names else None)
+        value = handle["obsm"].get(selected) if selected else None
+        if value is not None and isinstance(value, h5py.Dataset) and len(value.shape) == 2 and value.shape[1] >= 2:
+            total = int(value.shape[0])
+            count = min(total, 2500)
+            indices = [int(index * total / count) for index in range(count)] if count else []
+            coords = value[indices, :2] if indices else []
+            label_names = ["cell_type", "celltype", "leiden", "louvain", "cluster", "batch"]
+            label_key = next((name for name in label_names if "obs" in handle and name in handle["obs"]), None)
+            categories = labels(handle, label_key, indices)
+            result["embedding"] = {
+                "name": selected,
+                "label": label_key,
+                "total": total,
+                "points": [
+                    {
+                        "x": float(point[0]),
+                        "y": float(point[1]),
+                        **({"label": categories[index]} if index < len(categories) and categories[index] else {}),
+                    }
+                    for index, point in enumerate(coords)
+                ],
+            }
     if "layers" in handle:
         result["summary"]["layers"] = list(handle["layers"].keys())[:100]
     if "row_attrs" in handle:
         result["summary"]["row_attributes"] = list(handle["row_attrs"].keys())[:100]
     if "col_attrs" in handle:
         result["summary"]["column_attributes"] = list(handle["col_attrs"].keys())[:100]
+        if "embedding" not in result:
+            candidates = [
+                (name, handle["col_attrs"].get(name))
+                for name in ["X_umap", "UMAP", "Embedding", "_Embedding", "TSNE"]
+                if name in handle["col_attrs"]
+            ]
+            selected = candidates[0] if candidates else None
+            if selected and isinstance(selected[1], h5py.Dataset) and len(selected[1].shape) == 2 and selected[1].shape[1] >= 2:
+                value = selected[1]
+                total = int(value.shape[0])
+                count = min(total, 2500)
+                indices = [int(index * total / count) for index in range(count)] if count else []
+                coords = value[indices, :2] if indices else []
+                result["embedding"] = {
+                    "name": selected[0],
+                    "total": total,
+                    "points": [{"x": float(point[0]), "y": float(point[1])} for point in coords],
+                }
 
 print(json.dumps(result))
 `

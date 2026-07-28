@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createResource, type JSX } from "solid-js"
+import { For, Show, createMemo, createResource, createSignal, type JSX } from "solid-js"
 import { DateTime } from "luxon"
 import { useSync } from "@/context/sync"
 import { useModels } from "@/context/models"
@@ -40,6 +40,8 @@ const icons: Record<ResearchWorkflow["icon"], (props: { size?: number; strokeWid
   reproduce: IconRefresh,
   compare: IconNetwork,
   report: IconFile,
+  activity: IconActivity,
+  network: IconNetwork,
 }
 
 export function NewSessionView(props: NewSessionViewProps) {
@@ -61,6 +63,12 @@ export function NewSessionView(props: NewSessionViewProps) {
         .artifacts()
         .then((response) => response.data ?? [])
         .catch(() => []),
+  )
+  const [workflowGroup, setWorkflowGroup] = createSignal<ResearchWorkflow["group"] | "all">("all")
+  const visibleWorkflows = createMemo(() =>
+    workflowGroup() === "all"
+      ? researchWorkflows
+      : researchWorkflows.filter((workflow) => workflow.group === workflowGroup()),
   )
   const local = createMemo(() => {
     try {
@@ -173,8 +181,37 @@ export function NewSessionView(props: NewSessionViewProps) {
             </label>
           </div>
 
+          <nav class="research-launchpad__workflow-filters" aria-label="Workflow categories">
+            <For
+              each={
+                [
+                  ["all", "All workflows"],
+                  ["analyze", "Analyze"],
+                  ["compute", "Compute"],
+                  ["discover", "Discover"],
+                  ["communicate", "Communicate"],
+                ] as const
+              }
+            >
+              {(item) => (
+                <button
+                  type="button"
+                  data-active={workflowGroup() === item[0] ? "true" : "false"}
+                  onClick={() => setWorkflowGroup(item[0])}
+                >
+                  {item[1]}
+                  <span>
+                    {item[0] === "all"
+                      ? researchWorkflows.length
+                      : researchWorkflows.filter((workflow) => workflow.group === item[0]).length}
+                  </span>
+                </button>
+              )}
+            </For>
+          </nav>
+
           <div class="research-launchpad__grid">
-            <For each={researchWorkflows}>
+            <For each={visibleWorkflows()}>
               {(workflow, index) => {
                 const Icon = icons[workflow.icon]
                 return (

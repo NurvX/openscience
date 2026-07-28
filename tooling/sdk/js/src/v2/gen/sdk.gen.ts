@@ -102,6 +102,14 @@ import type {
   ProjectListResponses,
   ProjectUpdateErrors,
   ProjectUpdateResponses,
+  ProvenanceExportResponses,
+  ProvenanceListResponses,
+  ProvenanceRecordErrors,
+  ProvenanceRecordResponses,
+  ProvenanceReviewErrors,
+  ProvenanceReviewResponses,
+  ProvenanceTraceErrors,
+  ProvenanceTraceResponses,
   ProviderAuthResponses,
   ProviderListResponses,
   ProviderOauthAuthorizeErrors,
@@ -912,6 +920,17 @@ export class Jobs extends HeyApiClient {
             kind: "ssh"
             host_id: string
           }
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+      modules?: Array<string>
+      container?: string
+      artifacts?: Array<string>
+      checkpoint?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -924,6 +943,11 @@ export class Jobs extends HeyApiClient {
             { in: "body", key: "command" },
             { in: "body", key: "cwd" },
             { in: "body", key: "target" },
+            { in: "body", key: "resources" },
+            { in: "body", key: "modules" },
+            { in: "body", key: "container" },
+            { in: "body", key: "artifacts" },
+            { in: "body", key: "checkpoint" },
           ],
         },
       ],
@@ -3744,6 +3768,170 @@ export class Notebook extends HeyApiClient {
   }
 }
 
+export class Provenance extends HeyApiClient {
+  /**
+   * List the project provenance graph
+   *
+   * Returns project-scoped artifacts, runs, sources, claims, reviewer findings, and typed edges.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<ProvenanceListResponses, unknown, ThrowOnError>({
+      url: "/provenance",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Record a project provenance node
+   */
+  public record<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      kind?: "artifact" | "run" | "source" | "claim"
+      label?: string
+      artifact_type?: string
+      path?: string
+      content_hash?: string
+      size?: number
+      tool?: string
+      status?: "ok" | "error"
+      meta?: {
+        [key: string]: unknown
+      }
+      derived_from?: string
+      relation?: "produced" | "consumed" | "derived-from" | "supports" | "refutes"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "kind" },
+            { in: "body", key: "label" },
+            { in: "body", key: "artifact_type" },
+            { in: "body", key: "path" },
+            { in: "body", key: "content_hash" },
+            { in: "body", key: "size" },
+            { in: "body", key: "tool" },
+            { in: "body", key: "status" },
+            { in: "body", key: "meta" },
+            { in: "body", key: "derived_from" },
+            { in: "body", key: "relation" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ProvenanceRecordResponses, ProvenanceRecordErrors, ThrowOnError>({
+      url: "/provenance/nodes",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Record a reviewer finding
+   */
+  public review<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      target?: string
+      claim?: string
+      issue?: string
+      severity?: "blocking" | "major" | "minor" | "info"
+      evidence?: string
+      verdict?: "refutes" | "supports"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "target" },
+            { in: "body", key: "claim" },
+            { in: "body", key: "issue" },
+            { in: "body", key: "severity" },
+            { in: "body", key: "evidence" },
+            { in: "body", key: "verdict" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ProvenanceReviewResponses, ProvenanceReviewErrors, ThrowOnError>({
+      url: "/provenance/reviews",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Export a project provenance audit
+   */
+  public export<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<ProvenanceExportResponses, unknown, ThrowOnError>({
+      url: "/provenance/export",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Trace a provenance node
+   */
+  public trace<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProvenanceTraceResponses, ProvenanceTraceErrors, ThrowOnError>({
+      url: "/provenance/{id}",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Config3 extends HeyApiClient {
   /**
    * Remove MCP server
@@ -4593,6 +4781,11 @@ export class OpenScienceClient extends HeyApiClient {
   private _notebook?: Notebook
   get notebook(): Notebook {
     return (this._notebook ??= new Notebook({ client: this.client }))
+  }
+
+  private _provenance?: Provenance
+  get provenance(): Provenance {
+    return (this._provenance ??= new Provenance({ client: this.client }))
   }
 
   private _mcp?: Mcp
