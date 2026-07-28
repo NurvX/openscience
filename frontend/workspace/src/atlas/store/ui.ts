@@ -2,7 +2,7 @@ import { createSignal } from "solid-js"
 
 export type RightPaneTab = "canvas" | "terminal"
 
-const PANE_OPEN_KEY = "thesis-rightpane-open-v1"
+const PANE_OPEN_KEY = "openscience-rightpane-open-v2"
 const HIDDEN_TABS_KEY = "thesis-rightpane-hidden-tabs-v1"
 const AGENT_KEY = "thesis-agent-v1"
 
@@ -21,9 +21,9 @@ function readAgent(): string {
 
 function readPaneOpen(): boolean {
   try {
-    return localStorage.getItem(PANE_OPEN_KEY) !== "0"
+    return localStorage.getItem(PANE_OPEN_KEY) === "1"
   } catch {
-    return true
+    return false
   }
 }
 

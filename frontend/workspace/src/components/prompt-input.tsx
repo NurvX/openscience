@@ -60,6 +60,7 @@ import { createOpenScienceClient, type Message, type Part } from "@synsci/sdk/v2
 import { Binary } from "@synsci/util/binary"
 import { showToast } from "@synsci/ui/toast"
 import { base64Encode } from "@synsci/util/encode"
+import { uiStore } from "@/atlas/store/ui"
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 const ACCEPTED_TEXT_TYPES = ["text/markdown", "text/plain"]
@@ -1654,6 +1655,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       restoreInput()
     })
   }
+
+  createEffect(() => {
+    const text = uiStore.prefill()
+    if (!text || !editorRef) return
+    const send = uiStore.prefillSend()
+    editorRef.textContent = text
+    prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+    uiStore.setPrefill(undefined)
+    uiStore.setPrefillSend(false)
+    requestAnimationFrame(() => {
+      editorRef.focus()
+      setCursorPosition(editorRef, text.length)
+      queueScroll()
+      if (send) void handleSubmit(new Event("submit"))
+    })
+  })
 
   return (
     <div class="relative size-full flex flex-col gap-3">
