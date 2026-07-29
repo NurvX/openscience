@@ -1147,6 +1147,15 @@ export namespace ProviderTransform {
 
   export function error(providerID: string, error: APICallError) {
     let message = error.message
+    const body = error.responseBody?.toLowerCase() ?? ""
+    if (
+      providerID === "openrouter" &&
+      error.statusCode === 403 &&
+      body.includes("this model is only available in the united states") &&
+      body.includes('"provider_name":"meta"')
+    ) {
+      return "Muse Spark 1.1 is currently restricted by Meta to requests routed from the United States. Choose another model, or retry from a supported U.S. region."
+    }
     if (providerID.includes("github-copilot") && error.statusCode === 403) {
       return "Please reauthenticate with the copilot provider to ensure your credentials work properly with OpenScience."
     }
