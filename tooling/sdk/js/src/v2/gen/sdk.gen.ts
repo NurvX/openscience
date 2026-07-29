@@ -32,6 +32,11 @@ import type {
   ConfigUpdateResponses,
   EventSubscribeResponses,
   ExperimentalResourceListResponses,
+  FileAnnotationsCreateResponses,
+  FileAnnotationsDeleteResponses,
+  FileAnnotationsHistoryResponses,
+  FileAnnotationsListResponses,
+  FileAnnotationsUpdateResponses,
   FileArtifactsResponses,
   FileInspectResponses,
   FileListResponses,
@@ -44,6 +49,14 @@ import type {
   FileRawResponses,
   FileReadResponses,
   FileReproducibilityResponses,
+  FileReviewsCurrentErrors,
+  FileReviewsCurrentResponses,
+  FileReviewsFinalizeErrors,
+  FileReviewsFinalizeResponses,
+  FileReviewsHistoryResponses,
+  FileReviewsResolveErrors,
+  FileReviewsResolveResponses,
+  FileReviewsRunResponses,
   FileStarterResponses,
   FileStatusResponses,
   FileWriteResponses,
@@ -3401,6 +3414,389 @@ export class Find extends HeyApiClient {
   }
 }
 
+export class Annotations extends HeyApiClient {
+  /**
+   * List artifact annotations
+   *
+   * List durable review threads anchored to a project artifact.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileAnnotationsListResponses, unknown, ThrowOnError>({
+      url: "/file/annotations",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create an artifact annotation
+   *
+   * Create a durable review thread anchored to an artifact, text range, notebook cell, molecule, or locus.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      path?: string
+      body?: string
+      author?: string
+      anchor?:
+        | {
+            kind: "artifact"
+            label?: string
+          }
+        | {
+            kind: "text"
+            startLine: number
+            endLine: number
+            quote?: string
+          }
+        | {
+            kind: "notebook"
+            cellId: string
+            line?: number
+          }
+        | {
+            kind: "molecule"
+            selection: string
+            count?: number
+          }
+        | {
+            kind: "genome"
+            chromosome: string
+            start: number
+            end: number
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "path" },
+            { in: "body", key: "body" },
+            { in: "body", key: "author" },
+            { in: "body", key: "anchor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileAnnotationsCreateResponses, unknown, ThrowOnError>({
+      url: "/file/annotations",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read artifact annotation history
+   *
+   * Read every immutable revision of an artifact review thread, including a recoverable tombstone.
+   */
+  public history<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileAnnotationsHistoryResponses, unknown, ThrowOnError>({
+      url: "/file/annotations/{id}/history",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Tombstone an artifact annotation
+   *
+   * Hide an artifact review thread while retaining its recoverable revision history.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<FileAnnotationsDeleteResponses, unknown, ThrowOnError>({
+      url: "/file/annotations/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update an artifact annotation
+   *
+   * Reply to, resolve, or reopen an artifact review thread.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      status?: "open" | "resolved"
+      body?: string
+      reply?: string
+      author?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "status" },
+            { in: "body", key: "body" },
+            { in: "body", key: "reply" },
+            { in: "body", key: "author" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<FileAnnotationsUpdateResponses, unknown, ThrowOnError>({
+      url: "/file/annotations/{id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Reviews extends HeyApiClient {
+  /**
+   * Read the current publication review
+   *
+   * Return the latest deterministic review report and whether it is stale for the current source bytes.
+   */
+  public current<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileReviewsCurrentResponses, FileReviewsCurrentErrors, ThrowOnError>({
+      url: "/file/reviews",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Run deterministic publication checks
+   *
+   * Check citations, numeric traces, figures, and provenance for the exact Markdown manuscript bytes.
+   */
+  public run<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      path?: string
+      actor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "path" },
+            { in: "body", key: "actor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileReviewsRunResponses, unknown, ThrowOnError>({
+      url: "/file/reviews",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List publication review history
+   *
+   * List prior deterministic review reports for every reviewed version of a manuscript.
+   */
+  public history<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileReviewsHistoryResponses, unknown, ThrowOnError>({
+      url: "/file/reviews/history",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resolve or override a publication finding
+   *
+   * Record an attributed reason and close one deterministic review finding.
+   */
+  public resolve<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      finding: string
+      directory?: string
+      status?: "resolved" | "overridden"
+      actor?: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "path", key: "finding" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "status" },
+            { in: "body", key: "actor" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<FileReviewsResolveResponses, FileReviewsResolveErrors, ThrowOnError>({
+      url: "/file/reviews/{id}/findings/{finding}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Finalize a publication review
+   *
+   * Bind publication-ready state to the exact reviewed source hash after all blocking findings close.
+   */
+  public finalize<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      actor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "actor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileReviewsFinalizeResponses, FileReviewsFinalizeErrors, ThrowOnError>(
+      {
+        url: "/file/reviews/{id}/finalize",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+}
+
 export class File extends HeyApiClient {
   /**
    * List files
@@ -3710,6 +4106,8 @@ export class File extends HeyApiClient {
       directory?: string
       path?: string
       format?: "html" | "pdf" | "docx" | "latex" | "pptx"
+      readiness?: "draft" | "reviewed"
+      review_id?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3721,6 +4119,8 @@ export class File extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "body", key: "path" },
             { in: "body", key: "format" },
+            { in: "body", key: "readiness" },
+            { in: "body", key: "review_id" },
           ],
         },
       ],
@@ -3754,6 +4154,16 @@ export class File extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _annotations?: Annotations
+  get annotations(): Annotations {
+    return (this._annotations ??= new Annotations({ client: this.client }))
+  }
+
+  private _reviews?: Reviews
+  get reviews(): Reviews {
+    return (this._reviews ??= new Reviews({ client: this.client }))
   }
 }
 

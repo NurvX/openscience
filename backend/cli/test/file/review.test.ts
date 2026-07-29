@@ -155,15 +155,13 @@ describe("PublicationReview", () => {
       },
     })
 
-    await Provenance.record(
-      {
-        kind: "artifact",
-        label: "Response figure",
-        artifactType: "figure",
-        path: "figures/response.svg",
-        meta: { directory: tmp.path },
-      } as Parameters<typeof Provenance.record>[0],
-    )
+    await Provenance.record({
+      kind: "artifact",
+      label: "Response figure",
+      artifactType: "figure",
+      path: "figures/response.svg",
+      meta: { directory: tmp.path },
+    } as Parameters<typeof Provenance.record>[0])
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {

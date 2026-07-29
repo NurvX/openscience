@@ -89,6 +89,11 @@ export namespace PublicationReview {
   })
   export type Report = z.infer<typeof Report>
 
+  export const State = Report.extend({
+    stale: z.boolean(),
+  })
+  export type State = z.infer<typeof State>
+
   export const RunInput = z.object({
     path: z.string().trim().min(1).max(10_000),
     actor: z.string().trim().min(1).max(200).default("OpenScience"),
@@ -153,6 +158,16 @@ export namespace PublicationReview {
 
   export async function latest(filepath: string): Promise<Report | undefined> {
     return (await history(filepath)).at(-1)
+  }
+
+  export async function current(filepath: string): Promise<State | undefined> {
+    const report = await latest(filepath)
+    if (!report) return
+    const source = await target(filepath)
+    const stale =
+      !(await Bun.file(source.absolute).exists()) ||
+      (await digest(source.absolute).catch(() => "")) !== report.artifactHash
+    return State.parse({ ...report, stale })
   }
 
   export async function history(filepath: string): Promise<Report[]> {

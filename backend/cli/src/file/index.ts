@@ -19,6 +19,7 @@ import { ScienceFile } from "./science"
 import { ArtifactFile } from "./artifacts"
 import { StarterFile } from "./starters"
 import { PublicationFile } from "./publication"
+import { PublicationReview } from "./review"
 
 export namespace File {
   const log = Log.create({ service: "file" })
@@ -388,6 +389,33 @@ export namespace File {
 
   export async function publication(input: PublicationFile.Input): Promise<PublicationFile.Result> {
     return PublicationFile.render(Instance.directory, input)
+  }
+
+  export async function review(input: PublicationReview.RunInput): Promise<PublicationReview.Report> {
+    return PublicationReview.run(input)
+  }
+
+  export async function reviewCurrent(file: string): Promise<PublicationReview.State | undefined> {
+    return PublicationReview.current(file)
+  }
+
+  export async function reviewHistory(file: string): Promise<PublicationReview.Report[]> {
+    return PublicationReview.history(file)
+  }
+
+  export async function reviewResolve(
+    id: string,
+    finding: string,
+    input: PublicationReview.ResolveInput,
+  ): Promise<PublicationReview.Report> {
+    return PublicationReview.resolve(id, finding, input)
+  }
+
+  export async function reviewFinalize(
+    id: string,
+    input: PublicationReview.FinalizeInput,
+  ): Promise<PublicationReview.Report> {
+    return PublicationReview.finalize(id, input)
   }
 
   export async function write(file: string, content: string): Promise<Content> {

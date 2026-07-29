@@ -11,6 +11,7 @@ import { ArtifactFile } from "../../file/artifacts"
 import { StarterFile } from "../../file/starters"
 import { PublicationFile } from "../../file/publication"
 import { ArtifactAnnotation } from "../../file/annotations"
+import { PublicationReview } from "../../file/review"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -475,6 +476,119 @@ export const FileRoutes = lazy(() =>
       }),
       validator("json", PublicationFile.Input),
       async (c) => c.json(await File.publication(c.req.valid("json"))),
+    )
+    .get(
+      "/file/reviews",
+      describeRoute({
+        summary: "Read the current publication review",
+        description:
+          "Return the latest deterministic review report and whether it is stale for the current source bytes.",
+        operationId: "file.reviews.current",
+        responses: {
+          200: {
+            description: "Current publication review",
+            content: { "application/json": { schema: resolver(PublicationReview.State) } },
+          },
+          404: { description: "No publication review exists for this manuscript" },
+        },
+      }),
+      validator("query", z.object({ path: z.string().trim().min(1).max(10_000) })),
+      async (c) => {
+        const report = await File.reviewCurrent(c.req.valid("query").path)
+        if (!report) return c.json({ error: "No publication review exists for this manuscript" }, 404)
+        return c.json(report)
+      },
+    )
+    .get(
+      "/file/reviews/history",
+      describeRoute({
+        summary: "List publication review history",
+        description: "List prior deterministic review reports for every reviewed version of a manuscript.",
+        operationId: "file.reviews.history",
+        responses: {
+          200: {
+            description: "Publication review history",
+            content: { "application/json": { schema: resolver(PublicationReview.Report.array()) } },
+          },
+        },
+      }),
+      validator("query", z.object({ path: z.string().trim().min(1).max(10_000) })),
+      async (c) => c.json(await File.reviewHistory(c.req.valid("query").path)),
+    )
+    .post(
+      "/file/reviews",
+      describeRoute({
+        summary: "Run deterministic publication checks",
+        description:
+          "Check citations, numeric traces, figures, and provenance for the exact Markdown manuscript bytes.",
+        operationId: "file.reviews.run",
+        responses: {
+          200: {
+            description: "Generated publication review",
+            content: { "application/json": { schema: resolver(PublicationReview.Report) } },
+          },
+        },
+      }),
+      validator("json", PublicationReview.RunInput),
+      async (c) => c.json(await File.review(c.req.valid("json"))),
+    )
+    .patch(
+      "/file/reviews/:id/findings/:finding",
+      describeRoute({
+        summary: "Resolve or override a publication finding",
+        description: "Record an attributed reason and close one deterministic review finding.",
+        operationId: "file.reviews.resolve",
+        responses: {
+          200: {
+            description: "Updated publication review",
+            content: { "application/json": { schema: resolver(PublicationReview.Report) } },
+          },
+          409: { description: "Finding cannot be updated" },
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          id: z.string().startsWith("review_"),
+          finding: z.string().startsWith("finding_"),
+        }),
+      ),
+      validator("json", PublicationReview.ResolveInput),
+      async (c) => {
+        const params = c.req.valid("param")
+        const result = await File.reviewResolve(params.id, params.finding, c.req.valid("json")).then(
+          (value) => ({ value }),
+          (error) => ({ error: error instanceof Error ? error.message : String(error) }),
+        )
+        if ("error" in result) return c.json({ error: result.error }, 409)
+        return c.json(result.value)
+      },
+    )
+    .post(
+      "/file/reviews/:id/finalize",
+      describeRoute({
+        summary: "Finalize a publication review",
+        description:
+          "Bind publication-ready state to the exact reviewed source hash after all blocking findings close.",
+        operationId: "file.reviews.finalize",
+        responses: {
+          200: {
+            description: "Finalized publication review",
+            content: { "application/json": { schema: resolver(PublicationReview.Report) } },
+          },
+          409: { description: "Review is blocked, stale, or already invalid" },
+        },
+      }),
+      validator("param", z.object({ id: z.string().startsWith("review_") })),
+      validator("json", PublicationReview.FinalizeInput),
+      async (c) => {
+        const result = await File.reviewFinalize(c.req.valid("param").id, c.req.valid("json")).then(
+          (value) => ({ value }),
+          (error) => ({ error: error instanceof Error ? error.message : String(error) }),
+        )
+        if ("error" in result) return c.json({ error: result.error }, 409)
+        return c.json(result.value)
+      },
     )
     .get(
       "/file/status",

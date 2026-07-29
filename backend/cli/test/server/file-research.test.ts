@@ -69,6 +69,83 @@ describe("/file research routes", () => {
     })
   })
 
+  test("runs, resolves, finalizes, and detects stale publication reviews", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "README.md"), "# Review API fixture\n")
+        await Bun.write(path.join(directory, "uv.lock"), "version = 1\n")
+        await Bun.write(path.join(directory, "pyproject.toml"), '[project]\nname = "review-api"\n')
+        await Bun.write(path.join(directory, "report.md"), "# Result\n\nPrior evidence is unresolved [@missing2024].\n")
+        await Bun.$`git add README.md uv.lock pyproject.toml report.md`.cwd(directory).quiet()
+        await Bun.$`git -c user.name=OpenScience -c user.email=test@openscience.local commit -m "review API fixture"`
+          .cwd(directory)
+          .quiet()
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const created = await FileRoutes().request("/file/reviews", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "report.md", actor: "Aayam Bansal" }),
+        })
+        expect(created.status).toBe(200)
+        const report = (await created.json()) as {
+          id: string
+          status: string
+          findings: Array<{ id: string; severity: string; status: string }>
+        }
+        expect(report.status).toBe("blocked")
+
+        const current = await FileRoutes().request("/file/reviews?path=report.md")
+        expect(current.status).toBe(200)
+        expect(await current.json()).toMatchObject({ id: report.id, stale: false })
+
+        const blocked = await FileRoutes().request(`/file/reviews/${report.id}/finalize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor: "Aayam Bansal" }),
+        })
+        expect(blocked.status).toBe(409)
+
+        for (const finding of report.findings.filter((item) => item.severity === "blocking")) {
+          const resolved = await FileRoutes().request(`/file/reviews/${report.id}/findings/${finding.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              status: "overridden",
+              actor: "Aayam Bansal",
+              reason: "Accepted for the internal preview with an explicit audit record.",
+            }),
+          })
+          expect(resolved.status).toBe(200)
+        }
+
+        const finalized = await FileRoutes().request(`/file/reviews/${report.id}/finalize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor: "Aayam Bansal" }),
+        })
+        expect(finalized.status).toBe(200)
+        expect(await finalized.json()).toMatchObject({
+          id: report.id,
+          finalized: { actor: "Aayam Bansal" },
+        })
+
+        await Bun.write(path.join(tmp.path, "report.md"), "# Changed result\n")
+        expect(await (await FileRoutes().request("/file/reviews?path=report.md")).json()).toMatchObject({
+          id: report.id,
+          stale: true,
+        })
+        const history = await FileRoutes().request("/file/reviews/history?path=report.md")
+        expect(history.status).toBe(200)
+        expect((await history.json()) as unknown[]).toHaveLength(1)
+      },
+    })
+  })
+
   test("versions, resolves, edits, and tombstones durable artifact annotations", async () => {
     await using tmp = await tmpdir({
       init: async (directory) => {

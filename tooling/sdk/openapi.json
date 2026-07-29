@@ -9244,6 +9244,1507 @@
         ]
       }
     },
+    "/file/annotations": {
+      "get": {
+        "operationId": "file.annotations.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "List artifact annotations",
+        "description": "List durable review threads anchored to a project artifact.",
+        "responses": {
+          "200": {
+            "description": "Artifact annotations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "projectID": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "artifactHash": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "anchor": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "artifact"
+                              },
+                              "label": {
+                                "type": "string",
+                                "maxLength": 500
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "text"
+                              },
+                              "startLine": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "endLine": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "quote": {
+                                "type": "string",
+                                "maxLength": 10000
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "startLine",
+                              "endLine"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "notebook"
+                              },
+                              "cellId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              "line": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "cellId"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "molecule"
+                              },
+                              "selection": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000
+                              },
+                              "count": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "selection"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "genome"
+                              },
+                              "chromosome": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "start": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "end": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "chromosome",
+                              "start",
+                              "end"
+                            ]
+                          }
+                        ]
+                      },
+                      "messages": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "body": {
+                              "type": "string"
+                            },
+                            "author": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "body",
+                            "author",
+                            "createdAt"
+                          ]
+                        }
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "open",
+                          "resolved"
+                        ]
+                      },
+                      "version": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "revisions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "version": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "event": {
+                              "type": "string",
+                              "enum": [
+                                "created",
+                                "edited",
+                                "replied",
+                                "resolved",
+                                "reopened",
+                                "deleted"
+                              ]
+                            },
+                            "actor": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "number"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "open",
+                                "resolved"
+                              ]
+                            },
+                            "messages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "body": {
+                                    "type": "string"
+                                  },
+                                  "author": {
+                                    "type": "string"
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "body",
+                                  "author",
+                                  "createdAt"
+                                ]
+                              }
+                            },
+                            "deletedAt": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "version",
+                            "event",
+                            "actor",
+                            "at",
+                            "status",
+                            "messages"
+                          ]
+                        }
+                      },
+                      "createdAt": {
+                        "type": "number"
+                      },
+                      "updatedAt": {
+                        "type": "number"
+                      },
+                      "deletedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "projectID",
+                      "path",
+                      "artifactHash",
+                      "anchor",
+                      "messages",
+                      "status",
+                      "version",
+                      "revisions",
+                      "createdAt",
+                      "updatedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.annotations.list({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "file.annotations.create",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Create an artifact annotation",
+        "description": "Create a durable review thread anchored to an artifact, text range, notebook cell, molecule, or locus.",
+        "responses": {
+          "200": {
+            "description": "Created annotation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectID": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "artifactHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "anchor": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "artifact"
+                            },
+                            "label": {
+                              "type": "string",
+                              "maxLength": 500
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "text"
+                            },
+                            "startLine": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "endLine": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "quote": {
+                              "type": "string",
+                              "maxLength": 10000
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "startLine",
+                            "endLine"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "notebook"
+                            },
+                            "cellId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 500
+                            },
+                            "line": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "cellId"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "molecule"
+                            },
+                            "selection": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 2000
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "selection"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "genome"
+                            },
+                            "chromosome": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "start": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "end": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "chromosome",
+                            "start",
+                            "end"
+                          ]
+                        }
+                      ]
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "author": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "body",
+                          "author",
+                          "createdAt"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "resolved"
+                      ]
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "revisions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "event": {
+                            "type": "string",
+                            "enum": [
+                              "created",
+                              "edited",
+                              "replied",
+                              "resolved",
+                              "reopened",
+                              "deleted"
+                            ]
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "resolved"
+                            ]
+                          },
+                          "messages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "type": "string"
+                                },
+                                "author": {
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "body",
+                                "author",
+                                "createdAt"
+                              ]
+                            }
+                          },
+                          "deletedAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "event",
+                          "actor",
+                          "at",
+                          "status",
+                          "messages"
+                        ]
+                      }
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    },
+                    "deletedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectID",
+                    "path",
+                    "artifactHash",
+                    "anchor",
+                    "messages",
+                    "status",
+                    "version",
+                    "revisions",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 10000
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  },
+                  "author": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "anchor": {
+                    "default": {
+                      "kind": "artifact"
+                    },
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "artifact"
+                          },
+                          "label": {
+                            "type": "string",
+                            "maxLength": 500
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "text"
+                          },
+                          "startLine": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "endLine": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "quote": {
+                            "type": "string",
+                            "maxLength": 10000
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "startLine",
+                          "endLine"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "notebook"
+                          },
+                          "cellId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          "line": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "cellId"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "molecule"
+                          },
+                          "selection": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "selection"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "genome"
+                          },
+                          "chromosome": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "start": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "end": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "chromosome",
+                          "start",
+                          "end"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "path",
+                  "body"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.annotations.create({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/annotations/{id}/history": {
+      "get": {
+        "operationId": "file.annotations.history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "pattern": "^ann_.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Read artifact annotation history",
+        "description": "Read every immutable revision of an artifact review thread, including a recoverable tombstone.",
+        "responses": {
+          "200": {
+            "description": "Versioned artifact annotation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectID": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "artifactHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "anchor": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "artifact"
+                            },
+                            "label": {
+                              "type": "string",
+                              "maxLength": 500
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "text"
+                            },
+                            "startLine": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "endLine": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "quote": {
+                              "type": "string",
+                              "maxLength": 10000
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "startLine",
+                            "endLine"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "notebook"
+                            },
+                            "cellId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 500
+                            },
+                            "line": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "cellId"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "molecule"
+                            },
+                            "selection": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 2000
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "selection"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "genome"
+                            },
+                            "chromosome": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "start": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "end": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "chromosome",
+                            "start",
+                            "end"
+                          ]
+                        }
+                      ]
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "author": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "body",
+                          "author",
+                          "createdAt"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "resolved"
+                      ]
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "revisions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "event": {
+                            "type": "string",
+                            "enum": [
+                              "created",
+                              "edited",
+                              "replied",
+                              "resolved",
+                              "reopened",
+                              "deleted"
+                            ]
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "resolved"
+                            ]
+                          },
+                          "messages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "type": "string"
+                                },
+                                "author": {
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "body",
+                                "author",
+                                "createdAt"
+                              ]
+                            }
+                          },
+                          "deletedAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "event",
+                          "actor",
+                          "at",
+                          "status",
+                          "messages"
+                        ]
+                      }
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    },
+                    "deletedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectID",
+                    "path",
+                    "artifactHash",
+                    "anchor",
+                    "messages",
+                    "status",
+                    "version",
+                    "revisions",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.annotations.history({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/annotations/{id}": {
+      "patch": {
+        "operationId": "file.annotations.update",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "pattern": "^ann_.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Update an artifact annotation",
+        "description": "Reply to, resolve, or reopen an artifact review thread.",
+        "responses": {
+          "200": {
+            "description": "Updated annotation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectID": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "artifactHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "anchor": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "artifact"
+                            },
+                            "label": {
+                              "type": "string",
+                              "maxLength": 500
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "text"
+                            },
+                            "startLine": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "endLine": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "quote": {
+                              "type": "string",
+                              "maxLength": 10000
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "startLine",
+                            "endLine"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "notebook"
+                            },
+                            "cellId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 500
+                            },
+                            "line": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "cellId"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "molecule"
+                            },
+                            "selection": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 2000
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "selection"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "genome"
+                            },
+                            "chromosome": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "start": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "end": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "chromosome",
+                            "start",
+                            "end"
+                          ]
+                        }
+                      ]
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "author": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "body",
+                          "author",
+                          "createdAt"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "resolved"
+                      ]
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "revisions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "event": {
+                            "type": "string",
+                            "enum": [
+                              "created",
+                              "edited",
+                              "replied",
+                              "resolved",
+                              "reopened",
+                              "deleted"
+                            ]
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "resolved"
+                            ]
+                          },
+                          "messages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "type": "string"
+                                },
+                                "author": {
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "body",
+                                "author",
+                                "createdAt"
+                              ]
+                            }
+                          },
+                          "deletedAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "event",
+                          "actor",
+                          "at",
+                          "status",
+                          "messages"
+                        ]
+                      }
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    },
+                    "deletedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectID",
+                    "path",
+                    "artifactHash",
+                    "anchor",
+                    "messages",
+                    "status",
+                    "version",
+                    "revisions",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "resolved"
+                    ]
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  },
+                  "reply": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  },
+                  "author": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.annotations.update({\n  ...\n})"
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "file.annotations.delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "pattern": "^ann_.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Tombstone an artifact annotation",
+        "description": "Hide an artifact review thread while retaining its recoverable revision history.",
+        "responses": {
+          "200": {
+            "description": "Tombstoned annotation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "deleted",
+                    "version"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.annotations.delete({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/file/manifest": {
       "get": {
         "operationId": "file.manifest",
@@ -9543,6 +11044,16 @@
                     },
                     "engine": {
                       "type": "string"
+                    },
+                    "readiness": {
+                      "type": "string",
+                      "enum": [
+                        "draft",
+                        "reviewed"
+                      ]
+                    },
+                    "review_id": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -9550,7 +11061,8 @@
                     "format",
                     "size",
                     "created_at",
-                    "engine"
+                    "engine",
+                    "readiness"
                   ]
                 }
               }
@@ -9577,6 +11089,18 @@
                       "latex",
                       "pptx"
                     ]
+                  },
+                  "readiness": {
+                    "default": "draft",
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "reviewed"
+                    ]
+                  },
+                  "review_id": {
+                    "type": "string",
+                    "pattern": "^review_.*"
                   }
                 },
                 "required": [
@@ -9591,6 +11115,1659 @@
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.publication({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/reviews": {
+      "get": {
+        "operationId": "file.reviews.current",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 10000
+            },
+            "required": true
+          }
+        ],
+        "summary": "Read the current publication review",
+        "description": "Return the latest deterministic review report and whether it is stale for the current source bytes.",
+        "responses": {
+          "200": {
+            "description": "Current publication review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "const": "openscience.publication-review.v1"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectID": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "artifactHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "blocked",
+                        "warnings",
+                        "ready"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "open": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "blocking": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "major": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "minor": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "info": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "resolved": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "overridden": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "open",
+                        "blocking",
+                        "major",
+                        "minor",
+                        "info",
+                        "resolved",
+                        "overridden"
+                      ]
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "check": {
+                            "type": "string",
+                            "enum": [
+                              "citation",
+                              "numeric",
+                              "figure",
+                              "provenance"
+                            ]
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": [
+                              "blocking",
+                              "major",
+                              "minor",
+                              "info"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "resolved",
+                              "overridden"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "evidence": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "location": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "line": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ]
+                          },
+                          "resolution": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "resolved",
+                                  "overridden"
+                                ]
+                              },
+                              "actor": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "actor",
+                              "reason",
+                              "at"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "check",
+                          "severity",
+                          "status",
+                          "title",
+                          "detail",
+                          "evidence",
+                          "location"
+                        ]
+                      }
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "generated",
+                              "resolved",
+                              "overridden",
+                              "finalized"
+                            ]
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "findingID": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "type",
+                          "actor",
+                          "at"
+                        ]
+                      }
+                    },
+                    "finalized": {
+                      "type": "object",
+                      "properties": {
+                        "actor": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "number"
+                        },
+                        "artifactHash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "actor",
+                        "at",
+                        "artifactHash"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    },
+                    "stale": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "id",
+                    "projectID",
+                    "path",
+                    "artifactHash",
+                    "version",
+                    "status",
+                    "summary",
+                    "findings",
+                    "events",
+                    "createdAt",
+                    "updatedAt",
+                    "stale"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No publication review exists for this manuscript"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.reviews.current({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "file.reviews.run",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Run deterministic publication checks",
+        "description": "Check citations, numeric traces, figures, and provenance for the exact Markdown manuscript bytes.",
+        "responses": {
+          "200": {
+            "description": "Generated publication review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "const": "openscience.publication-review.v1"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectID": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "artifactHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "blocked",
+                        "warnings",
+                        "ready"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "open": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "blocking": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "major": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "minor": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "info": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "resolved": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "overridden": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "open",
+                        "blocking",
+                        "major",
+                        "minor",
+                        "info",
+                        "resolved",
+                        "overridden"
+                      ]
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "check": {
+                            "type": "string",
+                            "enum": [
+                              "citation",
+                              "numeric",
+                              "figure",
+                              "provenance"
+                            ]
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": [
+                              "blocking",
+                              "major",
+                              "minor",
+                              "info"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "resolved",
+                              "overridden"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "evidence": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "location": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "line": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ]
+                          },
+                          "resolution": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "resolved",
+                                  "overridden"
+                                ]
+                              },
+                              "actor": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "actor",
+                              "reason",
+                              "at"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "check",
+                          "severity",
+                          "status",
+                          "title",
+                          "detail",
+                          "evidence",
+                          "location"
+                        ]
+                      }
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "generated",
+                              "resolved",
+                              "overridden",
+                              "finalized"
+                            ]
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "findingID": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "type",
+                          "actor",
+                          "at"
+                        ]
+                      }
+                    },
+                    "finalized": {
+                      "type": "object",
+                      "properties": {
+                        "actor": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "number"
+                        },
+                        "artifactHash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "actor",
+                        "at",
+                        "artifactHash"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "id",
+                    "projectID",
+                    "path",
+                    "artifactHash",
+                    "version",
+                    "status",
+                    "summary",
+                    "findings",
+                    "events",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 10000
+                  },
+                  "actor": {
+                    "default": "OpenScience",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.reviews.run({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/reviews/history": {
+      "get": {
+        "operationId": "file.reviews.history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 10000
+            },
+            "required": true
+          }
+        ],
+        "summary": "List publication review history",
+        "description": "List prior deterministic review reports for every reviewed version of a manuscript.",
+        "responses": {
+          "200": {
+            "description": "Publication review history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "format": {
+                        "type": "string",
+                        "const": "openscience.publication-review.v1"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "projectID": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "artifactHash": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "version": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "blocked",
+                          "warnings",
+                          "ready"
+                        ]
+                      },
+                      "summary": {
+                        "type": "object",
+                        "properties": {
+                          "total": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "open": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "blocking": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "major": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "minor": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "info": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "resolved": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "overridden": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "total",
+                          "open",
+                          "blocking",
+                          "major",
+                          "minor",
+                          "info",
+                          "resolved",
+                          "overridden"
+                        ]
+                      },
+                      "findings": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "check": {
+                              "type": "string",
+                              "enum": [
+                                "citation",
+                                "numeric",
+                                "figure",
+                                "provenance"
+                              ]
+                            },
+                            "severity": {
+                              "type": "string",
+                              "enum": [
+                                "blocking",
+                                "major",
+                                "minor",
+                                "info"
+                              ]
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "open",
+                                "resolved",
+                                "overridden"
+                              ]
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "detail": {
+                              "type": "string"
+                            },
+                            "evidence": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "location": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string"
+                                },
+                                "line": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "path"
+                              ]
+                            },
+                            "resolution": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "resolved",
+                                    "overridden"
+                                  ]
+                                },
+                                "actor": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "actor",
+                                "reason",
+                                "at"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "check",
+                            "severity",
+                            "status",
+                            "title",
+                            "detail",
+                            "evidence",
+                            "location"
+                          ]
+                        }
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "version": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "generated",
+                                "resolved",
+                                "overridden",
+                                "finalized"
+                              ]
+                            },
+                            "actor": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "number"
+                            },
+                            "findingID": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "version",
+                            "type",
+                            "actor",
+                            "at"
+                          ]
+                        }
+                      },
+                      "finalized": {
+                        "type": "object",
+                        "properties": {
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "artifactHash": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          }
+                        },
+                        "required": [
+                          "actor",
+                          "at",
+                          "artifactHash"
+                        ]
+                      },
+                      "createdAt": {
+                        "type": "number"
+                      },
+                      "updatedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "format",
+                      "id",
+                      "projectID",
+                      "path",
+                      "artifactHash",
+                      "version",
+                      "status",
+                      "summary",
+                      "findings",
+                      "events",
+                      "createdAt",
+                      "updatedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.reviews.history({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/reviews/{id}/findings/{finding}": {
+      "patch": {
+        "operationId": "file.reviews.resolve",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "pattern": "^review_.*"
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "finding",
+            "schema": {
+              "type": "string",
+              "pattern": "^finding_.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Resolve or override a publication finding",
+        "description": "Record an attributed reason and close one deterministic review finding.",
+        "responses": {
+          "200": {
+            "description": "Updated publication review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "const": "openscience.publication-review.v1"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectID": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "artifactHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "blocked",
+                        "warnings",
+                        "ready"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "open": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "blocking": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "major": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "minor": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "info": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "resolved": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "overridden": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "open",
+                        "blocking",
+                        "major",
+                        "minor",
+                        "info",
+                        "resolved",
+                        "overridden"
+                      ]
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "check": {
+                            "type": "string",
+                            "enum": [
+                              "citation",
+                              "numeric",
+                              "figure",
+                              "provenance"
+                            ]
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": [
+                              "blocking",
+                              "major",
+                              "minor",
+                              "info"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "resolved",
+                              "overridden"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "evidence": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "location": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "line": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ]
+                          },
+                          "resolution": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "resolved",
+                                  "overridden"
+                                ]
+                              },
+                              "actor": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "actor",
+                              "reason",
+                              "at"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "check",
+                          "severity",
+                          "status",
+                          "title",
+                          "detail",
+                          "evidence",
+                          "location"
+                        ]
+                      }
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "generated",
+                              "resolved",
+                              "overridden",
+                              "finalized"
+                            ]
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "findingID": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "type",
+                          "actor",
+                          "at"
+                        ]
+                      }
+                    },
+                    "finalized": {
+                      "type": "object",
+                      "properties": {
+                        "actor": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "number"
+                        },
+                        "artifactHash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "actor",
+                        "at",
+                        "artifactHash"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "id",
+                    "projectID",
+                    "path",
+                    "artifactHash",
+                    "version",
+                    "status",
+                    "summary",
+                    "findings",
+                    "events",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Finding cannot be updated"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "resolved",
+                      "overridden"
+                    ]
+                  },
+                  "actor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 20000
+                  }
+                },
+                "required": [
+                  "status",
+                  "actor",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.reviews.resolve({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/file/reviews/{id}/finalize": {
+      "post": {
+        "operationId": "file.reviews.finalize",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "pattern": "^review_.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Finalize a publication review",
+        "description": "Bind publication-ready state to the exact reviewed source hash after all blocking findings close.",
+        "responses": {
+          "200": {
+            "description": "Finalized publication review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "const": "openscience.publication-review.v1"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "projectID": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "artifactHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "blocked",
+                        "warnings",
+                        "ready"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "open": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "blocking": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "major": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "minor": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "info": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "resolved": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "overridden": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "open",
+                        "blocking",
+                        "major",
+                        "minor",
+                        "info",
+                        "resolved",
+                        "overridden"
+                      ]
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "check": {
+                            "type": "string",
+                            "enum": [
+                              "citation",
+                              "numeric",
+                              "figure",
+                              "provenance"
+                            ]
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": [
+                              "blocking",
+                              "major",
+                              "minor",
+                              "info"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "resolved",
+                              "overridden"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "evidence": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "location": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "line": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "path"
+                            ]
+                          },
+                          "resolution": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "resolved",
+                                  "overridden"
+                                ]
+                              },
+                              "actor": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "actor",
+                              "reason",
+                              "at"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "check",
+                          "severity",
+                          "status",
+                          "title",
+                          "detail",
+                          "evidence",
+                          "location"
+                        ]
+                      }
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "version": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "generated",
+                              "resolved",
+                              "overridden",
+                              "finalized"
+                            ]
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "number"
+                          },
+                          "findingID": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "type",
+                          "actor",
+                          "at"
+                        ]
+                      }
+                    },
+                    "finalized": {
+                      "type": "object",
+                      "properties": {
+                        "actor": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "number"
+                        },
+                        "artifactHash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "actor",
+                        "at",
+                        "artifactHash"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "id",
+                    "projectID",
+                    "path",
+                    "artifactHash",
+                    "version",
+                    "status",
+                    "summary",
+                    "findings",
+                    "events",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review is blocked, stale, or already invalid"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "actor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "actor"
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.file.reviews.finalize({\n  ...\n})"
           }
         ]
       }

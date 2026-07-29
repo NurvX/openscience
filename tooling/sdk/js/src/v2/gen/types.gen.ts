@@ -5871,6 +5871,370 @@ export type FileReproducibilityResponses = {
 
 export type FileReproducibilityResponse = FileReproducibilityResponses[keyof FileReproducibilityResponses]
 
+export type FileAnnotationsListData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/annotations"
+}
+
+export type FileAnnotationsListResponses = {
+  /**
+   * Artifact annotations
+   */
+  200: Array<{
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }>
+}
+
+export type FileAnnotationsListResponse = FileAnnotationsListResponses[keyof FileAnnotationsListResponses]
+
+export type FileAnnotationsCreateData = {
+  body?: {
+    path: string
+    body: string
+    author?: string
+    anchor?:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations"
+}
+
+export type FileAnnotationsCreateResponses = {
+  /**
+   * Created annotation
+   */
+  200: {
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }
+}
+
+export type FileAnnotationsCreateResponse = FileAnnotationsCreateResponses[keyof FileAnnotationsCreateResponses]
+
+export type FileAnnotationsHistoryData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations/{id}/history"
+}
+
+export type FileAnnotationsHistoryResponses = {
+  /**
+   * Versioned artifact annotation
+   */
+  200: {
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }
+}
+
+export type FileAnnotationsHistoryResponse = FileAnnotationsHistoryResponses[keyof FileAnnotationsHistoryResponses]
+
+export type FileAnnotationsDeleteData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations/{id}"
+}
+
+export type FileAnnotationsDeleteResponses = {
+  /**
+   * Tombstoned annotation
+   */
+  200: {
+    deleted: true
+    version: number
+  }
+}
+
+export type FileAnnotationsDeleteResponse = FileAnnotationsDeleteResponses[keyof FileAnnotationsDeleteResponses]
+
+export type FileAnnotationsUpdateData = {
+  body?: {
+    status?: "open" | "resolved"
+    body?: string
+    reply?: string
+    author?: string
+  }
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations/{id}"
+}
+
+export type FileAnnotationsUpdateResponses = {
+  /**
+   * Updated annotation
+   */
+  200: {
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }
+}
+
+export type FileAnnotationsUpdateResponse = FileAnnotationsUpdateResponses[keyof FileAnnotationsUpdateResponses]
+
 export type FileManifestData = {
   body?: never
   path?: never
@@ -5967,6 +6331,8 @@ export type FilePublicationData = {
   body?: {
     path: string
     format: "html" | "pdf" | "docx" | "latex" | "pptx"
+    readiness?: "draft" | "reviewed"
+    review_id?: string
   }
   path?: never
   query?: {
@@ -5985,10 +6351,400 @@ export type FilePublicationResponses = {
     size: number
     created_at: string
     engine: string
+    readiness: "draft" | "reviewed"
+    review_id?: string
   }
 }
 
 export type FilePublicationResponse = FilePublicationResponses[keyof FilePublicationResponses]
+
+export type FileReviewsCurrentData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/reviews"
+}
+
+export type FileReviewsCurrentErrors = {
+  /**
+   * No publication review exists for this manuscript
+   */
+  404: unknown
+}
+
+export type FileReviewsCurrentResponses = {
+  /**
+   * Current publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+    stale: boolean
+  }
+}
+
+export type FileReviewsCurrentResponse = FileReviewsCurrentResponses[keyof FileReviewsCurrentResponses]
+
+export type FileReviewsRunData = {
+  body?: {
+    path: string
+    actor?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/reviews"
+}
+
+export type FileReviewsRunResponses = {
+  /**
+   * Generated publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type FileReviewsRunResponse = FileReviewsRunResponses[keyof FileReviewsRunResponses]
+
+export type FileReviewsHistoryData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/reviews/history"
+}
+
+export type FileReviewsHistoryResponses = {
+  /**
+   * Publication review history
+   */
+  200: Array<{
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }>
+}
+
+export type FileReviewsHistoryResponse = FileReviewsHistoryResponses[keyof FileReviewsHistoryResponses]
+
+export type FileReviewsResolveData = {
+  body?: {
+    status: "resolved" | "overridden"
+    actor: string
+    reason: string
+  }
+  path: {
+    id: string
+    finding: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/reviews/{id}/findings/{finding}"
+}
+
+export type FileReviewsResolveErrors = {
+  /**
+   * Finding cannot be updated
+   */
+  409: unknown
+}
+
+export type FileReviewsResolveResponses = {
+  /**
+   * Updated publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type FileReviewsResolveResponse = FileReviewsResolveResponses[keyof FileReviewsResolveResponses]
+
+export type FileReviewsFinalizeData = {
+  body?: {
+    actor: string
+  }
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/reviews/{id}/finalize"
+}
+
+export type FileReviewsFinalizeErrors = {
+  /**
+   * Review is blocked, stale, or already invalid
+   */
+  409: unknown
+}
+
+export type FileReviewsFinalizeResponses = {
+  /**
+   * Finalized publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type FileReviewsFinalizeResponse = FileReviewsFinalizeResponses[keyof FileReviewsFinalizeResponses]
 
 export type FileStatusData = {
   body?: never
