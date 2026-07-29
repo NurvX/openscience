@@ -15,9 +15,15 @@ import fuzzysort from "fuzzysort"
 import { Global } from "../global"
 import { FileWatcher } from "./watcher"
 import { createSearchCache } from "./search-cache"
+import { ScienceFile } from "./science"
+import { ArtifactFile } from "./artifacts"
+import { StarterFile } from "./starters"
+import { PublicationFile } from "./publication"
+import { PublicationReview } from "./review"
 
 export namespace File {
   const log = Log.create({ service: "file" })
+  const preview = 8 * 1024 * 1024
 
   export const Info = z
     .object({
@@ -73,6 +79,8 @@ export namespace File {
         .optional(),
       encoding: z.literal("base64").optional(),
       mimeType: z.string().optional(),
+      size: z.number().optional(),
+      truncated: z.boolean().optional(),
     })
     .meta({
       ref: "FileContent",
@@ -212,6 +220,12 @@ export namespace File {
     state()
   }
 
+  async function contained(file: string): Promise<string> {
+    const full = path.join(Instance.directory, file)
+    if (await Instance.containsCanonicalPath(full)) return full
+    throw new Error(`Access denied: path escapes project directory`)
+  }
+
   export async function status() {
     const project = Instance.project
     if (project.vcs !== "git") return []
@@ -289,13 +303,7 @@ export namespace File {
   export async function read(file: string): Promise<Content> {
     using _ = log.time("read", { file })
     const project = Instance.project
-    const full = path.join(Instance.directory, file)
-
-    // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
-    // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    const full = await contained(file)
 
     const bunFile = Bun.file(full)
 
@@ -303,19 +311,37 @@ export namespace File {
       return { type: "text", content: "" }
     }
 
-    const encode = await shouldEncode(bunFile)
+    const encode = ScienceFile.binary(file) || (await shouldEncode(bunFile))
 
     if (encode) {
+      if (bunFile.size > 16 * 1024 * 1024) {
+        return {
+          type: "text",
+          content: "",
+          mimeType: bunFile.type || "application/octet-stream",
+          encoding: "base64",
+          size: bunFile.size,
+          truncated: true,
+        }
+      }
       const buffer = await bunFile.arrayBuffer().catch(() => new ArrayBuffer(0))
       const content = Buffer.from(buffer).toString("base64")
       const mimeType = bunFile.type || "application/octet-stream"
-      return { type: "text", content, mimeType, encoding: "base64" }
+      return { type: "text", content, mimeType, encoding: "base64", size: bunFile.size }
     }
 
-    // Return the file content verbatim — callers like the web editor write
-    // it back, so trimming here would silently strip leading/trailing
-    // whitespace and the trailing newline on the first save.
-    const content = await bunFile.text().catch(() => "")
+    const truncated = bunFile.size > preview
+    // Keep scientific/text previews bounded. The UI treats this response as
+    // read-only, so a partial preview can never overwrite the source file.
+    const content = await (truncated ? bunFile.slice(0, preview) : bunFile).text().catch(() => "")
+    if (truncated) {
+      return {
+        type: "text",
+        content,
+        size: bunFile.size,
+        truncated: true,
+      }
+    }
 
     if (project.vcs === "git") {
       let diff = await $`git diff ${file}`.cwd(Instance.directory).quiet().nothrow().text()
@@ -333,12 +359,77 @@ export namespace File {
     return { type: "text", content }
   }
 
+  export async function inspect(file: string): Promise<ScienceFile.Inspection> {
+    const full = await contained(file)
+    return ScienceFile.inspect(full, file)
+  }
+
+  export async function raw(file: string): Promise<BunFile> {
+    const full = await contained(file)
+    const content = Bun.file(full)
+    if (!(await content.exists())) throw new HTTPException(404, { message: `File not found: ${file}` })
+    return content
+  }
+
+  export async function artifacts(): Promise<ArtifactFile.Info[]> {
+    return ArtifactFile.scan(Instance.directory)
+  }
+
+  export async function provenance(file: string): Promise<ArtifactFile.Provenance> {
+    await contained(file)
+    return ArtifactFile.provenance(Instance.directory, file)
+  }
+
+  export async function reproducibility(): Promise<ArtifactFile.Audit> {
+    return ArtifactFile.audit(Instance.directory)
+  }
+
+  export async function manifest(): Promise<ArtifactFile.Manifest> {
+    return ArtifactFile.manifest(Instance.directory)
+  }
+
+  export async function starter(template: StarterFile.Template): Promise<StarterFile.Result> {
+    return StarterFile.create(Instance.directory, template)
+  }
+
+  export async function publicationCapabilities(): Promise<PublicationFile.Capabilities> {
+    return PublicationFile.capabilities()
+  }
+
+  export async function publication(input: PublicationFile.Input): Promise<PublicationFile.Result> {
+    return PublicationFile.render(Instance.directory, input)
+  }
+
+  export async function review(input: PublicationReview.RunInput): Promise<PublicationReview.Report> {
+    return PublicationReview.run(input)
+  }
+
+  export async function reviewCurrent(file: string): Promise<PublicationReview.State | undefined> {
+    return PublicationReview.current(file)
+  }
+
+  export async function reviewHistory(file: string): Promise<PublicationReview.Report[]> {
+    return PublicationReview.history(file)
+  }
+
+  export async function reviewResolve(
+    id: string,
+    finding: string,
+    input: PublicationReview.ResolveInput,
+  ): Promise<PublicationReview.Report> {
+    return PublicationReview.resolve(id, finding, input)
+  }
+
+  export async function reviewFinalize(
+    id: string,
+    input: PublicationReview.FinalizeInput,
+  ): Promise<PublicationReview.Report> {
+    return PublicationReview.finalize(id, input)
+  }
+
   export async function write(file: string, content: string): Promise<Content> {
     using _ = log.time("write", { file })
-    const full = path.join(Instance.directory, file)
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    const full = await contained(file)
 
     const exists = await Bun.file(full).exists()
     await Bun.write(full, content)
@@ -369,10 +460,7 @@ export namespace File {
       ignored = ig.ignores.bind(ig)
     }
     const resolved = dir ? path.join(Instance.directory, dir) : Instance.directory
-
-    // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
-    // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(resolved)) {
+    if (!(await Instance.containsCanonicalPath(resolved))) {
       throw new Error(`Access denied: path escapes project directory`)
     }
 

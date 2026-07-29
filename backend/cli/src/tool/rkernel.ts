@@ -382,6 +382,10 @@ class RKernelManager implements KernelManager {
     this.kernels.delete(sessionID)
   }
 
+  active(sessionID: string): boolean {
+    return this.kernels.get(sessionID)?.ready ?? false
+  }
+
   async shutdownAll(): Promise<void> {
     for (const [id, k] of this.kernels) {
       await k.shutdown()

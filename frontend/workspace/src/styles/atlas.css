@@ -92,15 +92,18 @@
   --text-xl: 16px;
   --text-2xl: 20px;
 
-  --font-sans: "Computer Modern", "Latin Modern Roman", Georgia, "Times New Roman", serif;
+  --font-sans:
+    "Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --font-serif: "Computer Modern", "Latin Modern Roman", Georgia, "Times New Roman", serif;
   /* Code font: single source. --font-family-mono is owned by @synsci/ui theme.css
      and written at runtime by the Settings mono-font picker (self-hosted Nerd
      Font families) — everything code-shaped routes through it. */
   --font-code: var(--font-family-mono);
-  --font-ui-sans: "Computer Modern", "Latin Modern Roman", Georgia, "Times New Roman", serif;
-  /* Bridge @synsci/ui (SessionTurn chat transcript) typography to Computer Modern */
-  --font-family-sans: "Computer Modern", "Latin Modern Roman", Georgia, serif;
+  --font-ui-sans:
+    "Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  /* Bridge @synsci/ui and the workspace shell to the same native app stack. */
+  --font-family-sans:
+    "Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 
   --z-header: 20;
   --z-sticky: 50;
@@ -1148,6 +1151,648 @@ html[data-color-scheme="dark"] .atlas-overlay {
 }
 
 /* ==========================================================
+   Research launchpad
+
+   The empty chat state is a working surface: it reports readiness, exposes
+   real local artifacts, and turns repeatable scientific workflows into
+   editable briefs in the composer.
+   ========================================================== */
+.research-launchpad {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: clamp(34px, 6vh, 74px) clamp(22px, 5vw, 64px) calc(var(--prompt-height, 11.25rem) + 96px);
+  background:
+    radial-gradient(circle at 8% 6%, color-mix(in srgb, var(--color-text) 3.5%, transparent), transparent 25rem),
+    var(--color-bg);
+}
+
+.research-launchpad__inner {
+  width: min(100%, 940px);
+  margin: 0 auto;
+  display: grid;
+  gap: 28px;
+}
+
+.research-launchpad__intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 36px;
+}
+
+.research-launchpad__eyebrow {
+  margin-bottom: 9px;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__intro h1 {
+  margin: 0;
+  max-width: 700px;
+  font-family: var(--font-family-sans);
+  font-size: clamp(30px, 4vw, 46px);
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+.research-launchpad__intro p {
+  max-width: 660px;
+  margin: 14px 0 0;
+  font-family: var(--font-family-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  text-wrap: pretty;
+}
+
+.research-launchpad__project {
+  max-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 4px;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__project > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.research-launchpad__project strong,
+.research-launchpad__project span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-launchpad__project strong {
+  font-family: var(--font-family-sans);
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--color-text);
+}
+
+.research-launchpad__project span {
+  font-family: var(--font-family-mono);
+  font-size: 9px;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__status {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.research-launchpad__status-item {
+  all: unset;
+  box-sizing: border-box;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 15px;
+  color: var(--color-text-faint);
+}
+
+button.research-launchpad__status-item {
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+
+button.research-launchpad__status-item:hover {
+  background: var(--color-accent-subtle);
+  color: var(--color-text);
+}
+
+.research-launchpad__status-item + .research-launchpad__status-item {
+  border-left: 1px solid var(--color-border);
+}
+
+.research-launchpad__status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.research-launchpad__status-item[data-state="attention"] .research-launchpad__status-dot {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 13%, transparent);
+}
+
+.research-launchpad__status-count {
+  min-width: 25px;
+  font-family: var(--font-family-mono);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.research-launchpad__status-item > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.research-launchpad__status-item strong {
+  overflow: hidden;
+  font-family: var(--font-family-sans);
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-launchpad__status-item small {
+  overflow: hidden;
+  font-family: var(--font-family-sans);
+  font-size: 10px;
+  color: var(--color-text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-launchpad__notice {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 35%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-warning-muted) 55%, transparent);
+}
+
+.research-launchpad__notice > div {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+
+.research-launchpad__notice strong {
+  font-family: var(--font-family-sans);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.research-launchpad__notice span {
+  font-family: var(--font-family-sans);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.research-launchpad__notice button {
+  all: unset;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 5px;
+  background: var(--color-surface-solid);
+  font-family: var(--font-family-sans);
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--color-text);
+  cursor: pointer;
+  transition:
+    transform 150ms ease,
+    background 150ms ease;
+}
+
+.research-launchpad__notice button:hover {
+  background: var(--color-bg-elevated);
+}
+
+.research-launchpad__notice button:active {
+  transform: translateY(1px);
+}
+
+.research-launchpad__starters {
+  display: grid;
+  gap: 13px;
+}
+
+.research-launchpad__local-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-success) 6%, transparent);
+  font-family: var(--font-family-mono);
+  font-size: 8px;
+  letter-spacing: 0.05em;
+  color: var(--color-success);
+  text-transform: uppercase;
+}
+
+.research-launchpad__starter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.research-launchpad__starter {
+  all: unset;
+  box-sizing: border-box;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 76px minmax(116px, auto) auto;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-surface-solid) 82%, transparent);
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.research-launchpad__starter:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--starter-accent) 52%, var(--color-border));
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--starter-accent) 10%, transparent);
+}
+
+.research-launchpad__starter:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.research-launchpad__starter-visual {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 18px 20px 13px;
+  border-bottom: 1px solid var(--color-border);
+  background:
+    radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--starter-accent) 16%, transparent), transparent 7rem),
+    color-mix(in srgb, var(--starter-accent) 6%, var(--color-bg-subtle));
+  overflow: hidden;
+}
+
+.research-launchpad__starter-visual::before {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--starter-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--starter-accent) 11%, transparent);
+  content: "";
+}
+
+.research-launchpad__starter-visual i {
+  flex: 1;
+  min-height: 5px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--starter-accent) 38%, transparent);
+}
+
+.research-launchpad__starter-copy {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 13px 13px 10px;
+}
+
+.research-launchpad__starter-copy strong {
+  font-family: var(--font-family-sans);
+  font-size: 12px;
+  font-weight: 620;
+  color: var(--color-text);
+}
+
+.research-launchpad__starter-copy > span {
+  font-family: var(--font-family-sans);
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.research-launchpad__starter-copy small {
+  font-family: var(--font-family-mono);
+  font-size: 8px;
+  line-height: 1.45;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__starter-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 13px;
+  border-top: 1px solid var(--color-border);
+  font-family: var(--font-family-sans);
+  font-size: 9px;
+  font-weight: 570;
+  color: var(--starter-accent);
+}
+
+.research-launchpad__workflows {
+  display: grid;
+  gap: 14px;
+}
+
+.research-launchpad__section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.research-launchpad__section-heading h2 {
+  margin: 0;
+  font-family: var(--font-family-sans);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.research-launchpad__section-heading p {
+  margin: 3px 0 0;
+  font-family: var(--font-family-sans);
+  font-size: 11px;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__worktree {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-family-sans);
+  font-size: 10px;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__worktree select {
+  max-width: 210px;
+  padding: 6px 26px 6px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-surface-solid);
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  color: var(--color-text);
+}
+
+.research-launchpad__workflow-filters {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.research-launchpad__workflow-filters button {
+  all: unset;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface-solid) 68%, transparent);
+  color: var(--color-text-muted);
+  font-family: var(--font-family-sans);
+  font-size: 10px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.research-launchpad__workflow-filters button:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.research-launchpad__workflow-filters button[data-active="true"] {
+  border-color: color-mix(in srgb, var(--color-accent) 46%, var(--color-border));
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+}
+
+.research-launchpad__workflow-filters button span {
+  min-width: 16px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  font-family: var(--font-family-mono);
+  font-size: 8px;
+  text-align: center;
+}
+
+.research-launchpad__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.research-launchpad__workflow {
+  all: unset;
+  box-sizing: border-box;
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface-solid) 74%, transparent);
+  cursor: pointer;
+  transition:
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.research-launchpad__workflow[data-featured="true"] {
+  grid-column: 1 / -1;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 90% 15%, color-mix(in srgb, var(--color-text) 5%, transparent), transparent 16rem),
+    color-mix(in srgb, var(--color-surface-solid) 88%, transparent);
+}
+
+.research-launchpad__workflow:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-solid);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+
+.research-launchpad__workflow:active {
+  transform: translateY(0);
+}
+
+.research-launchpad__workflow-icon {
+  width: 31px;
+  height: 31px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+
+.research-launchpad__workflow-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.research-launchpad__workflow-copy strong {
+  font-family: var(--font-family-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.research-launchpad__workflow-copy > span {
+  max-width: 58ch;
+  font-family: var(--font-family-sans);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+  text-wrap: pretty;
+}
+
+.research-launchpad__workflow-copy small {
+  margin-top: 2px;
+  font-family: var(--font-family-mono);
+  font-size: 9px;
+  letter-spacing: 0.025em;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__workflow-arrow {
+  margin-top: 7px;
+  color: var(--color-text-faint);
+  transition:
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.research-launchpad__workflow:hover .research-launchpad__workflow-arrow {
+  transform: translateX(2px);
+  color: var(--color-text);
+}
+
+.research-launchpad__footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 2px;
+  font-family: var(--font-family-mono);
+  font-size: 9px;
+  color: var(--color-text-faint);
+}
+
+.research-launchpad__footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.research-launchpad__footer span:last-child {
+  margin-left: auto;
+}
+
+@media (max-width: 820px) {
+  .research-launchpad__intro {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .research-launchpad__project {
+    max-width: 100%;
+  }
+
+  .research-launchpad__status {
+    grid-template-columns: 1fr;
+  }
+
+  .research-launchpad__status-item + .research-launchpad__status-item {
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+  }
+}
+
+@media (max-width: 640px) {
+  .research-launchpad {
+    padding: 28px 16px calc(var(--prompt-height, 11.25rem) + 78px);
+  }
+
+  .research-launchpad__intro h1 {
+    font-size: 31px;
+  }
+
+  .research-launchpad__notice,
+  .research-launchpad__section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .research-launchpad__worktree {
+    justify-content: space-between;
+  }
+
+  .research-launchpad__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .research-launchpad__starter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .research-launchpad__workflow[data-featured="true"] {
+    grid-column: auto;
+  }
+
+  .research-launchpad__footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .research-launchpad__footer span:last-child {
+    margin-left: 0;
+  }
+}
+
+/* ==========================================================
    Compact workspace shell
 
    The desktop shell has two resizable side panes. At phone width those
@@ -1227,7 +1872,7 @@ html[data-color-scheme="dark"] .atlas-overlay {
   .session-right-pane {
     position: absolute !important;
     inset: 0 !important;
-    z-index: 20;
+    z-index: 70 !important;
     width: 100% !important;
     min-width: 0 !important;
     flex: 0 0 100% !important;

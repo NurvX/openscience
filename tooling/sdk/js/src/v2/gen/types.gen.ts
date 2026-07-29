@@ -1885,6 +1885,13 @@ export type BadRequestError = {
   success: false
 }
 
+export type NotFoundError = {
+  name: "NotFoundError"
+  data: {
+    message: string
+  }
+}
+
 export type OAuth = {
   type: "oauth"
   refresh: string
@@ -1906,13 +1913,6 @@ export type WellKnownAuth = {
 }
 
 export type Auth = OAuth | ApiAuth | WellKnownAuth
-
-export type NotFoundError = {
-  name: "NotFoundError"
-  data: {
-    message: string
-  }
-}
 
 export type Model = {
   id: string
@@ -2162,6 +2162,8 @@ export type FileContent = {
   }
   encoding?: "base64"
   mimeType?: string
+  size?: number
+  truncated?: boolean
 }
 
 export type File = {
@@ -2834,6 +2836,8 @@ export type SettingsComputeGetResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2876,6 +2880,8 @@ export type SettingsComputeProviderDisconnectResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2931,6 +2937,8 @@ export type SettingsComputeProviderConnectResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2950,6 +2958,8 @@ export type SettingsComputeSshAddData = {
     host: string
     user?: string
     port?: number
+    scheduler?: "none" | "slurm" | "pbs"
+    workdir?: string
   }
   path?: never
   query?: never
@@ -2986,6 +2996,8 @@ export type SettingsComputeSshAddResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -2997,6 +3009,43 @@ export type SettingsComputeSshAddResponses = {
 }
 
 export type SettingsComputeSshAddResponse = SettingsComputeSshAddResponses[keyof SettingsComputeSshAddResponses]
+
+export type SettingsComputeSshTestData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/settings/compute/ssh/{id}/test"
+}
+
+export type SettingsComputeSshTestErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SettingsComputeSshTestError = SettingsComputeSshTestErrors[keyof SettingsComputeSshTestErrors]
+
+export type SettingsComputeSshTestResponses = {
+  /**
+   * Connection result
+   */
+  200: {
+    ok: boolean
+    host: string
+    latency_ms: number
+    hostname?: string
+    python: boolean
+    gpu: boolean
+    slurm: boolean
+    pbs: boolean
+    error?: string
+  }
+}
+
+export type SettingsComputeSshTestResponse = SettingsComputeSshTestResponses[keyof SettingsComputeSshTestResponses]
 
 export type SettingsComputeSshRemoveData = {
   body?: never
@@ -3028,6 +3077,8 @@ export type SettingsComputeSshRemoveResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -3082,6 +3133,8 @@ export type SettingsComputeEndpointAddResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -3125,6 +3178,8 @@ export type SettingsComputeEndpointRemoveResponses = {
       host: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     }>
     endpoints?: Array<{
       id: string
@@ -3137,6 +3192,369 @@ export type SettingsComputeEndpointRemoveResponses = {
 
 export type SettingsComputeEndpointRemoveResponse =
   SettingsComputeEndpointRemoveResponses[keyof SettingsComputeEndpointRemoveResponses]
+
+export type SettingsComputeJobsListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/settings/compute/jobs"
+}
+
+export type SettingsComputeJobsListResponses = {
+  /**
+   * Compute jobs
+   */
+  200: Array<{
+    id: string
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+    target_label: string
+    scheduler: "none" | "slurm" | "pbs"
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
+    created_at: string
+    started_at?: string
+    completed_at?: string
+    exit_code?: number | null
+    pid?: number
+    error?: string
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifact_patterns?: Array<string>
+    artifacts?: Array<{
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }>
+    checkpoint_path?: string
+    checkpoint?: {
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }
+    reproducibility?: {
+      captured_at: string
+      command: string
+      cwd: string
+      platform: string
+      arch: string
+      bun: string
+      node: string
+      python?: string
+      git?: {
+        branch?: string
+        commit?: string
+        dirty: boolean
+      }
+      lockfiles: Array<{
+        path: string
+        size: number
+        sha256: string
+        modified_at: string
+      }>
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+    }
+    capture_error?: string
+  }>
+}
+
+export type SettingsComputeJobsListResponse = SettingsComputeJobsListResponses[keyof SettingsComputeJobsListResponses]
+
+export type SettingsComputeJobsStartData = {
+  body?: {
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifacts?: Array<string>
+    checkpoint?: string
+  }
+  path?: never
+  query?: never
+  url: "/settings/compute/jobs"
+}
+
+export type SettingsComputeJobsStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SettingsComputeJobsStartError = SettingsComputeJobsStartErrors[keyof SettingsComputeJobsStartErrors]
+
+export type SettingsComputeJobsStartResponses = {
+  /**
+   * Started job
+   */
+  200: {
+    id: string
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+    target_label: string
+    scheduler: "none" | "slurm" | "pbs"
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
+    created_at: string
+    started_at?: string
+    completed_at?: string
+    exit_code?: number | null
+    pid?: number
+    error?: string
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifact_patterns?: Array<string>
+    artifacts?: Array<{
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }>
+    checkpoint_path?: string
+    checkpoint?: {
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }
+    reproducibility?: {
+      captured_at: string
+      command: string
+      cwd: string
+      platform: string
+      arch: string
+      bun: string
+      node: string
+      python?: string
+      git?: {
+        branch?: string
+        commit?: string
+        dirty: boolean
+      }
+      lockfiles: Array<{
+        path: string
+        size: number
+        sha256: string
+        modified_at: string
+      }>
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+    }
+    capture_error?: string
+  }
+}
+
+export type SettingsComputeJobsStartResponse =
+  SettingsComputeJobsStartResponses[keyof SettingsComputeJobsStartResponses]
+
+export type SettingsComputeJobsClearData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/settings/compute/jobs/completed"
+}
+
+export type SettingsComputeJobsClearResponses = {
+  /**
+   * Number cleared
+   */
+  200: {
+    cleared: number
+  }
+}
+
+export type SettingsComputeJobsClearResponse =
+  SettingsComputeJobsClearResponses[keyof SettingsComputeJobsClearResponses]
+
+export type SettingsComputeJobsLogData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/settings/compute/jobs/{id}/log"
+}
+
+export type SettingsComputeJobsLogErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SettingsComputeJobsLogError = SettingsComputeJobsLogErrors[keyof SettingsComputeJobsLogErrors]
+
+export type SettingsComputeJobsLogResponses = {
+  /**
+   * Job output
+   */
+  200: {
+    log: string
+  }
+}
+
+export type SettingsComputeJobsLogResponse = SettingsComputeJobsLogResponses[keyof SettingsComputeJobsLogResponses]
+
+export type SettingsComputeJobsCancelData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/settings/compute/jobs/{id}/cancel"
+}
+
+export type SettingsComputeJobsCancelErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SettingsComputeJobsCancelError = SettingsComputeJobsCancelErrors[keyof SettingsComputeJobsCancelErrors]
+
+export type SettingsComputeJobsCancelResponses = {
+  /**
+   * Cancelled job
+   */
+  200: {
+    id: string
+    name: string
+    command: string
+    cwd?: string
+    target:
+      | {
+          kind: "local"
+        }
+      | {
+          kind: "ssh"
+          host_id: string
+        }
+    target_label: string
+    scheduler: "none" | "slurm" | "pbs"
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
+    created_at: string
+    started_at?: string
+    completed_at?: string
+    exit_code?: number | null
+    pid?: number
+    error?: string
+    resources?: {
+      cpus?: number
+      gpus?: number
+      memory_gb?: number
+      time_minutes?: number
+      partition?: string
+    }
+    modules?: Array<string>
+    container?: string
+    artifact_patterns?: Array<string>
+    artifacts?: Array<{
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }>
+    checkpoint_path?: string
+    checkpoint?: {
+      path: string
+      size: number
+      sha256: string
+      modified_at: string
+    }
+    reproducibility?: {
+      captured_at: string
+      command: string
+      cwd: string
+      platform: string
+      arch: string
+      bun: string
+      node: string
+      python?: string
+      git?: {
+        branch?: string
+        commit?: string
+        dirty: boolean
+      }
+      lockfiles: Array<{
+        path: string
+        size: number
+        sha256: string
+        modified_at: string
+      }>
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+    }
+    capture_error?: string
+  }
+}
+
+export type SettingsComputeJobsCancelResponse =
+  SettingsComputeJobsCancelResponses[keyof SettingsComputeJobsCancelResponses]
 
 export type SettingsPermissionsGetData = {
   body?: never
@@ -5289,6 +5707,1045 @@ export type FileWriteResponses = {
 
 export type FileWriteResponse = FileWriteResponses[keyof FileWriteResponses]
 
+export type FileInspectData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/inspect"
+}
+
+export type FileInspectResponses = {
+  /**
+   * Scientific file inspection
+   */
+  200: {
+    format: "bam" | "cram" | "h5ad" | "loom"
+    name: string
+    size: number
+    modified: number
+    signature: boolean
+    index?: string
+    tool: {
+      name: string
+      available: boolean
+      detail?: string
+    }
+    details: {
+      [key: string]: unknown
+    }
+  }
+}
+
+export type FileInspectResponse = FileInspectResponses[keyof FileInspectResponses]
+
+export type FileRawData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/raw"
+}
+
+export type FileRawResponses = {
+  /**
+   * Raw file contents
+   */
+  200: unknown
+}
+
+export type FileArtifactsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/artifacts"
+}
+
+export type FileArtifactsResponses = {
+  /**
+   * Research artifacts
+   */
+  200: Array<{
+    name: string
+    path: string
+    kind:
+      | "notebook"
+      | "dataset"
+      | "figure"
+      | "report"
+      | "structure"
+      | "sequence"
+      | "genomics"
+      | "spectrum"
+      | "model"
+      | "archive"
+    format: string
+    size: number
+    modified: number
+  }>
+}
+
+export type FileArtifactsResponse = FileArtifactsResponses[keyof FileArtifactsResponses]
+
+export type FileProvenanceData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/provenance"
+}
+
+export type FileProvenanceResponses = {
+  /**
+   * Local provenance
+   */
+  200: {
+    path: string
+    tracked: boolean
+    dirty: boolean
+    status: "clean" | "modified" | "added" | "deleted" | "untracked" | "local"
+    branch?: string
+    commit?: {
+      sha: string
+      author: string
+      email: string
+      date: string
+      message: string
+    }
+  }
+}
+
+export type FileProvenanceResponse = FileProvenanceResponses[keyof FileProvenanceResponses]
+
+export type FileReproducibilityData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/reproducibility"
+}
+
+export type FileReproducibilityResponses = {
+  /**
+   * Project reproducibility audit
+   */
+  200: {
+    generated_at: string
+    score: number
+    status: "ready" | "warnings" | "blocked"
+    git?: {
+      branch?: string
+      commit?: string
+      dirty: boolean
+    }
+    lockfiles: Array<string>
+    environments: Array<string>
+    notebooks: {
+      total: number
+      valid: number
+      invalid: Array<string>
+    }
+    artifacts: {
+      total: number
+      nonempty: number
+      bytes: number
+    }
+    checks: Array<{
+      id: string
+      label: string
+      status: "pass" | "warn" | "fail"
+      detail: string
+      weight: number
+    }>
+  }
+}
+
+export type FileReproducibilityResponse = FileReproducibilityResponses[keyof FileReproducibilityResponses]
+
+export type FileAnnotationsListData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/annotations"
+}
+
+export type FileAnnotationsListResponses = {
+  /**
+   * Artifact annotations
+   */
+  200: Array<{
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }>
+}
+
+export type FileAnnotationsListResponse = FileAnnotationsListResponses[keyof FileAnnotationsListResponses]
+
+export type FileAnnotationsCreateData = {
+  body?: {
+    path: string
+    body: string
+    author?: string
+    anchor?:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations"
+}
+
+export type FileAnnotationsCreateResponses = {
+  /**
+   * Created annotation
+   */
+  200: {
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }
+}
+
+export type FileAnnotationsCreateResponse = FileAnnotationsCreateResponses[keyof FileAnnotationsCreateResponses]
+
+export type FileAnnotationsHistoryData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations/{id}/history"
+}
+
+export type FileAnnotationsHistoryResponses = {
+  /**
+   * Versioned artifact annotation
+   */
+  200: {
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }
+}
+
+export type FileAnnotationsHistoryResponse = FileAnnotationsHistoryResponses[keyof FileAnnotationsHistoryResponses]
+
+export type FileAnnotationsDeleteData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations/{id}"
+}
+
+export type FileAnnotationsDeleteResponses = {
+  /**
+   * Tombstoned annotation
+   */
+  200: {
+    deleted: true
+    version: number
+  }
+}
+
+export type FileAnnotationsDeleteResponse = FileAnnotationsDeleteResponses[keyof FileAnnotationsDeleteResponses]
+
+export type FileAnnotationsUpdateData = {
+  body?: {
+    status?: "open" | "resolved"
+    body?: string
+    reply?: string
+    author?: string
+  }
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/annotations/{id}"
+}
+
+export type FileAnnotationsUpdateResponses = {
+  /**
+   * Updated annotation
+   */
+  200: {
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    anchor:
+      | {
+          kind: "artifact"
+          label?: string
+        }
+      | {
+          kind: "text"
+          startLine: number
+          endLine: number
+          quote?: string
+        }
+      | {
+          kind: "notebook"
+          cellId: string
+          line?: number
+        }
+      | {
+          kind: "molecule"
+          selection: string
+          count?: number
+        }
+      | {
+          kind: "genome"
+          chromosome: string
+          start: number
+          end: number
+        }
+    messages: Array<{
+      id: string
+      body: string
+      author: string
+      createdAt: number
+    }>
+    status: "open" | "resolved"
+    version: number
+    revisions: Array<{
+      version: number
+      event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+      actor: string
+      at: number
+      status: "open" | "resolved"
+      messages: Array<{
+        id: string
+        body: string
+        author: string
+        createdAt: number
+      }>
+      deletedAt?: number
+    }>
+    createdAt: number
+    updatedAt: number
+    deletedAt?: number
+  }
+}
+
+export type FileAnnotationsUpdateResponse = FileAnnotationsUpdateResponses[keyof FileAnnotationsUpdateResponses]
+
+export type FileManifestData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/manifest"
+}
+
+export type FileManifestResponses = {
+  /**
+   * Artifact checksum manifest
+   */
+  200: {
+    format: "openscience.artifact-manifest.v1"
+    generated_at: string
+    digest: string
+    artifacts: Array<{
+      name: string
+      path: string
+      kind:
+        | "notebook"
+        | "dataset"
+        | "figure"
+        | "report"
+        | "structure"
+        | "sequence"
+        | "genomics"
+        | "spectrum"
+        | "model"
+        | "archive"
+      format: string
+      size: number
+      modified: number
+      sha256: string
+    }>
+  }
+}
+
+export type FileManifestResponse = FileManifestResponses[keyof FileManifestResponses]
+
+export type FileStarterData = {
+  body?: {
+    template: "single-cell" | "dose-response" | "protein-structure"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/starters"
+}
+
+export type FileStarterResponses = {
+  /**
+   * Created starter files
+   */
+  200: {
+    template: "single-cell" | "dose-response" | "protein-structure"
+    directory: string
+    files: Array<string>
+    notebook: string
+    readme: string
+  }
+}
+
+export type FileStarterResponse = FileStarterResponses[keyof FileStarterResponses]
+
+export type FilePublicationCapabilitiesData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/publication/capabilities"
+}
+
+export type FilePublicationCapabilitiesResponses = {
+  /**
+   * Available local publication formats
+   */
+  200: {
+    pandoc: boolean
+    pdf_engine?: string
+    formats: {
+      [key: string]: boolean
+    }
+  }
+}
+
+export type FilePublicationCapabilitiesResponse =
+  FilePublicationCapabilitiesResponses[keyof FilePublicationCapabilitiesResponses]
+
+export type FilePublicationData = {
+  body?: {
+    path: string
+    format: "html" | "pdf" | "docx" | "latex" | "pptx"
+    readiness?: "draft" | "reviewed"
+    review_id?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/publication"
+}
+
+export type FilePublicationResponses = {
+  /**
+   * Created publication artifact
+   */
+  200: {
+    path: string
+    format: "html" | "pdf" | "docx" | "latex" | "pptx"
+    size: number
+    created_at: string
+    engine: string
+    readiness: "draft" | "reviewed"
+    review_id?: string
+  }
+}
+
+export type FilePublicationResponse = FilePublicationResponses[keyof FilePublicationResponses]
+
+export type FileReviewsCurrentData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/reviews"
+}
+
+export type FileReviewsCurrentErrors = {
+  /**
+   * No publication review exists for this manuscript
+   */
+  404: unknown
+}
+
+export type FileReviewsCurrentResponses = {
+  /**
+   * Current publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+    stale: boolean
+  }
+}
+
+export type FileReviewsCurrentResponse = FileReviewsCurrentResponses[keyof FileReviewsCurrentResponses]
+
+export type FileReviewsRunData = {
+  body?: {
+    path: string
+    actor?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/file/reviews"
+}
+
+export type FileReviewsRunResponses = {
+  /**
+   * Generated publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type FileReviewsRunResponse = FileReviewsRunResponses[keyof FileReviewsRunResponses]
+
+export type FileReviewsHistoryData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    path: string
+  }
+  url: "/file/reviews/history"
+}
+
+export type FileReviewsHistoryResponses = {
+  /**
+   * Publication review history
+   */
+  200: Array<{
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }>
+}
+
+export type FileReviewsHistoryResponse = FileReviewsHistoryResponses[keyof FileReviewsHistoryResponses]
+
+export type FileReviewsResolveData = {
+  body?: {
+    status: "resolved" | "overridden"
+    actor: string
+    reason: string
+  }
+  path: {
+    id: string
+    finding: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/reviews/{id}/findings/{finding}"
+}
+
+export type FileReviewsResolveErrors = {
+  /**
+   * Finding cannot be updated
+   */
+  409: unknown
+}
+
+export type FileReviewsResolveResponses = {
+  /**
+   * Updated publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type FileReviewsResolveResponse = FileReviewsResolveResponses[keyof FileReviewsResolveResponses]
+
+export type FileReviewsFinalizeData = {
+  body?: {
+    actor: string
+  }
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/file/reviews/{id}/finalize"
+}
+
+export type FileReviewsFinalizeErrors = {
+  /**
+   * Review is blocked, stale, or already invalid
+   */
+  409: unknown
+}
+
+export type FileReviewsFinalizeResponses = {
+  /**
+   * Finalized publication review
+   */
+  200: {
+    format: "openscience.publication-review.v1"
+    id: string
+    projectID: string
+    path: string
+    artifactHash: string
+    version: number
+    status: "blocked" | "warnings" | "ready"
+    summary: {
+      total: number
+      open: number
+      blocking: number
+      major: number
+      minor: number
+      info: number
+      resolved: number
+      overridden: number
+    }
+    findings: Array<{
+      id: string
+      check: "citation" | "numeric" | "figure" | "provenance"
+      severity: "blocking" | "major" | "minor" | "info"
+      status: "open" | "resolved" | "overridden"
+      title: string
+      detail: string
+      evidence: Array<string>
+      location: {
+        path: string
+        line?: number
+      }
+      resolution?: {
+        kind: "resolved" | "overridden"
+        actor: string
+        reason: string
+        at: number
+      }
+    }>
+    events: Array<{
+      version: number
+      type: "generated" | "resolved" | "overridden" | "finalized"
+      actor: string
+      at: number
+      findingID?: string
+      reason?: string
+    }>
+    finalized?: {
+      actor: string
+      at: number
+      artifactHash: string
+    }
+    createdAt: number
+    updatedAt: number
+  }
+}
+
+export type FileReviewsFinalizeResponse = FileReviewsFinalizeResponses[keyof FileReviewsFinalizeResponses]
+
 export type FileStatusData = {
   body?: never
   path?: never
@@ -5306,6 +6763,207 @@ export type FileStatusResponses = {
 }
 
 export type FileStatusResponse = FileStatusResponses[keyof FileStatusResponses]
+
+export type NotebookExecuteData = {
+  body?: {
+    id: string
+    language: "python" | "r"
+    code: string
+    timeout?: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/notebook/execute"
+}
+
+export type NotebookExecuteResponses = {
+  /**
+   * Jupyter-compatible cell outputs
+   */
+  200: unknown
+}
+
+export type NotebookStatusData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    id: string
+    language: "python" | "r"
+  }
+  url: "/notebook/status"
+}
+
+export type NotebookStatusResponses = {
+  /**
+   * Kernel state
+   */
+  200: unknown
+}
+
+export type NotebookRestartData = {
+  body?: {
+    id: string
+    language: "python" | "r"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/notebook/restart"
+}
+
+export type NotebookRestartResponses = {
+  /**
+   * Kernel state
+   */
+  200: unknown
+}
+
+export type NotebookInterruptData = {
+  body?: {
+    id: string
+    language: "python" | "r"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/notebook/interrupt"
+}
+
+export type NotebookInterruptResponses = {
+  /**
+   * Kernel state
+   */
+  200: unknown
+}
+
+export type ProvenanceListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance"
+}
+
+export type ProvenanceListResponses = {
+  /**
+   * Project provenance graph
+   */
+  200: unknown
+}
+
+export type ProvenanceRecordData = {
+  body?: {
+    kind: "artifact" | "run" | "source" | "claim"
+    label: string
+    artifact_type?: string
+    path?: string
+    content_hash?: string
+    size?: number
+    tool?: string
+    status?: "ok" | "error"
+    meta?: {
+      [key: string]: unknown
+    }
+    derived_from?: string
+    relation?: "produced" | "consumed" | "derived-from" | "supports" | "refutes"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/nodes"
+}
+
+export type ProvenanceRecordErrors = {
+  /**
+   * Invalid link target
+   */
+  400: unknown
+}
+
+export type ProvenanceRecordResponses = {
+  /**
+   * Recorded node
+   */
+  200: unknown
+}
+
+export type ProvenanceReviewData = {
+  body?: {
+    target: string
+    claim: string
+    issue: string
+    severity: "blocking" | "major" | "minor" | "info"
+    evidence: string
+    verdict?: "refutes" | "supports"
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/reviews"
+}
+
+export type ProvenanceReviewErrors = {
+  /**
+   * Invalid target
+   */
+  400: unknown
+}
+
+export type ProvenanceReviewResponses = {
+  /**
+   * Recorded finding
+   */
+  200: unknown
+}
+
+export type ProvenanceExportData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/export"
+}
+
+export type ProvenanceExportResponses = {
+  /**
+   * Portable JSON audit packet
+   */
+  200: unknown
+}
+
+export type ProvenanceTraceData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/provenance/{id}"
+}
+
+export type ProvenanceTraceErrors = {
+  /**
+   * Node not found
+   */
+  404: unknown
+}
+
+export type ProvenanceTraceResponses = {
+  /**
+   * Connected lineage
+   */
+  200: unknown
+}
 
 export type McpStatusData = {
   body?: never

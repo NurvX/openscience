@@ -3,7 +3,7 @@ import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import { centerTabs } from "@/atlas/store/centerTabs"
-import { createAtlasAPI, type AtlasNode } from "@/atlas/api/atlas"
+import { ArtifactGallery } from "@/artifacts/ArtifactGallery"
 import {
   IconFolder,
   IconFile,
@@ -314,7 +314,10 @@ export function FileExplorer(): JSX.Element {
         </Show>
       </div>
 
-      <Show when={mode() === "host"} fallback={<ArtifactsPanel />}>
+      <Show
+        when={mode() === "host"}
+        fallback={<ArtifactGallery directory={cwd()} onOpen={(path) => centerTabs.openFile(cwd(), path)} />}
+      >
         {/* toolbar row 2: back / up / path bar / refresh */}
         <div
           style={{
@@ -565,134 +568,6 @@ function GridBody(props: { nodes: FileNode[]; onClick: (n: FileNode) => void }):
           )
         }}
       </For>
-    </div>
-  )
-}
-
-// ── Artifacts (project Atlas graph) ────────────────────────────────
-type ArtifactRow = { node: AtlasNode; artifact: { name?: string; kind?: string; uri?: string } }
-
-async function mapSettledBounded<T, R>(
-  items: T[],
-  limit: number,
-  visit: (item: T) => Promise<R>,
-): Promise<PromiseSettledResult<R>[]> {
-  const results = new Array<PromiseSettledResult<R>>(items.length)
-  let cursor = 0
-  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor++
-      try {
-        results[index] = { status: "fulfilled", value: await visit(items[index]) }
-      } catch (reason) {
-        results[index] = { status: "rejected", reason }
-      }
-    }
-  })
-  await Promise.all(workers)
-  return results
-}
-
-function ArtifactsPanel(): JSX.Element {
-  const sync = useSync()
-  const sdk = useSDK()
-  const atlas = createAtlasAPI(() => sdk.url)
-  const directory = () => sync.project?.worktree || sync.data.path.directory || sdk.directory
-  const [loadError, setLoadError] = createSignal<Error>()
-  const [partialLoadWarning, setPartialLoadWarning] = createSignal<string>()
-  const [data] = createResource(directory, async (dir) => {
-    try {
-      const pid = (await atlas.resolveProject(dir)).project_id
-      if (!pid) {
-        setLoadError(undefined)
-        setPartialLoadWarning(undefined)
-        return [] as ArtifactRow[]
-      }
-      const tree = await atlas.getGraphTree(pid)
-      const rows: ArtifactRow[] = []
-      const nodes = tree.nodes ?? []
-      const settled = await mapSettledBounded(nodes, 8, async (node) => {
-        const response = await atlas.listArtifacts(node.node_id)
-        return { node, artifacts: Array.isArray(response) ? response : (response.artifacts ?? []) }
-      })
-      const rejected = settled.filter((result) => result.status === "rejected")
-      for (const result of settled) {
-        if (result.status !== "fulfilled") continue
-        for (const artifact of result.value.artifacts) rows.push({ node: result.value.node, artifact })
-      }
-      setLoadError(undefined)
-      setPartialLoadWarning(
-        rejected.length > 0
-          ? `${rejected.length} of ${nodes.length} node artifact requests failed; showing the results that loaded`
-          : undefined,
-      )
-      return rows
-    } catch (error) {
-      setLoadError(error instanceof Error ? error : new Error(String(error)))
-      setPartialLoadWarning(undefined)
-      return [] as ArtifactRow[]
-    }
-  })
-  return (
-    <div class="atlas-scroll" style={{ flex: 1, "min-height": 0, "overflow-y": "auto", padding: "8px 4px" }}>
-      <Show
-        when={(data.latest ?? []).length > 0}
-        fallback={
-          <div style={emptyMsg()}>
-            {loadError()
-              ? `artifacts unavailable · ${loadError()!.message}`
-              : partialLoadWarning()
-                ? `artifacts partially unavailable · ${partialLoadWarning()}`
-                : data.loading
-                  ? "loading artifacts…"
-                  : "no artifacts yet · attach a file to seed one"}
-          </div>
-        }
-      >
-        <Show when={partialLoadWarning()}>
-          {(warning) => (
-            <div role="status" style={{ ...emptyMsg(), padding: "8px 12px", "text-align": "left" }}>
-              artifacts partially unavailable · {warning()}
-            </div>
-          )}
-        </Show>
-        <div style={colHeader()}>
-          <span style={{ width: "60px" }}>Kind</span>
-          <span style={{ flex: 1 }}>Name</span>
-          <span style={{ width: "120px", "text-align": "right" }}>Node</span>
-        </div>
-        <For each={data.latest ?? []}>
-          {(r) => (
-            <div style={{ ...row(false), cursor: "default" }}>
-              <span
-                style={{
-                  width: "60px",
-                  "font-family": FONT_MONO,
-                  "font-size": "10px",
-                  color: "var(--color-text-faint)",
-                  "flex-shrink": 0,
-                }}
-              >
-                {r.artifact.kind ?? "—"}
-              </span>
-              <span
-                style={{
-                  flex: 1,
-                  "min-width": 0,
-                  overflow: "hidden",
-                  "text-overflow": "ellipsis",
-                  "white-space": "nowrap",
-                }}
-              >
-                {r.artifact.name ?? r.artifact.uri ?? "?"}
-              </span>
-              <span style={{ ...cell(), width: "120px", color: "var(--color-text-muted)" }}>
-                {r.node.title?.slice(0, 20) ?? r.node.slug_name ?? "—"}
-              </span>
-            </div>
-          )}
-        </For>
-      </Show>
     </div>
   )
 }

@@ -32,10 +32,32 @@ import type {
   ConfigUpdateResponses,
   EventSubscribeResponses,
   ExperimentalResourceListResponses,
+  FileAnnotationsCreateResponses,
+  FileAnnotationsDeleteResponses,
+  FileAnnotationsHistoryResponses,
+  FileAnnotationsListResponses,
+  FileAnnotationsUpdateResponses,
+  FileArtifactsResponses,
+  FileInspectResponses,
   FileListResponses,
+  FileManifestResponses,
   FilePartInput,
   FilePartSource,
+  FileProvenanceResponses,
+  FilePublicationCapabilitiesResponses,
+  FilePublicationResponses,
+  FileRawResponses,
   FileReadResponses,
+  FileReproducibilityResponses,
+  FileReviewsCurrentErrors,
+  FileReviewsCurrentResponses,
+  FileReviewsFinalizeErrors,
+  FileReviewsFinalizeResponses,
+  FileReviewsHistoryResponses,
+  FileReviewsResolveErrors,
+  FileReviewsResolveResponses,
+  FileReviewsRunResponses,
+  FileStarterResponses,
   FileStatusResponses,
   FileWriteResponses,
   FindFilesResponses,
@@ -75,6 +97,10 @@ import type {
   McpLocalConfig,
   McpRemoteConfig,
   McpStatusResponses,
+  NotebookExecuteResponses,
+  NotebookInterruptResponses,
+  NotebookRestartResponses,
+  NotebookStatusResponses,
   Part as Part2,
   PartDeleteErrors,
   PartDeleteResponses,
@@ -94,6 +120,14 @@ import type {
   ProjectListResponses,
   ProjectUpdateErrors,
   ProjectUpdateResponses,
+  ProvenanceExportResponses,
+  ProvenanceListResponses,
+  ProvenanceRecordErrors,
+  ProvenanceRecordResponses,
+  ProvenanceReviewErrors,
+  ProvenanceReviewResponses,
+  ProvenanceTraceErrors,
+  ProvenanceTraceResponses,
   ProviderAuthResponses,
   ProviderListResponses,
   ProviderOauthAuthorizeErrors,
@@ -163,12 +197,22 @@ import type {
   SettingsComputeEndpointAddResponses,
   SettingsComputeEndpointRemoveResponses,
   SettingsComputeGetResponses,
+  SettingsComputeJobsCancelErrors,
+  SettingsComputeJobsCancelResponses,
+  SettingsComputeJobsClearResponses,
+  SettingsComputeJobsListResponses,
+  SettingsComputeJobsLogErrors,
+  SettingsComputeJobsLogResponses,
+  SettingsComputeJobsStartErrors,
+  SettingsComputeJobsStartResponses,
   SettingsComputeProviderConnectErrors,
   SettingsComputeProviderConnectResponses,
   SettingsComputeProviderDisconnectResponses,
   SettingsComputeSshAddErrors,
   SettingsComputeSshAddResponses,
   SettingsComputeSshRemoveResponses,
+  SettingsComputeSshTestErrors,
+  SettingsComputeSshTestResponses,
   SettingsCredentialsListResponses,
   SettingsCredentialsRemoveResponses,
   SettingsCredentialsSetResponses,
@@ -734,6 +778,8 @@ export class Ssh extends HeyApiClient {
       host?: string
       user?: string
       port?: number
+      scheduler?: "none" | "slurm" | "pbs"
+      workdir?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -746,6 +792,8 @@ export class Ssh extends HeyApiClient {
             { in: "body", key: "host" },
             { in: "body", key: "user" },
             { in: "body", key: "port" },
+            { in: "body", key: "scheduler" },
+            { in: "body", key: "workdir" },
           ],
         },
       ],
@@ -763,6 +811,27 @@ export class Ssh extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Test an SSH compute host
+   */
+  public test<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).post<
+      SettingsComputeSshTestResponses,
+      SettingsComputeSshTestErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/ssh/{id}/test",
+      ...options,
+      ...params,
     })
   }
 
@@ -842,6 +911,134 @@ export class Endpoint extends HeyApiClient {
   }
 }
 
+export class Jobs extends HeyApiClient {
+  /**
+   * List local and remote compute jobs
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<SettingsComputeJobsListResponses, unknown, ThrowOnError>({
+      url: "/settings/compute/jobs",
+      ...options,
+    })
+  }
+
+  /**
+   * Start a local, SSH, Slurm, or PBS compute job
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters?: {
+      name?: string
+      command?: string
+      cwd?: string
+      target?:
+        | {
+            kind: "local"
+          }
+        | {
+            kind: "ssh"
+            host_id: string
+          }
+      resources?: {
+        cpus?: number
+        gpus?: number
+        memory_gb?: number
+        time_minutes?: number
+        partition?: string
+      }
+      modules?: Array<string>
+      container?: string
+      artifacts?: Array<string>
+      checkpoint?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "name" },
+            { in: "body", key: "command" },
+            { in: "body", key: "cwd" },
+            { in: "body", key: "target" },
+            { in: "body", key: "resources" },
+            { in: "body", key: "modules" },
+            { in: "body", key: "container" },
+            { in: "body", key: "artifacts" },
+            { in: "body", key: "checkpoint" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SettingsComputeJobsStartResponses,
+      SettingsComputeJobsStartErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/jobs",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Clear completed compute jobs
+   */
+  public clear<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).delete<SettingsComputeJobsClearResponses, unknown, ThrowOnError>({
+      url: "/settings/compute/jobs/completed",
+      ...options,
+    })
+  }
+
+  /**
+   * Read a compute job log
+   */
+  public log<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).get<
+      SettingsComputeJobsLogResponses,
+      SettingsComputeJobsLogErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/jobs/{id}/log",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Cancel a compute job
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).post<
+      SettingsComputeJobsCancelResponses,
+      SettingsComputeJobsCancelErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/jobs/{id}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Compute extends HeyApiClient {
   /**
    * Get compute settings
@@ -866,6 +1063,11 @@ export class Compute extends HeyApiClient {
   private _endpoint?: Endpoint
   get endpoint(): Endpoint {
     return (this._endpoint ??= new Endpoint({ client: this.client }))
+  }
+
+  private _jobs?: Jobs
+  get jobs(): Jobs {
+    return (this._jobs ??= new Jobs({ client: this.client }))
   }
 }
 
@@ -3212,6 +3414,389 @@ export class Find extends HeyApiClient {
   }
 }
 
+export class Annotations extends HeyApiClient {
+  /**
+   * List artifact annotations
+   *
+   * List durable review threads anchored to a project artifact.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileAnnotationsListResponses, unknown, ThrowOnError>({
+      url: "/file/annotations",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create an artifact annotation
+   *
+   * Create a durable review thread anchored to an artifact, text range, notebook cell, molecule, or locus.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      path?: string
+      body?: string
+      author?: string
+      anchor?:
+        | {
+            kind: "artifact"
+            label?: string
+          }
+        | {
+            kind: "text"
+            startLine: number
+            endLine: number
+            quote?: string
+          }
+        | {
+            kind: "notebook"
+            cellId: string
+            line?: number
+          }
+        | {
+            kind: "molecule"
+            selection: string
+            count?: number
+          }
+        | {
+            kind: "genome"
+            chromosome: string
+            start: number
+            end: number
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "path" },
+            { in: "body", key: "body" },
+            { in: "body", key: "author" },
+            { in: "body", key: "anchor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileAnnotationsCreateResponses, unknown, ThrowOnError>({
+      url: "/file/annotations",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read artifact annotation history
+   *
+   * Read every immutable revision of an artifact review thread, including a recoverable tombstone.
+   */
+  public history<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileAnnotationsHistoryResponses, unknown, ThrowOnError>({
+      url: "/file/annotations/{id}/history",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Tombstone an artifact annotation
+   *
+   * Hide an artifact review thread while retaining its recoverable revision history.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<FileAnnotationsDeleteResponses, unknown, ThrowOnError>({
+      url: "/file/annotations/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update an artifact annotation
+   *
+   * Reply to, resolve, or reopen an artifact review thread.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      status?: "open" | "resolved"
+      body?: string
+      reply?: string
+      author?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "status" },
+            { in: "body", key: "body" },
+            { in: "body", key: "reply" },
+            { in: "body", key: "author" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<FileAnnotationsUpdateResponses, unknown, ThrowOnError>({
+      url: "/file/annotations/{id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Reviews extends HeyApiClient {
+  /**
+   * Read the current publication review
+   *
+   * Return the latest deterministic review report and whether it is stale for the current source bytes.
+   */
+  public current<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileReviewsCurrentResponses, FileReviewsCurrentErrors, ThrowOnError>({
+      url: "/file/reviews",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Run deterministic publication checks
+   *
+   * Check citations, numeric traces, figures, and provenance for the exact Markdown manuscript bytes.
+   */
+  public run<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      path?: string
+      actor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "path" },
+            { in: "body", key: "actor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileReviewsRunResponses, unknown, ThrowOnError>({
+      url: "/file/reviews",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List publication review history
+   *
+   * List prior deterministic review reports for every reviewed version of a manuscript.
+   */
+  public history<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileReviewsHistoryResponses, unknown, ThrowOnError>({
+      url: "/file/reviews/history",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resolve or override a publication finding
+   *
+   * Record an attributed reason and close one deterministic review finding.
+   */
+  public resolve<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      finding: string
+      directory?: string
+      status?: "resolved" | "overridden"
+      actor?: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "path", key: "finding" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "status" },
+            { in: "body", key: "actor" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<FileReviewsResolveResponses, FileReviewsResolveErrors, ThrowOnError>({
+      url: "/file/reviews/{id}/findings/{finding}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Finalize a publication review
+   *
+   * Bind publication-ready state to the exact reviewed source hash after all blocking findings close.
+   */
+  public finalize<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      actor?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "body", key: "actor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileReviewsFinalizeResponses, FileReviewsFinalizeErrors, ThrowOnError>(
+      {
+        url: "/file/reviews/{id}/finalize",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+}
+
 export class File extends HeyApiClient {
   /**
    * List files
@@ -3311,6 +3896,248 @@ export class File extends HeyApiClient {
   }
 
   /**
+   * Inspect a scientific binary file
+   *
+   * Inspect BAM, CRAM, H5AD, or LOOM metadata with locally available scientific tools.
+   */
+  public inspect<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileInspectResponses, unknown, ThrowOnError>({
+      url: "/file/inspect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Download a file
+   *
+   * Stream a project file without loading it into the JSON API as base64.
+   */
+  public raw<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileRawResponses, unknown, ThrowOnError>({
+      url: "/file/raw",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List local research artifacts
+   *
+   * Discover notebooks, datasets, figures, reports, models, and scientific files in the project.
+   */
+  public artifacts<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FileArtifactsResponses, unknown, ThrowOnError>({
+      url: "/file/artifacts",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get local file provenance
+   *
+   * Read Git branch, dirty state, and latest commit metadata for a project file.
+   */
+  public provenance<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileProvenanceResponses, unknown, ThrowOnError>({
+      url: "/file/provenance",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Audit project reproducibility
+   *
+   * Check Git state, locked dependencies, environment specifications, notebook structure, and research artifacts.
+   */
+  public reproducibility<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FileReproducibilityResponses, unknown, ThrowOnError>({
+      url: "/file/reproducibility",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create an artifact integrity manifest
+   *
+   * Hash every discovered research artifact and return a portable, deterministic manifest.
+   */
+  public manifest<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FileManifestResponses, unknown, ThrowOnError>({
+      url: "/file/manifest",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create a local scientific starter project
+   *
+   * Materialize a valid notebook, sample data, and README without external downloads.
+   */
+  public starter<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      template?: "single-cell" | "dose-response" | "protein-structure"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "template" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FileStarterResponses, unknown, ThrowOnError>({
+      url: "/file/starters",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Inspect local publication export support
+   *
+   * Detect Pandoc and a PDF engine before offering report export formats.
+   */
+  public publicationCapabilities<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<FilePublicationCapabilitiesResponses, unknown, ThrowOnError>({
+      url: "/file/publication/capabilities",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Export a Markdown research report
+   *
+   * Create a timestamped HTML, PDF, DOCX, LaTeX, or PowerPoint publication artifact locally.
+   */
+  public publication<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      path?: string
+      format?: "html" | "pdf" | "docx" | "latex" | "pptx"
+      readiness?: "draft" | "reviewed"
+      review_id?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "path" },
+            { in: "body", key: "format" },
+            { in: "body", key: "readiness" },
+            { in: "body", key: "review_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<FilePublicationResponses, unknown, ThrowOnError>({
+      url: "/file/publication",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Get file status
    *
    * Get the git status of all files in the project.
@@ -3324,6 +4151,325 @@ export class File extends HeyApiClient {
     const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
     return (options?.client ?? this.client).get<FileStatusResponses, unknown, ThrowOnError>({
       url: "/file/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _annotations?: Annotations
+  get annotations(): Annotations {
+    return (this._annotations ??= new Annotations({ client: this.client }))
+  }
+
+  private _reviews?: Reviews
+  get reviews(): Reviews {
+    return (this._reviews ??= new Reviews({ client: this.client }))
+  }
+}
+
+export class Notebook extends HeyApiClient {
+  /**
+   * Execute a notebook cell
+   *
+   * Execute code in a persistent project-scoped Python or R kernel.
+   */
+  public execute<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      id?: string
+      language?: "python" | "r"
+      code?: string
+      timeout?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "id" },
+            { in: "body", key: "language" },
+            { in: "body", key: "code" },
+            { in: "body", key: "timeout" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<NotebookExecuteResponses, unknown, ThrowOnError>({
+      url: "/notebook/execute",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get notebook kernel status
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      id: string
+      language: "python" | "r"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "id" },
+            { in: "query", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<NotebookStatusResponses, unknown, ThrowOnError>({
+      url: "/notebook/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Restart a notebook kernel
+   */
+  public restart<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      id?: string
+      language?: "python" | "r"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "id" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<NotebookRestartResponses, unknown, ThrowOnError>({
+      url: "/notebook/restart",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Interrupt a notebook kernel
+   *
+   * Stop the running cell and release its kernel. The next execution starts a fresh kernel.
+   */
+  public interrupt<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      id?: string
+      language?: "python" | "r"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "id" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<NotebookInterruptResponses, unknown, ThrowOnError>({
+      url: "/notebook/interrupt",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Provenance extends HeyApiClient {
+  /**
+   * List the project provenance graph
+   *
+   * Returns project-scoped artifacts, runs, sources, claims, reviewer findings, and typed edges.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<ProvenanceListResponses, unknown, ThrowOnError>({
+      url: "/provenance",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Record a project provenance node
+   */
+  public record<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      kind?: "artifact" | "run" | "source" | "claim"
+      label?: string
+      artifact_type?: string
+      path?: string
+      content_hash?: string
+      size?: number
+      tool?: string
+      status?: "ok" | "error"
+      meta?: {
+        [key: string]: unknown
+      }
+      derived_from?: string
+      relation?: "produced" | "consumed" | "derived-from" | "supports" | "refutes"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "kind" },
+            { in: "body", key: "label" },
+            { in: "body", key: "artifact_type" },
+            { in: "body", key: "path" },
+            { in: "body", key: "content_hash" },
+            { in: "body", key: "size" },
+            { in: "body", key: "tool" },
+            { in: "body", key: "status" },
+            { in: "body", key: "meta" },
+            { in: "body", key: "derived_from" },
+            { in: "body", key: "relation" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ProvenanceRecordResponses, ProvenanceRecordErrors, ThrowOnError>({
+      url: "/provenance/nodes",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Record a reviewer finding
+   */
+  public review<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      target?: string
+      claim?: string
+      issue?: string
+      severity?: "blocking" | "major" | "minor" | "info"
+      evidence?: string
+      verdict?: "refutes" | "supports"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "target" },
+            { in: "body", key: "claim" },
+            { in: "body", key: "issue" },
+            { in: "body", key: "severity" },
+            { in: "body", key: "evidence" },
+            { in: "body", key: "verdict" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ProvenanceReviewResponses, ProvenanceReviewErrors, ThrowOnError>({
+      url: "/provenance/reviews",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Export a project provenance audit
+   */
+  public export<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<ProvenanceExportResponses, unknown, ThrowOnError>({
+      url: "/provenance/export",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Trace a provenance node
+   */
+  public trace<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProvenanceTraceResponses, ProvenanceTraceErrors, ThrowOnError>({
+      url: "/provenance/{id}",
       ...options,
       ...params,
     })
@@ -4174,6 +5320,16 @@ export class OpenScienceClient extends HeyApiClient {
   private _file?: File
   get file(): File {
     return (this._file ??= new File({ client: this.client }))
+  }
+
+  private _notebook?: Notebook
+  get notebook(): Notebook {
+    return (this._notebook ??= new Notebook({ client: this.client }))
+  }
+
+  private _provenance?: Provenance
+  get provenance(): Provenance {
+    return (this._provenance ??= new Provenance({ client: this.client }))
   }
 
   private _mcp?: Mcp

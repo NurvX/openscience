@@ -1,9 +1,9 @@
 :root {
-  /* Computer Modern (Latin Modern Roman) is the single UI typeface across the
-     whole product — sans AND serif resolve to it so nothing in the shared UI
-     drifts to a different family. Keep this in lockstep with FONT_SANS/SERIF in
-     frontend/workspace/src/styles/tokens.ts. NEVER swap the family; only sizes change. */
-  --font-family-sans: "Computer Modern", "Latin Modern Roman", Georgia, "Times New Roman", serif;
+  /* Native application typography for controls and dense working surfaces.
+     Computer Modern remains the editorial serif for papers and long-form
+     scientific output. Keep this in lockstep with workspace style tokens. */
+  --font-family-sans:
+    "Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --font-family-sans--font-feature-settings: normal;
   --font-family-mono: "IBM Plex Mono", "IBM Plex Mono Fallback";
   --font-family-mono--font-feature-settings: "ss01" 1;

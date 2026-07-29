@@ -1,4 +1,4 @@
-import { createSignal, createMemo, createEffect, type JSX, For, Show } from "solid-js"
+import { createSignal, createMemo, createEffect, onCleanup, onMount, type JSX, For, Show } from "solid-js"
 import { FONT_MONO, FONT_SANS, sectionTitle } from "@/styles/tokens"
 import { useSDK } from "@/context/sdk"
 import { useDialog } from "@synsci/ui/context/dialog"
@@ -7,14 +7,21 @@ import { Terminal } from "@/components/terminal"
 import { uiStore, type RightPaneTab } from "@/atlas/store/ui"
 import { SkillLibraryDialog } from "@/atlas/SkillsBrowser"
 import { AtlasCanvas } from "@/atlas/AtlasCanvas"
+import { ComputeJobs } from "@/atlas/ComputeJobs"
+import { EvidenceGraph } from "@/atlas/EvidenceGraph"
+import { artifactContext } from "@/artifacts/context"
+import { ArtifactInspector } from "@/artifacts/ArtifactInspector"
 import { toast } from "@/atlas/Toast"
 import {
+  IconAtom,
   IconLayoutGrid,
   IconBraces,
   IconChevronRight,
   IconChevronLeft,
   IconSettings,
   IconTerminal,
+  IconActivity,
+  IconNetwork,
 } from "@/atlas/shared/Icon"
 
 const RIGHT_PANE_WIDTH_KEY = "thesis-right-pane-width-v1"
@@ -26,12 +33,14 @@ function readSavedWidth(): number {
     const v = Number(localStorage.getItem(RIGHT_PANE_WIDTH_KEY))
     if (Number.isFinite(v) && v >= MIN_PANE_WIDTH && v <= MAX_PANE_WIDTH) return v
   } catch {}
-  return 360
+  return 420
 }
 
 export function RightPane(): JSX.Element {
   const tab = uiStore.rightPaneTab
   const setTab = uiStore.setRightPaneTab
+  const artifact = artifactContext.active
+  const artifactMode = () => Boolean(artifact()) && uiStore.rightPaneMode() === "artifact"
   // Keep-alive: once a tab has been opened it stays mounted (hidden via CSS),
   // so switching tabs never re-mounts/re-fetches/re-animates — no flash.
   const [visited, setVisited] = createSignal<Set<RightPaneTab>>(new Set([tab()]))
@@ -41,19 +50,33 @@ export function RightPane(): JSX.Element {
   })
   const dialog = useDialog()
   const [width, setWidth] = createSignal(readSavedWidth())
+  const [narrow, setNarrow] = createSignal(typeof window !== "undefined" && window.innerWidth < 1100)
   const [panelMenu, setPanelMenu] = createSignal(false)
+  onMount(() => {
+    const resize = () => setNarrow(window.innerWidth < 1100)
+    window.addEventListener("resize", resize)
+    onCleanup(() => window.removeEventListener("resize", resize))
+  })
   const openSkillLibrary = () =>
     dialog.show(() => <SkillLibraryDialog onPick={(name) => uiStore.setPrefill(`/${name} `)} />)
   const TABS: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[] =
     [
-      { k: "canvas", label: "atlas", Icon: IconLayoutGrid },
-      { k: "terminal", Icon: IconTerminal },
+      { k: "canvas", label: "Atlas", Icon: IconLayoutGrid },
+      { k: "evidence", label: "Evidence", Icon: IconNetwork },
+      { k: "jobs", label: "Compute", Icon: IconActivity },
+      { k: "terminal", label: "Terminal", Icon: IconTerminal },
     ]
   const visibleTabs = createMemo(() => TABS.filter((t) => !uiStore.isTabHidden(t.k)))
   // Keep the active tab pointed at a visible one.
   createEffect(() => {
     const vis = visibleTabs()
     if (vis.length && !vis.some((t) => t.k === tab())) setTab(vis[0].k)
+  })
+  createEffect(() => {
+    const id = artifact()?.id
+    if (!id) return
+    uiStore.setRightPaneMode("artifact")
+    uiStore.setRightPaneOpen(true)
   })
   // Run a command requested from elsewhere (e.g. the Local models settings
   // panel's "run in terminal") in a fresh terminal tab, then reveal it.
@@ -95,137 +118,212 @@ export function RightPane(): JSX.Element {
       when={uiStore.rightPaneOpen()}
       fallback={
         <CollapsedRail
+          artifact={Boolean(artifact())}
+          onInspect={() => {
+            uiStore.setRightPaneMode("artifact")
+            uiStore.setRightPaneOpen(true)
+          }}
           tabs={visibleTabs()}
           onOpen={(t) => {
-            if (t) setTab(t)
+            if (t) {
+              setTab(t)
+              uiStore.setRightPaneMode("tools")
+            }
             uiStore.setRightPaneOpen(true)
           }}
         />
       }
     >
-      <aside
-        class="session-right-pane"
-        style={{
-          flex: `0 0 ${width()}px`,
-          width: `${width()}px`,
-          display: "flex",
-          "flex-direction": "column",
-          "border-left": "1px solid var(--color-border)",
-          background: "var(--color-bg-subtle)",
-          "min-width": `${MIN_PANE_WIDTH}px`,
-          position: "relative",
-        }}
-      >
-        {/* Drag handle on the left edge of the right pane. 6px wide, full
-          height, invisible until hover. Cursor goes ew-resize. */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          on:pointerdown={onHandlePointerDown}
-          on:pointermove={onHandlePointerMove}
-          on:pointerup={onHandlePointerUp}
-          on:pointercancel={onHandlePointerUp}
+      <>
+        <Show when={narrow()}>
+          <button
+            type="button"
+            class="session-right-pane-backdrop"
+            aria-label="Close inspector overlay"
+            onClick={() => uiStore.setRightPaneOpen(false)}
+            style={{
+              all: "unset",
+              position: "fixed",
+              inset: 0,
+              "z-index": 69,
+              cursor: "default",
+              background: "color-mix(in srgb, var(--color-bg) 62%, transparent)",
+              "backdrop-filter": "blur(1px)",
+            }}
+          />
+        </Show>
+        <aside
+          class="session-right-pane"
           style={{
-            position: "absolute",
-            left: "-3px",
-            top: 0,
-            width: "6px",
-            height: "100%",
-            cursor: "ew-resize",
-            "z-index": 5,
-            "touch-action": "none",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-accent-subtle)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        />
-        <div
-          role="tablist"
-          style={{
+            flex: narrow() ? "none" : `0 0 ${width()}px`,
+            width: narrow() ? "min(420px, calc(100vw - 52px))" : `${width()}px`,
             display: "flex",
-            "align-items": "stretch",
-            "border-bottom": "1px solid var(--color-border)",
+            "flex-direction": "column",
+            "border-left": "1px solid var(--color-border)",
             background: "var(--color-bg-subtle)",
-            "flex-shrink": 0,
+            "min-width": narrow() ? "280px" : `${MIN_PANE_WIDTH}px`,
+            position: narrow() ? "fixed" : "relative",
+            top: narrow() ? "0" : undefined,
+            right: narrow() ? "0" : undefined,
+            bottom: narrow() ? "0" : undefined,
+            "z-index": narrow() ? 70 : undefined,
+            "box-shadow": narrow() ? "-18px 0 48px rgba(0, 0, 0, 0.22)" : "none",
           }}
         >
+          {/* Drag handle on the left edge of the right pane. 6px wide, full
+          height, invisible until hover. Cursor goes ew-resize. */}
           <div
-            style={{ display: "flex", gap: "5px", padding: "7px 10px", flex: 1, "min-width": 0, "overflow-x": "auto" }}
+            role="separator"
+            aria-orientation="vertical"
+            on:pointerdown={onHandlePointerDown}
+            on:pointermove={onHandlePointerMove}
+            on:pointerup={onHandlePointerUp}
+            on:pointercancel={onHandlePointerUp}
+            style={{
+              position: "absolute",
+              left: "-3px",
+              top: 0,
+              width: "6px",
+              height: "100%",
+              cursor: "ew-resize",
+              "z-index": 5,
+              "touch-action": "none",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-accent-subtle)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          />
+          <div
+            role="tablist"
+            style={{
+              display: "flex",
+              "align-items": "stretch",
+              "border-bottom": "1px solid var(--color-border)",
+              background: "var(--color-bg-subtle)",
+              "flex-shrink": 0,
+            }}
           >
-            <For each={visibleTabs()}>
-              {(t) => (
-                <TabBtn k={t.k} label={t.label} Icon={t.Icon} active={tab() === t.k} onClick={() => setTab(t.k)} />
-              )}
-            </For>
-          </div>
-          <div style={{ position: "relative", display: "flex", "align-items": "center", "flex-shrink": 0 }}>
-            <button onClick={openSkillLibrary} title="skill library" style={paneCtl(false)}>
-              <IconBraces size={12} strokeWidth={1.5} />
-            </button>
-            <button onClick={() => setPanelMenu((v) => !v)} title="panel settings" style={paneCtl(panelMenu())}>
-              <IconSettings size={12} strokeWidth={1.5} />
-            </button>
-            <Show when={panelMenu()}>
-              <div
-                onMouseLeave={() => setPanelMenu(false)}
-                style={{
-                  position: "absolute",
-                  top: "100%",
-                  right: "2px",
-                  "margin-top": "2px",
-                  background: "var(--color-surface-solid)",
-                  border: "1px solid var(--color-border-strong)",
-                  "border-radius": "4px",
-                  "box-shadow": "var(--shadow-md)",
-                  padding: "5px",
-                  "z-index": 40,
-                  "min-width": "150px",
-                }}
-              >
-                <div style={paneMenuLabel}>show in panel</div>
-                <For each={TABS}>
-                  {(t) => (
-                    <button onClick={() => uiStore.toggleTabHidden(t.k)} style={paneMenuRow()}>
-                      <t.Icon size={12} strokeWidth={1.5} />
-                      <span style={{ flex: 1, "text-align": "left" }}>{t.label ?? t.k}</span>
-                      <span
-                        style={{
-                          "font-family": FONT_MONO,
-                          "font-size": "10px",
-                          color: uiStore.isTabHidden(t.k) ? "var(--color-text-faint)" : "var(--color-success)",
-                        }}
-                      >
-                        {uiStore.isTabHidden(t.k) ? "off" : "on"}
-                      </span>
-                    </button>
-                  )}
-                </For>
-                <div style={{ height: "1px", background: "var(--color-border)", margin: "4px 2px" }} />
-                <button
-                  onClick={() => {
-                    uiStore.setRightPaneOpen(false)
-                    setPanelMenu(false)
+            <div
+              style={{
+                display: "flex",
+                gap: "5px",
+                padding: "7px 10px",
+                flex: 1,
+                "min-width": 0,
+                "overflow-x": "auto",
+              }}
+            >
+              <Show when={artifact()}>
+                <TabBtn
+                  k="artifact"
+                  label="Inspect"
+                  Icon={IconAtom}
+                  active={artifactMode()}
+                  onClick={() => uiStore.setRightPaneMode("artifact")}
+                />
+              </Show>
+              <For each={visibleTabs()}>
+                {(t) => (
+                  <TabBtn
+                    k={t.k}
+                    label={t.label}
+                    Icon={t.Icon}
+                    active={!artifactMode() && tab() === t.k}
+                    onClick={() => {
+                      setTab(t.k)
+                      uiStore.setRightPaneMode("tools")
+                    }}
+                  />
+                )}
+              </For>
+            </div>
+            <div style={{ position: "relative", display: "flex", "align-items": "center", "flex-shrink": 0 }}>
+              <button onClick={openSkillLibrary} title="skill library" style={paneCtl(false)}>
+                <IconBraces size={12} strokeWidth={1.5} />
+              </button>
+              <button onClick={() => setPanelMenu((v) => !v)} title="panel settings" style={paneCtl(panelMenu())}>
+                <IconSettings size={12} strokeWidth={1.5} />
+              </button>
+              <Show when={panelMenu()}>
+                <div
+                  onMouseLeave={() => setPanelMenu(false)}
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    right: "2px",
+                    "margin-top": "2px",
+                    background: "var(--color-surface-solid)",
+                    border: "1px solid var(--color-border-strong)",
+                    "border-radius": "4px",
+                    "box-shadow": "var(--shadow-md)",
+                    padding: "5px",
+                    "z-index": 40,
+                    "min-width": "150px",
                   }}
-                  style={paneMenuRow()}
                 >
-                  <IconChevronRight size={12} strokeWidth={1.5} />
-                  <span style={{ flex: 1, "text-align": "left" }}>hide panel</span>
-                </button>
-              </div>
-            </Show>
-            <button onClick={() => uiStore.setRightPaneOpen(false)} title="hide panel" style={paneCtl(false)}>
-              <IconChevronRight size={13} strokeWidth={1.5} />
-            </button>
+                  <div style={paneMenuLabel}>show in panel</div>
+                  <For each={TABS}>
+                    {(t) => (
+                      <button onClick={() => uiStore.toggleTabHidden(t.k)} style={paneMenuRow()}>
+                        <t.Icon size={12} strokeWidth={1.5} />
+                        <span style={{ flex: 1, "text-align": "left" }}>{t.label ?? t.k}</span>
+                        <span
+                          style={{
+                            "font-family": FONT_MONO,
+                            "font-size": "10px",
+                            color: uiStore.isTabHidden(t.k) ? "var(--color-text-faint)" : "var(--color-success)",
+                          }}
+                        >
+                          {uiStore.isTabHidden(t.k) ? "off" : "on"}
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                  <div style={{ height: "1px", background: "var(--color-border)", margin: "4px 2px" }} />
+                  <button
+                    onClick={() => {
+                      uiStore.setRightPaneOpen(false)
+                      setPanelMenu(false)
+                    }}
+                    style={paneMenuRow()}
+                  >
+                    <IconChevronRight size={12} strokeWidth={1.5} />
+                    <span style={{ flex: 1, "text-align": "left" }}>hide panel</span>
+                  </button>
+                </div>
+              </Show>
+              <button onClick={() => uiStore.setRightPaneOpen(false)} title="hide panel" style={paneCtl(false)}>
+                <IconChevronRight size={13} strokeWidth={1.5} />
+              </button>
+            </div>
           </div>
-        </div>
-        <div style={{ flex: 1, "min-height": 0, position: "relative", display: "flex", "flex-direction": "column" }}>
-          <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
-            <CanvasTab />
-          </KeepAlive>
-          <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
-            <TerminalTab />
-          </KeepAlive>
-        </div>
-      </aside>
+          <div style={{ flex: 1, "min-height": 0, position: "relative", display: "flex", "flex-direction": "column" }}>
+            <Show when={artifactMode() && artifact()}>
+              {(current) => <ArtifactInspector context={current()} onClose={() => uiStore.setRightPaneMode("tools")} />}
+            </Show>
+            <div
+              style={{
+                display: artifactMode() ? "none" : "flex",
+                flex: artifactMode() ? undefined : 1,
+                "min-height": 0,
+                "flex-direction": "column",
+              }}
+            >
+              <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
+                <CanvasTab />
+              </KeepAlive>
+              <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
+                <ComputeJobs />
+              </KeepAlive>
+              <KeepAlive show={tab() === "evidence"} mounted={visited().has("evidence")}>
+                <EvidenceGraph />
+              </KeepAlive>
+              <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
+                <TerminalTab />
+              </KeepAlive>
+            </div>
+          </div>
+        </aside>
+      </>
     </Show>
   )
 }
@@ -373,7 +471,9 @@ function TerminalTab(): JSX.Element {
 }
 
 function CollapsedRail(props: {
-  tabs: { k: RightPaneTab; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[]
+  artifact: boolean
+  onInspect: () => void
+  tabs: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[]
   onOpen: (t?: RightPaneTab) => void
 }): JSX.Element {
   return (
@@ -390,13 +490,23 @@ function CollapsedRail(props: {
         background: "var(--color-bg-subtle)",
       }}
     >
-      <button onClick={() => props.onOpen()} title="show panel" style={railBtn()}>
+      <button onClick={() => props.onOpen()} title="show panel" aria-label="show panel" style={railBtn()}>
         <IconChevronLeft size={14} strokeWidth={1.5} />
       </button>
       <span style={{ width: "18px", height: "1px", background: "var(--color-border)", margin: "4px 0" }} />
+      <Show when={props.artifact}>
+        <button onClick={props.onInspect} title="inspect artifact" aria-label="inspect artifact" style={railBtn()}>
+          <IconAtom size={15} strokeWidth={1.5} />
+        </button>
+      </Show>
       <For each={props.tabs}>
         {(t) => (
-          <button onClick={() => props.onOpen(t.k)} title={t.k} style={railBtn()}>
+          <button
+            onClick={() => props.onOpen(t.k)}
+            title={t.label ?? t.k}
+            aria-label={t.label ?? t.k}
+            style={railBtn()}
+          >
             <t.Icon size={15} strokeWidth={1.5} />
           </button>
         )}

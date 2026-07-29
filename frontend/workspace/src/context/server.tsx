@@ -43,9 +43,13 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     const [state, setState] = createStore({
       active: "",
       healthy: undefined as boolean | undefined,
+      checking: false,
+      failures: 0,
     })
 
     const healthy = () => state.healthy
+    const checking = () => state.checking
+    const failures = () => state.failures
 
     function setActive(input: string) {
       const url = normalizeServerUrl(input)
@@ -107,11 +111,28 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
         .catch(() => false)
     }
 
+    const refresh = async (target = state.active) => {
+      if (!target) return false
+      setState("checking", true)
+      const next = await check(target)
+      if (state.active !== target) return next
+      batch(() => {
+        setState("healthy", next)
+        setState("checking", false)
+        setState("failures", next ? 0 : state.failures + 1)
+      })
+      return next
+    }
+
     createEffect(() => {
       const url = state.active
       if (!url) return
 
-      setState("healthy", undefined)
+      batch(() => {
+        setState("healthy", undefined)
+        setState("checking", false)
+        setState("failures", 0)
+      })
 
       let alive = true
       let busy = false
@@ -124,10 +145,9 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
         // on a health check nobody can see; we refresh immediately on refocus.
         if (busy || hidden()) return
         busy = true
-        void check(url)
-          .then((next) => {
+        void refresh(url)
+          .then(() => {
             if (!alive) return
-            setState("healthy", next)
           })
           .finally(() => {
             busy = false
@@ -171,6 +191,9 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     return {
       ready: isReady,
       healthy,
+      checking,
+      failures,
+      refresh,
       isLocal,
       get url() {
         return state.active

@@ -39,6 +39,10 @@ const LAUNCHER_VERSION = (() => {
     return "0.0.0"
   }
 })()
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  console.log(LAUNCHER_VERSION)
+  process.exit(0)
+}
 const OPENSCIENCE_NPM_TAG = npmDistTag(LAUNCHER_VERSION)
 const OPENSCIENCE_NPM_SPEC = opensciencePackageSpec(LAUNCHER_VERSION)
 

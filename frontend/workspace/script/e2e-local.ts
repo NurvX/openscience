@@ -67,7 +67,12 @@ const openscienceDir = path.join(repoDir, "backend", "cli")
 
 const extraArgs = forwardedPlaywrightArgs(process.argv.slice(2))
 
-const [serverPort, webPort, modelPort] = await Promise.all([freePort(), freePort(), freePort()])
+const ports = async (values: number[] = []): Promise<[number, number, number]> => {
+  if (values.length === 3) return values as [number, number, number]
+  const port = await freePort()
+  return ports(values.includes(port) ? values : [...values, port])
+}
+const [serverPort, webPort, modelPort] = await ports()
 const fakeModelServer = startFakeModelServer(modelPort)
 
 const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "openscience-e2e-"))

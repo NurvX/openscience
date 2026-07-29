@@ -17,6 +17,18 @@ import { useSync } from "@/context/sync"
 import { usePlatform } from "@/context/platform"
 import { FONT_MONO, FONT_SANS, FONT_CODE } from "@/styles/tokens"
 import { PdfViewer } from "@/science/renderers/documents/PdfViewer"
+import { ScienceArtifact } from "@/science/ScienceArtifact"
+import { detectScientificFile } from "@/science/files"
+import { ScientificDataView } from "@/science/formats/ScientificDataView"
+import { detectBiologicalFormat } from "@/science/formats/biological"
+import { BinaryScienceView } from "@/science/formats/BinaryScienceView"
+import { detectBinaryScienceFormat } from "@/science/formats/binary"
+import { NotebookView } from "@/notebook/NotebookView"
+import { DataTableView } from "@/data/DataTableView"
+import type { TableFormat } from "@/data/table"
+import { ManuscriptWorkbench } from "@/manuscript/ManuscriptWorkbench"
+import { artifactContext, createArtifactContext } from "@/artifacts/context"
+import type { ArtifactInspection } from "@/science/renderers"
 import { toast } from "@/atlas/Toast"
 import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, IconRefresh } from "@/atlas/shared/Icon"
 
@@ -26,6 +38,7 @@ import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, Icon
  * A file's extension picks the renderer:
  *   .md / .markdown  → formatted markdown (@synsci/ui Markdown)
  *   .pdf             → PdfViewer (pdfjs page rasterizer)
+ *   molecular/FASTA  → scientific artifact renderer, with editable source
  *   .tex / .latex    → highlighted LaTeX source (a .tex is a source FILE, not a
  *                      math expression — the KaTeX LatexView is reserved for
  *                      kind:"latex" math ARTIFACTS with a single math string)
@@ -98,9 +111,19 @@ const LANG: Record<string, string> = {
   log: "text",
 }
 
-type Kind = "markdown" | "pdf" | "image" | "code" | "binary"
+type Kind =
+  | "markdown"
+  | "notebook"
+  | "table"
+  | "scientific-data"
+  | "scientific-binary"
+  | "pdf"
+  | "image"
+  | "science"
+  | "code"
+  | "binary"
 
-type FileData = { content?: string; encoding?: string; mimeType?: string }
+type FileData = { content?: string; encoding?: string; mimeType?: string; size?: number; truncated?: boolean }
 
 /**
  * Inline file view — header (icon + name + subtitle + controls) over the
@@ -114,6 +137,7 @@ export function FileView(props: {
   directory?: string
   subtitle?: string
   onClose?: () => void
+  active?: boolean
 }): JSX.Element {
   const sdk = useSDK()
   const sync = useSync()
@@ -129,6 +153,7 @@ export function FileView(props: {
   const [savedText, setSavedText] = createSignal("")
   const [saving, setSaving] = createSignal(false)
   const [refreshKey, setRefreshKey] = createSignal(0)
+  const [inspection, setInspection] = createSignal<ArtifactInspection>()
 
   const [file] = createResource(
     () => [directory(), props.path, refreshKey()] as const,
@@ -145,21 +170,35 @@ export function FileView(props: {
 
   const data = () => file()
   const isBinary = () => data()?.encoding === "base64"
+  const truncated = () => data()?.truncated === true
   const mime = () => data()?.mimeType ?? ""
   const b64 = () => data()?.content ?? ""
   const dataUrl = () => `data:${mime() || "application/octet-stream"};base64,${b64()}`
   const text = () => (!data() || isBinary() ? "" : (data()!.content ?? ""))
   const dirty = () => draft() !== savedText()
+  const scientific = createMemo(() => (isBinary() ? undefined : detectScientificFile(e(), draft())))
+  const biological = createMemo(() => (isBinary() ? undefined : detectBiologicalFormat(e())))
+  const binaryScience = createMemo(() => detectBinaryScienceFormat(e()))
+  const tabular = createMemo<TableFormat | undefined>(() => {
+    if (isBinary()) return
+    if (e() === "csv" || e() === "tsv" || e() === "jsonl") return e() as TableFormat
+    if (e() === "json" && draft().trimStart().startsWith("[")) return "json"
+  })
 
   const kind = createMemo<Kind>(() => {
     const x = e()
     if (isBinary()) {
       if (mime().startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(x)) return "image"
       if (mime() === "application/pdf" || x === "pdf") return "pdf"
+      if (binaryScience()) return "scientific-binary"
       return "binary"
     }
     if (x === "md" || x === "markdown" || x === "mdx") return "markdown"
+    if (x === "ipynb") return "notebook"
+    if (tabular()) return "table"
+    if (biological()) return "scientific-data"
     if (x === "pdf") return "pdf"
+    if (scientific()) return "science"
     // .tex / .latex / .sty / .cls are source files → highlighted "code" view
     // (LANG maps them to the shiki `latex` grammar). They are NEVER routed to
     // KaTeX, which blanks on a full \documentclass document.
@@ -169,8 +208,32 @@ export function FileView(props: {
   const badge = () => {
     const k = kind()
     if (k === "code") return LANG[e()] ?? e() ?? "text"
+    if (k === "science") return scientific()?.format ?? e()
+    if (k === "scientific-data") return biological() ?? e()
+    if (k === "scientific-binary") return binaryScience() ?? e()
+    if (k === "table") return tabular() ?? e()
     return k
   }
+  const context = createMemo(() =>
+    createArtifactContext({
+      directory: directory(),
+      path: props.path,
+      format: badge(),
+      scienceKind: scientific()?.kind,
+      inspection: inspection(),
+    }),
+  )
+
+  createEffect(() => {
+    const current = context()
+    if (props.active === false) {
+      artifactContext.clear(current.id)
+      return
+    }
+    artifactContext.activate(current)
+  })
+
+  onCleanup(() => artifactContext.clear(context().id))
 
   createEffect(() => {
     if (file.loading) return
@@ -180,7 +243,7 @@ export function FileView(props: {
   })
 
   const save = async () => {
-    if (saving() || isBinary() || !dirty()) return
+    if (saving() || isBinary() || truncated() || !dirty()) return
     setSaving(true)
     try {
       // The generated SDK has no file.write; hit the real PUT /file/content
@@ -213,10 +276,35 @@ export function FileView(props: {
     } catch {}
   }
 
-  const toggleable = () => kind() === "markdown" || kind() === "code"
+  const download = async () => {
+    try {
+      const doFetch = platform.fetch ?? fetch
+      const url = `${sdk.url.replace(/\/$/, "")}/file/raw?directory=${encodeURIComponent(directory())}&path=${encodeURIComponent(props.path)}`
+      const response = await doFetch(url)
+      if (!response.ok) throw new Error(`download failed (${response.status})`)
+      const object = URL.createObjectURL(await response.blob())
+      const anchor = document.createElement("a")
+      anchor.href = object
+      anchor.download = name()
+      anchor.click()
+      URL.revokeObjectURL(object)
+    } catch (error) {
+      toast.error("download failed", error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const toggleable = () =>
+    kind() === "markdown" ||
+    kind() === "notebook" ||
+    kind() === "table" ||
+    kind() === "scientific-data" ||
+    kind() === "science" ||
+    kind() === "code"
 
   return (
     <div
+      data-component="file-view"
+      data-artifact-id={context().id}
       style={{
         flex: 1,
         "min-height": 0,
@@ -295,32 +383,49 @@ export function FileView(props: {
           </button>
         </Show>
 
-        <Show when={toggleable()}>
+        <Show when={toggleable() && !truncated()}>
           <button
             type="button"
             onClick={() => setShowSource((v) => !v)}
             title={showSource() ? "rendered view" : kind() === "code" ? "edit source" : "raw source"}
-            style={iconBtn(showSource())}
+            aria-label={showSource() ? "Rendered view" : "Source"}
+            style={headerBtn(showSource())}
           >
             <Show when={showSource()} fallback={<IconBraces size={13} strokeWidth={1.6} />}>
               <IconBookOpen size={13} strokeWidth={1.6} />
             </Show>
+            <span>{showSource() ? "view" : "source"}</span>
           </button>
         </Show>
 
         <Show when={!isBinary()}>
-          <button type="button" onClick={() => void copy()} title="copy contents" style={iconBtn()}>
+          <button type="button" onClick={() => void copy()} title="copy contents" aria-label="Copy" style={headerBtn()}>
             <IconCopy size={13} strokeWidth={1.6} />
+            <span>copy</span>
           </button>
         </Show>
         <Show when={isBinary()}>
-          <a href={dataUrl()} download={name()} title="download" style={{ ...iconBtn(), "text-decoration": "none" }}>
+          <button
+            type="button"
+            onClick={() => void download()}
+            title="download"
+            aria-label="Download"
+            style={headerBtn()}
+          >
             <IconDownload size={13} strokeWidth={1.6} />
-          </a>
+            <span>download</span>
+          </button>
         </Show>
 
-        <button type="button" onClick={() => setRefreshKey((k) => k + 1)} title="refresh" style={iconBtn()}>
+        <button
+          type="button"
+          onClick={() => setRefreshKey((k) => k + 1)}
+          title="refresh"
+          aria-label="Refresh"
+          style={headerBtn()}
+        >
           <IconRefresh size={13} strokeWidth={1.6} />
+          <span>refresh</span>
         </button>
 
         <Show when={props.onClose}>
@@ -396,11 +501,81 @@ export function FileView(props: {
             }}
           >
             <Switch>
+              <Match when={truncated()}>
+                <div
+                  style={{
+                    padding: "16px 18px 28px",
+                    "font-family": FONT_CODE,
+                    "font-size": "12px",
+                    "line-height": 1.65,
+                    color: "var(--color-text)",
+                  }}
+                >
+                  <div
+                    role="status"
+                    style={{
+                      padding: "10px 12px",
+                      "margin-bottom": "14px",
+                      border: "1px solid var(--color-border)",
+                      "border-radius": "6px",
+                      background: "var(--color-bg)",
+                      "font-family": FONT_SANS,
+                      color: "var(--color-text-muted)",
+                      "white-space": "normal",
+                    }}
+                  >
+                    Preview limited to 8 MB of {formatBytes(data()?.size ?? 0)}. Download the file or use a compute tool
+                    for the complete dataset.
+                  </div>
+                  <pre style={{ margin: 0, "white-space": "pre-wrap", "overflow-wrap": "anywhere" }}>{draft()}</pre>
+                </div>
+              </Match>
               {/* markdown */}
               <Match when={kind() === "markdown" && !showSource()}>
-                <div style={{ padding: "22px 26px", "max-width": "820px", margin: "0 auto" }}>
-                  <Markdown class="atlas-md" text={draft()} />
-                </div>
+                <ManuscriptWorkbench
+                  directory={directory()}
+                  path={props.path}
+                  text={draft()}
+                  dirty={dirty()}
+                  saving={saving()}
+                  onChange={setDraft}
+                />
+              </Match>
+
+              {/* notebook */}
+              <Match when={kind() === "notebook" && !showSource()}>
+                <NotebookView
+                  path={props.path}
+                  directory={directory()}
+                  text={draft()}
+                  savedText={savedText()}
+                  dirty={dirty()}
+                  saving={saving()}
+                  onChange={setDraft}
+                  onSave={() => void save()}
+                  onRaw={() => setShowSource(true)}
+                />
+              </Match>
+
+              {/* tabular data */}
+              <Match when={kind() === "table" && !showSource()}>
+                <Show when={tabular()}>
+                  {(format) => <DataTableView text={draft()} format={format()} name={name()} />}
+                </Show>
+              </Match>
+
+              {/* genomic, alignment, and mass-spectrometry data */}
+              <Match when={kind() === "scientific-data" && !showSource()}>
+                <Show when={biological()}>
+                  {(format) => <ScientificDataView text={draft()} format={format()} name={name()} />}
+                </Show>
+              </Match>
+
+              {/* large scientific containers */}
+              <Match when={kind() === "scientific-binary"}>
+                <Show when={binaryScience()}>
+                  {(format) => <BinaryScienceView path={props.path} directory={directory()} format={format()} />}
+                </Show>
               </Match>
 
               {/* pdf */}
@@ -424,6 +599,29 @@ export function FileView(props: {
                     }}
                   />
                 </div>
+              </Match>
+
+              {/* scientific file */}
+              <Match when={kind() === "science" && !showSource()}>
+                <Show when={scientific()}>
+                  {(artifact) => (
+                    <div
+                      style={{
+                        padding: "14px",
+                        height: "100%",
+                        "min-height": "420px",
+                        "box-sizing": "border-box",
+                      }}
+                    >
+                      <ScienceArtifact
+                        kind={artifact().kind}
+                        data={artifact().data}
+                        height={560}
+                        onInspect={setInspection}
+                      />
+                    </div>
+                  )}
+                </Show>
               </Match>
 
               {/* binary */}
@@ -453,7 +651,16 @@ export function FileView(props: {
               </Match>
 
               {/* code / text — editable source, or highlighted read view */}
-              <Match when={kind() === "code" && showSource()}>
+              <Match
+                when={
+                  (kind() === "code" ||
+                    kind() === "science" ||
+                    kind() === "scientific-data" ||
+                    kind() === "notebook" ||
+                    kind() === "table") &&
+                  showSource()
+                }
+              >
                 <textarea
                   value={draft()}
                   spellcheck={false}
@@ -553,7 +760,16 @@ export function FilePreview(props: { path: string; onClose: () => void }): JSX.E
 
 function langFor(k: Kind, x: string): string {
   if (k === "markdown") return "markdown"
+  if (k === "notebook") return "json"
+  if (k === "table") return x === "jsonl" ? "json" : x
   return LANG[x] ?? "text"
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
 // Wrap raw file text in a fenced code block so the shared Markdown renderer
@@ -580,6 +796,29 @@ function iconBtn(active = false): JSX.CSSProperties {
     "flex-shrink": 0,
     transition: "background 120ms ease, color 120ms ease",
   } as JSX.CSSProperties
+}
+
+function headerBtn(active = false): JSX.CSSProperties {
+  return {
+    all: "unset",
+    cursor: "pointer",
+    height: "28px",
+    display: "inline-flex",
+    "align-items": "center",
+    "justify-content": "center",
+    gap: "5px",
+    padding: "0 7px",
+    "border-radius": "5px",
+    border: "1px solid var(--color-border)",
+    color: active ? "var(--color-text)" : "var(--color-text-muted)",
+    background: active ? "var(--color-accent-subtle)" : "var(--color-bg-subtle)",
+    "font-family": FONT_SANS,
+    "font-size": "10px",
+    "font-weight": 550,
+    "text-transform": "capitalize",
+    "flex-shrink": 0,
+    transition: "background 120ms ease, color 120ms ease",
+  }
 }
 
 function retryBtn(): JSX.CSSProperties {

@@ -17,6 +17,8 @@ export function DisconnectedPanel(): JSX.Element {
   return (
     <Show when={server.healthy() === false}>
       <div
+        role="alert"
+        aria-label="Server connection lost"
         style={{
           display: "flex",
           "align-items": "center",
@@ -52,9 +54,33 @@ export function DisconnectedPanel(): JSX.Element {
               "white-space": "nowrap",
             }}
           >
-            {server.name} · start it with <code>openscience web</code> or switch servers · retrying…
+            {server.name} ·{" "}
+            <Show when={server.isLocal()} fallback="check the server URL or switch servers">
+              start it with <code>openscience serve</code>
+            </Show>
+            <Show when={server.failures() > 1}> · {server.failures()} failed checks</Show>
           </div>
         </div>
+        <button
+          type="button"
+          disabled={server.checking()}
+          onClick={() => void server.refresh()}
+          style={{
+            all: "unset",
+            cursor: server.checking() ? "wait" : "pointer",
+            padding: "6px 12px",
+            "border-radius": "4px",
+            border: "1px solid var(--color-error, #ef4444)",
+            background: "var(--color-error, #ef4444)",
+            "font-family": FONT_MONO,
+            "font-size": "11px",
+            color: "white",
+            opacity: server.checking() ? 0.7 : 1,
+            "flex-shrink": 0,
+          }}
+        >
+          {server.checking() ? "checking…" : "retry now"}
+        </button>
         <button
           type="button"
           onClick={() => dialog.show(() => <DialogSelectServer />)}

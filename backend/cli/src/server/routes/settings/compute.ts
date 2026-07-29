@@ -9,6 +9,7 @@ import { Env } from "../../../env"
 import { OpenScience } from "../../../openscience"
 import { errors } from "../../error"
 import { lazy } from "../../../util/lazy"
+import { ComputeJobs } from "../../../compute/jobs"
 
 // ── Compute settings store ──────────────────────────────────────────────────
 //
@@ -96,13 +97,7 @@ export namespace ComputeSettings {
   ]
 
   // ── Schemas ──
-  export const SshHost = z.object({
-    id: z.string(),
-    label: z.string(),
-    host: z.string(),
-    user: z.string().optional(),
-    port: z.number().int().positive().optional(),
-  })
+  export const SshHost = ComputeJobs.Host
   export type SshHost = z.infer<typeof SshHost>
 
   export const Endpoint = z.object({
@@ -301,6 +296,10 @@ export namespace ComputeSettings {
     return view(stored)
   }
 
+  export async function findSshHost(target: string): Promise<SshHost | undefined> {
+    return (await read()).ssh_hosts.find((host) => host.id === target)
+  }
+
   export async function addEndpoint(input: Omit<Endpoint, "id">): Promise<Info> {
     const stored = await read()
     stored.endpoints.push({ id: id(), ...input })
@@ -385,9 +384,31 @@ export const ComputeSettingsRoutes = lazy(() =>
           host: z.string().min(1),
           user: z.string().optional(),
           port: z.number().int().positive().optional(),
+          scheduler: ComputeJobs.Scheduler.default("none"),
+          workdir: z.string().optional(),
         }),
       ),
       async (c) => c.json(await ComputeSettings.addSshHost(c.req.valid("json"))),
+    )
+    .post(
+      "/ssh/:id/test",
+      describeRoute({
+        summary: "Test an SSH compute host",
+        operationId: "settings.compute.ssh.test",
+        responses: {
+          200: {
+            description: "Connection result",
+            content: { "application/json": { schema: resolver(ComputeJobs.Probe) } },
+          },
+          ...errors(404),
+        },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      async (c) => {
+        const host = await ComputeSettings.findSshHost(c.req.valid("param").id)
+        if (!host) return c.json({ error: "SSH host not found" }, 404)
+        return c.json(await ComputeJobs.probe(host))
+      },
     )
     .delete(
       "/ssh/:id",
@@ -432,5 +453,94 @@ export const ComputeSettingsRoutes = lazy(() =>
       }),
       validator("param", z.object({ id: z.string() })),
       async (c) => c.json(await ComputeSettings.removeEndpoint(c.req.valid("param").id)),
+    )
+    .get(
+      "/jobs",
+      describeRoute({
+        summary: "List local and remote compute jobs",
+        operationId: "settings.compute.jobs.list",
+        responses: {
+          200: {
+            description: "Compute jobs",
+            content: { "application/json": { schema: resolver(ComputeJobs.Job.array()) } },
+          },
+        },
+      }),
+      async (c) => c.json(await ComputeJobs.list()),
+    )
+    .post(
+      "/jobs",
+      describeRoute({
+        summary: "Start a local, SSH, Slurm, or PBS compute job",
+        operationId: "settings.compute.jobs.start",
+        responses: {
+          200: { description: "Started job", content: { "application/json": { schema: resolver(ComputeJobs.Job) } } },
+          ...errors(400),
+        },
+      }),
+      validator("json", ComputeJobs.Input),
+      async (c) => {
+        const settings = await ComputeSettings.get()
+        const input = c.req.valid("json")
+        const hostId = input.target.kind === "ssh" ? input.target.host_id : undefined
+        if (hostId && !settings.ssh_hosts.some((host) => host.id === hostId)) {
+          return c.json({ error: "The selected SSH compute profile was not found" }, 400)
+        }
+        return c.json(await ComputeJobs.start(input, { hosts: settings.ssh_hosts }))
+      },
+    )
+    .delete(
+      "/jobs/completed",
+      describeRoute({
+        summary: "Clear completed compute jobs",
+        operationId: "settings.compute.jobs.clear",
+        responses: {
+          200: {
+            description: "Number cleared",
+            content: {
+              "application/json": { schema: resolver(z.object({ cleared: z.number().int().nonnegative() })) },
+            },
+          },
+        },
+      }),
+      async (c) => c.json({ cleared: await ComputeJobs.clear() }),
+    )
+    .get(
+      "/jobs/:id/log",
+      describeRoute({
+        summary: "Read a compute job log",
+        operationId: "settings.compute.jobs.log",
+        responses: {
+          200: {
+            description: "Job output",
+            content: { "application/json": { schema: resolver(z.object({ log: z.string() })) } },
+          },
+          ...errors(404),
+        },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      async (c) => {
+        const job = await ComputeJobs.get(c.req.valid("param").id)
+        if (!job) return c.json({ error: "Compute job not found" }, 404)
+        return c.json({ log: await ComputeJobs.log(job.id) })
+      },
+    )
+    .post(
+      "/jobs/:id/cancel",
+      describeRoute({
+        summary: "Cancel a compute job",
+        operationId: "settings.compute.jobs.cancel",
+        responses: {
+          200: { description: "Cancelled job", content: { "application/json": { schema: resolver(ComputeJobs.Job) } } },
+          ...errors(404),
+        },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      async (c) => {
+        const settings = await ComputeSettings.get()
+        const job = await ComputeJobs.get(c.req.valid("param").id)
+        if (!job) return c.json({ error: "Compute job not found" }, 404)
+        return c.json(await ComputeJobs.cancel(job.id, { hosts: settings.ssh_hosts }))
+      },
     ),
 )
