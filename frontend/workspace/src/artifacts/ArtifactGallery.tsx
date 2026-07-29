@@ -685,16 +685,9 @@ function ArtifactDetail(props: {
           <Section title="Publication exports">
             <div style={{ display: "grid", gap: "8px" }}>
               <span style={{ ...muted(), "line-height": 1.5 }}>
-                Create timestamped local outputs with Pandoc. Relative figures and tables stay linked to this project.
+                HTML is built in. Pandoc adds timestamped PDF, Word, LaTeX, and PowerPoint outputs.
               </span>
-              <Show
-                when={capabilities.latest?.pandoc}
-                fallback={
-                  <span style={{ ...muted(), color: "var(--color-warning)" }}>
-                    Install Pandoc to enable HTML, PDF, Word, LaTeX, and PowerPoint exports.
-                  </span>
-                }
-              >
+              <Show when={capabilities.latest} fallback={<span style={muted()}>checking local export tools…</span>}>
                 <div style={{ display: "grid", "grid-template-columns": "repeat(2, minmax(0, 1fr))", gap: "5px" }}>
                   <For each={["html", "pdf", "docx", "latex", "pptx"] as PublicationFormat[]}>
                     {(format) => (
@@ -717,6 +710,11 @@ function ArtifactDetail(props: {
                 </div>
                 <Show when={capabilities.latest?.pdf_engine}>
                   <span style={muted()}>PDF engine · {capabilities.latest?.pdf_engine}</span>
+                </Show>
+                <Show when={!capabilities.latest?.pandoc}>
+                  <span style={{ ...muted(), color: "var(--color-warning)" }}>
+                    Install Pandoc to unlock PDF, Word, LaTeX, and PowerPoint.
+                  </span>
                 </Show>
               </Show>
             </div>

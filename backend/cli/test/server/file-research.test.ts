@@ -56,7 +56,7 @@ describe("/file research routes", () => {
         const capabilities = await FileRoutes().request("/file/publication/capabilities")
         expect(capabilities.status).toBe(200)
         const support = (await capabilities.json()) as { formats: { html: boolean } }
-        if (!support.formats.html) return
+        expect(support.formats.html).toBe(true)
         const response = await FileRoutes().request("/file/publication", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

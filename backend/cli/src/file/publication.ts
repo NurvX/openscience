@@ -1,7 +1,9 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { marked, Renderer } from "marked"
 import z from "zod"
 import { OpenScience } from "../openscience"
+import { escapeHtml } from "../util/html"
 
 export namespace PublicationFile {
   export const Format = z.enum(["html", "pdf", "docx", "latex", "pptx"])
@@ -44,7 +46,7 @@ export namespace PublicationFile {
       pandoc,
       pdf_engine: pdf ? path.basename(pdf) : undefined,
       formats: {
-        html: pandoc,
+        html: true,
         pdf: pandoc && Boolean(pdf),
         docx: pandoc,
         latex: pandoc,
@@ -83,6 +85,73 @@ export namespace PublicationFile {
       `${stem}-${stamp.slice(0, 8)}-${stamp.slice(8)}-${nonce}.${extensions[parsed.format]}`,
     )
     const target = path.join(root, relative)
+    if (parsed.format === "html") {
+      const renderer = new Renderer()
+      renderer.html = ({ text }) => escapeHtml(text)
+      renderer.link = ({ href, title, tokens }) => {
+        const content = renderer.parser.parseInline(tokens)
+        const target = safe(href, false)
+        if (!target) return content
+        const hint = title ? ` title="${escapeHtml(title)}"` : ""
+        return `<a href="${escapeHtml(target)}"${hint}>${content}</a>`
+      }
+      renderer.image = ({ href, title, text }) => {
+        const target = safe(href, true)
+        if (!target) return escapeHtml(text)
+        const hint = title ? ` title="${escapeHtml(title)}"` : ""
+        return `<img src="${escapeHtml(target)}" alt="${escapeHtml(text)}"${hint}>`
+      }
+      const markdown = await Bun.file(source).text()
+      const body = await marked.parse(markdown, { gfm: true, renderer })
+      const base = `${path.relative(folder, path.dirname(source)).split(path.sep).join("/") || "."}/`
+      const title = path.basename(source, path.extname(source))
+      const document = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data: https: http:; style-src 'unsafe-inline'; font-src 'self' data:">
+  <base href="${escapeHtml(base)}">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.65; }
+    body { max-width: 860px; margin: 0 auto; padding: 48px 28px 80px; color: #20211f; background: #fbfbf8; }
+    h1, h2, h3 { line-height: 1.2; letter-spacing: -0.02em; }
+    h1 { font-size: 2.25rem; margin-bottom: 1.5rem; }
+    h2 { margin-top: 2.5rem; border-bottom: 1px solid #d8d8d0; padding-bottom: .35rem; }
+    a { color: #315f8c; }
+    img { display: block; max-width: 100%; height: auto; margin: 1.5rem auto; }
+    table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; }
+    th, td { border: 1px solid #d8d8d0; padding: .55rem .7rem; text-align: left; }
+    pre, code { font-family: ui-monospace, SFMono-Regular, monospace; background: #efefe9; border-radius: 4px; }
+    pre { overflow: auto; padding: 1rem; }
+    code { padding: .12rem .28rem; }
+    pre code { padding: 0; }
+    blockquote { margin-left: 0; padding-left: 1rem; border-left: 3px solid #a8aaa2; color: #555750; }
+    @media print { body { max-width: none; padding: 0; background: #fff; } a { color: inherit; } }
+    @media (prefers-color-scheme: dark) {
+      body { color: #e6e6df; background: #191a18; }
+      h2, th, td { border-color: #41433e; }
+      pre, code { background: #292b27; }
+      a { color: #8bb8e3; }
+    }
+  </style>
+</head>
+<body>
+${body}
+</body>
+</html>
+`
+      await Bun.write(target, document)
+      const stat = await fs.stat(target)
+      return Result.parse({
+        path: relative.split(path.sep).join("/"),
+        format: parsed.format,
+        size: stat.size,
+        created_at: new Date().toISOString(),
+        engine: "OpenScience Markdown",
+      })
+    }
     const args = [
       "pandoc",
       source,
@@ -125,5 +194,14 @@ export namespace PublicationFile {
       throw new Error("Publication path escapes the project directory")
     }
     return target
+  }
+
+  function safe(value: string, image: boolean): string | undefined {
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(value)?.[1]?.toLowerCase()
+    if (!scheme) return value
+    if (scheme === "http" || scheme === "https") return value
+    if (!image && scheme === "mailto") return value
+    if (image && scheme === "data" && /^data:image\//i.test(value)) return value
+    return undefined
   }
 }

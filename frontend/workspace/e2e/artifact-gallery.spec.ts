@@ -7,6 +7,16 @@ test("discovers, filters, opens, downloads, and contextualizes local research ar
   page,
   gotoSession,
 }) => {
+  await page.route("**/file/publication/capabilities?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        pandoc: false,
+        formats: { html: true, pdf: false, docx: false, latex: false, pptx: false },
+      }),
+    }),
+  )
   const directory = mkdtempSync(path.join(tmpdir(), "openscience-artifacts-e2e-"))
   mkdirSync(path.join(directory, "results"))
   writeFileSync(path.join(directory, "analysis.ipynb"), '{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}')
@@ -74,6 +84,7 @@ test("discovers, filters, opens, downloads, and contextualizes local research ar
     await gallery.locator('[data-artifact="report.md"]').click()
     await expect(detail.getByText("Publication exports", { exact: true })).toBeVisible()
     await expect(detail.getByRole("button", { name: "HTML", exact: true })).toBeEnabled()
+    await expect(detail.getByText("Install Pandoc to unlock PDF, Word, LaTeX, and PowerPoint.")).toBeVisible()
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }

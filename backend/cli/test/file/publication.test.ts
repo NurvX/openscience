@@ -6,32 +6,32 @@ import { tmpdir } from "../fixture/fixture"
 describe("PublicationFile", () => {
   test("detects real local publication export capabilities", async () => {
     const capabilities = await PublicationFile.capabilities()
-    expect(capabilities.formats.html).toBe(capabilities.pandoc)
+    expect(capabilities.formats.html).toBe(true)
     expect(capabilities.formats.docx).toBe(capabilities.pandoc)
     expect(capabilities.formats.pptx).toBe(capabilities.pandoc)
     expect(capabilities.formats.pdf).toBe(capabilities.pandoc && Boolean(capabilities.pdf_engine))
   })
 
-  test("exports a real standalone publication when pandoc is available", async () => {
-    const capabilities = await PublicationFile.capabilities()
-    if (!capabilities.formats.html) return
+  test("exports a secure standalone HTML publication without external tooling", async () => {
     await using tmp = await tmpdir({
       init: async (directory) => {
         await Bun.write(
           path.join(directory, "report.md"),
-          "# Treatment response\n\nThe observed response was **42%**.\n",
+          "# Treatment response\n\nThe observed response was **42%**.\n\n<script>alert('unsafe')</script>\n",
         )
       },
     })
     const result = await PublicationFile.render(tmp.path, { path: "report.md", format: "html" })
     expect(result.path).toMatch(/^exports\/report-\d{8}-\d{9}-[a-f0-9]{8}\.html$/)
     expect(result.size).toBeGreaterThan(100)
-    expect(await Bun.file(path.join(tmp.path, result.path)).text()).toContain("Treatment response")
+    expect(result.engine).toBe("OpenScience Markdown")
+    const html = await Bun.file(path.join(tmp.path, result.path)).text()
+    expect(html).toContain("Treatment response")
+    expect(html).toContain("Content-Security-Policy")
+    expect(html).not.toContain("<script>alert")
   })
 
   test("never overwrites a rapid repeated export", async () => {
-    const capabilities = await PublicationFile.capabilities()
-    if (!capabilities.formats.html) return
     await using tmp = await tmpdir({
       init: async (directory) => {
         await Bun.write(path.join(directory, "report.md"), "# Stable export\n")
