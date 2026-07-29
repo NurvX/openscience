@@ -3,10 +3,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { expect, test } from "./fixtures"
 
-test("runs a reproducible local job and captures outputs from the right pane", async ({
-  page,
-  gotoSession,
-}) => {
+test("runs a reproducible local job and captures outputs from the right pane", async ({ page, gotoSession }) => {
   const directory = mkdtempSync(path.join(tmpdir(), "openscience-compute-e2e-"))
   try {
     await gotoSession()

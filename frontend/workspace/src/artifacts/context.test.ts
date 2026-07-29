@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  clearOwnedArtifact,
-  createArtifactContext,
-  inferArtifactKind,
-  type ArtifactContext,
-} from "./context"
+import { clearOwnedArtifact, createArtifactContext, inferArtifactKind, type ArtifactContext } from "./context"
 
 describe("artifact context", () => {
   test("normalizes equivalent locations to one stable identity", () => {

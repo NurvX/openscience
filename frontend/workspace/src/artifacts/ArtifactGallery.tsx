@@ -511,10 +511,7 @@ function ArtifactVisual(props: { item: ArtifactInfo; preview: string }): JSX.Ele
         "border-bottom": "1px solid var(--color-border)",
       }}
     >
-      <Show
-        when={image()}
-        fallback={<ArtifactPlaceholder item={props.item} />}
-      >
+      <Show when={image()} fallback={<ArtifactPlaceholder item={props.item} />}>
         <img
           data-preview-source="file"
           data-preview-kind="figure"
@@ -585,9 +582,7 @@ function ArtifactPlaceholder(props: { item: ArtifactInfo }): JSX.Element {
       <span style={{ color: accent(props.item.kind), opacity: 0.78 }}>
         <KindIcon kind={props.item.kind} size={21} />
       </span>
-      <strong style={{ "font-family": FONT_SANS, "font-size": "10px", color: "var(--color-text)" }}>
-        {copy()[0]}
-      </strong>
+      <strong style={{ "font-family": FONT_SANS, "font-size": "10px", color: "var(--color-text)" }}>{copy()[0]}</strong>
       <span style={{ "font-family": FONT_MONO, "font-size": "8px", color: "var(--color-text-faint)" }}>
         {copy()[1]}
       </span>

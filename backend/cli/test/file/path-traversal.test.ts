@@ -100,15 +100,9 @@ describe("File.read path traversal protection", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        await expect(File.read("escape/secret.txt")).rejects.toThrow(
-          "Access denied: path escapes project directory",
-        )
-        await expect(File.raw("escape/secret.txt")).rejects.toThrow(
-          "Access denied: path escapes project directory",
-        )
-        await expect(File.inspect("escape/secret.txt")).rejects.toThrow(
-          "Access denied: path escapes project directory",
-        )
+        await expect(File.read("escape/secret.txt")).rejects.toThrow("Access denied: path escapes project directory")
+        await expect(File.raw("escape/secret.txt")).rejects.toThrow("Access denied: path escapes project directory")
+        await expect(File.inspect("escape/secret.txt")).rejects.toThrow("Access denied: path escapes project directory")
       },
     })
   })

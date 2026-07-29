@@ -28,11 +28,12 @@ describe("ArtifactFile reproducibility", () => {
           .quiet()
       },
     })
+    const branch = (await $`git branch --show-current`.cwd(tmp.path).quiet().text()).trim()
 
     const audit = await ArtifactFile.audit(tmp.path)
     expect(audit.status).toBe("ready")
     expect(audit.score).toBeGreaterThanOrEqual(90)
-    expect(audit.git).toMatchObject({ dirty: false, branch: "master" })
+    expect(audit.git).toMatchObject({ dirty: false, branch })
     expect(audit.lockfiles).toContain("uv.lock")
     expect(audit.environments).toContain("pyproject.toml")
     expect(audit.notebooks).toEqual({ total: 1, valid: 1, invalid: [] })

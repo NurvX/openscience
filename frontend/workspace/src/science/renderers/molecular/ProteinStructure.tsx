@@ -136,7 +136,13 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
         "PNG export",
       ],
       ...(selected.count
-        ? { selection: { kind: "molecule" as const, label: selected.label || `${selected.count} selected`, count: selected.count } }
+        ? {
+            selection: {
+              kind: "molecule" as const,
+              label: selected.label || `${selected.count} selected`,
+              count: selected.count,
+            },
+          }
         : {}),
     })
   })
@@ -219,13 +225,7 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
     const p = plugin()
     if (!p) return
     const state = p.managers.structure.measurement.state
-    const cells = [
-      ...state.distances,
-      ...state.angles,
-      ...state.dihedrals,
-      ...state.orientations,
-      ...state.planes,
-    ]
+    const cells = [...state.distances, ...state.angles, ...state.dihedrals, ...state.orientations, ...state.planes]
     if (!cells.length) return
     const { PluginCommands } = await import("molstar/lib/mol-plugin/commands")
     await Promise.all(
@@ -243,7 +243,12 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
   function exportName() {
     const src = narrowMolecularSource(props.data, props.kind)
     if (!src?.raw || src.format !== "xyz") return "molecule-structure.png"
-    const name = src.raw.split(/\r?\n/)[1]?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+    const name = src.raw
+      .split(/\r?\n/)[1]
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
     return `${name || "molecule"}-structure.png`
   }
 
@@ -439,9 +444,7 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
                 </For>
               </div>
             </Show>
-            <For each={value().warnings}>
-              {(warning) => <span style={{ color: "#f2c879" }}>{warning}</span>}
-            </For>
+            <For each={value().warnings}>{(warning) => <span style={{ color: "#f2c879" }}>{warning}</span>}</For>
           </div>
         )}
       </Show>

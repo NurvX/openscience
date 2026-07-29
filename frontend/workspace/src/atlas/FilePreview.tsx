@@ -397,19 +397,19 @@ export function FileView(props: {
         </Show>
 
         <Show when={!isBinary()}>
-          <button
-            type="button"
-            onClick={() => void copy()}
-            title="copy contents"
-            aria-label="Copy"
-            style={headerBtn()}
-          >
+          <button type="button" onClick={() => void copy()} title="copy contents" aria-label="Copy" style={headerBtn()}>
             <IconCopy size={13} strokeWidth={1.6} />
             <span>copy</span>
           </button>
         </Show>
         <Show when={isBinary()}>
-          <button type="button" onClick={() => void download()} title="download" aria-label="Download" style={headerBtn()}>
+          <button
+            type="button"
+            onClick={() => void download()}
+            title="download"
+            aria-label="Download"
+            style={headerBtn()}
+          >
             <IconDownload size={13} strokeWidth={1.6} />
             <span>download</span>
           </button>

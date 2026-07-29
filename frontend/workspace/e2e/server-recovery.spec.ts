@@ -1,6 +1,9 @@
 import { expect, test } from "./fixtures"
 
-test("retries a failed server health check immediately and clears the recovery banner", async ({ page, gotoSession }) => {
+test("retries a failed server health check immediately and clears the recovery banner", async ({
+  page,
+  gotoSession,
+}) => {
   let available = false
   await page.route("**/global/health", async (route) => {
     if (!available) {

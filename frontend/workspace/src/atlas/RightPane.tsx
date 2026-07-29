@@ -170,156 +170,158 @@ export function RightPane(): JSX.Element {
             "box-shadow": narrow() ? "-18px 0 48px rgba(0, 0, 0, 0.22)" : "none",
           }}
         >
-        {/* Drag handle on the left edge of the right pane. 6px wide, full
+          {/* Drag handle on the left edge of the right pane. 6px wide, full
           height, invisible until hover. Cursor goes ew-resize. */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          on:pointerdown={onHandlePointerDown}
-          on:pointermove={onHandlePointerMove}
-          on:pointerup={onHandlePointerUp}
-          on:pointercancel={onHandlePointerUp}
-          style={{
-            position: "absolute",
-            left: "-3px",
-            top: 0,
-            width: "6px",
-            height: "100%",
-            cursor: "ew-resize",
-            "z-index": 5,
-            "touch-action": "none",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-accent-subtle)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        />
-        <div
-          role="tablist"
-          style={{
-            display: "flex",
-            "align-items": "stretch",
-            "border-bottom": "1px solid var(--color-border)",
-            background: "var(--color-bg-subtle)",
-            "flex-shrink": 0,
-          }}
-        >
           <div
-            style={{ display: "flex", gap: "5px", padding: "7px 10px", flex: 1, "min-width": 0, "overflow-x": "auto" }}
-          >
-            <Show when={artifact()}>
-              <TabBtn
-                k="artifact"
-                label="Inspect"
-                Icon={IconAtom}
-                active={artifactMode()}
-                onClick={() => uiStore.setRightPaneMode("artifact")}
-              />
-            </Show>
-            <For each={visibleTabs()}>
-              {(t) => (
-                <TabBtn
-                  k={t.k}
-                  label={t.label}
-                  Icon={t.Icon}
-                  active={!artifactMode() && tab() === t.k}
-                  onClick={() => {
-                    setTab(t.k)
-                    uiStore.setRightPaneMode("tools")
-                  }}
-                />
-              )}
-            </For>
-          </div>
-          <div style={{ position: "relative", display: "flex", "align-items": "center", "flex-shrink": 0 }}>
-            <button onClick={openSkillLibrary} title="skill library" style={paneCtl(false)}>
-              <IconBraces size={12} strokeWidth={1.5} />
-            </button>
-            <button onClick={() => setPanelMenu((v) => !v)} title="panel settings" style={paneCtl(panelMenu())}>
-              <IconSettings size={12} strokeWidth={1.5} />
-            </button>
-            <Show when={panelMenu()}>
-              <div
-                onMouseLeave={() => setPanelMenu(false)}
-                style={{
-                  position: "absolute",
-                  top: "100%",
-                  right: "2px",
-                  "margin-top": "2px",
-                  background: "var(--color-surface-solid)",
-                  border: "1px solid var(--color-border-strong)",
-                  "border-radius": "4px",
-                  "box-shadow": "var(--shadow-md)",
-                  padding: "5px",
-                  "z-index": 40,
-                  "min-width": "150px",
-                }}
-              >
-                <div style={paneMenuLabel}>show in panel</div>
-                <For each={TABS}>
-                  {(t) => (
-                    <button onClick={() => uiStore.toggleTabHidden(t.k)} style={paneMenuRow()}>
-                      <t.Icon size={12} strokeWidth={1.5} />
-                      <span style={{ flex: 1, "text-align": "left" }}>{t.label ?? t.k}</span>
-                      <span
-                        style={{
-                          "font-family": FONT_MONO,
-                          "font-size": "10px",
-                          color: uiStore.isTabHidden(t.k) ? "var(--color-text-faint)" : "var(--color-success)",
-                        }}
-                      >
-                        {uiStore.isTabHidden(t.k) ? "off" : "on"}
-                      </span>
-                    </button>
-                  )}
-                </For>
-                <div style={{ height: "1px", background: "var(--color-border)", margin: "4px 2px" }} />
-                <button
-                  onClick={() => {
-                    uiStore.setRightPaneOpen(false)
-                    setPanelMenu(false)
-                  }}
-                  style={paneMenuRow()}
-                >
-                  <IconChevronRight size={12} strokeWidth={1.5} />
-                  <span style={{ flex: 1, "text-align": "left" }}>hide panel</span>
-                </button>
-              </div>
-            </Show>
-            <button onClick={() => uiStore.setRightPaneOpen(false)} title="hide panel" style={paneCtl(false)}>
-              <IconChevronRight size={13} strokeWidth={1.5} />
-            </button>
-          </div>
-        </div>
-        <div style={{ flex: 1, "min-height": 0, position: "relative", display: "flex", "flex-direction": "column" }}>
-          <Show when={artifactMode() && artifact()}>
-            {(current) => (
-              <ArtifactInspector
-                context={current()}
-                onClose={() => uiStore.setRightPaneMode("tools")}
-              />
-            )}
-          </Show>
-          <div
+            role="separator"
+            aria-orientation="vertical"
+            on:pointerdown={onHandlePointerDown}
+            on:pointermove={onHandlePointerMove}
+            on:pointerup={onHandlePointerUp}
+            on:pointercancel={onHandlePointerUp}
             style={{
-              display: artifactMode() ? "none" : "flex",
-              flex: artifactMode() ? undefined : 1,
-              "min-height": 0,
-              "flex-direction": "column",
+              position: "absolute",
+              left: "-3px",
+              top: 0,
+              width: "6px",
+              height: "100%",
+              cursor: "ew-resize",
+              "z-index": 5,
+              "touch-action": "none",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-accent-subtle)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          />
+          <div
+            role="tablist"
+            style={{
+              display: "flex",
+              "align-items": "stretch",
+              "border-bottom": "1px solid var(--color-border)",
+              background: "var(--color-bg-subtle)",
+              "flex-shrink": 0,
             }}
           >
-            <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
-              <CanvasTab />
-            </KeepAlive>
-            <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
-              <ComputeJobs />
-            </KeepAlive>
-            <KeepAlive show={tab() === "evidence"} mounted={visited().has("evidence")}>
-              <EvidenceGraph />
-            </KeepAlive>
-            <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
-              <TerminalTab />
-            </KeepAlive>
+            <div
+              style={{
+                display: "flex",
+                gap: "5px",
+                padding: "7px 10px",
+                flex: 1,
+                "min-width": 0,
+                "overflow-x": "auto",
+              }}
+            >
+              <Show when={artifact()}>
+                <TabBtn
+                  k="artifact"
+                  label="Inspect"
+                  Icon={IconAtom}
+                  active={artifactMode()}
+                  onClick={() => uiStore.setRightPaneMode("artifact")}
+                />
+              </Show>
+              <For each={visibleTabs()}>
+                {(t) => (
+                  <TabBtn
+                    k={t.k}
+                    label={t.label}
+                    Icon={t.Icon}
+                    active={!artifactMode() && tab() === t.k}
+                    onClick={() => {
+                      setTab(t.k)
+                      uiStore.setRightPaneMode("tools")
+                    }}
+                  />
+                )}
+              </For>
+            </div>
+            <div style={{ position: "relative", display: "flex", "align-items": "center", "flex-shrink": 0 }}>
+              <button onClick={openSkillLibrary} title="skill library" style={paneCtl(false)}>
+                <IconBraces size={12} strokeWidth={1.5} />
+              </button>
+              <button onClick={() => setPanelMenu((v) => !v)} title="panel settings" style={paneCtl(panelMenu())}>
+                <IconSettings size={12} strokeWidth={1.5} />
+              </button>
+              <Show when={panelMenu()}>
+                <div
+                  onMouseLeave={() => setPanelMenu(false)}
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    right: "2px",
+                    "margin-top": "2px",
+                    background: "var(--color-surface-solid)",
+                    border: "1px solid var(--color-border-strong)",
+                    "border-radius": "4px",
+                    "box-shadow": "var(--shadow-md)",
+                    padding: "5px",
+                    "z-index": 40,
+                    "min-width": "150px",
+                  }}
+                >
+                  <div style={paneMenuLabel}>show in panel</div>
+                  <For each={TABS}>
+                    {(t) => (
+                      <button onClick={() => uiStore.toggleTabHidden(t.k)} style={paneMenuRow()}>
+                        <t.Icon size={12} strokeWidth={1.5} />
+                        <span style={{ flex: 1, "text-align": "left" }}>{t.label ?? t.k}</span>
+                        <span
+                          style={{
+                            "font-family": FONT_MONO,
+                            "font-size": "10px",
+                            color: uiStore.isTabHidden(t.k) ? "var(--color-text-faint)" : "var(--color-success)",
+                          }}
+                        >
+                          {uiStore.isTabHidden(t.k) ? "off" : "on"}
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                  <div style={{ height: "1px", background: "var(--color-border)", margin: "4px 2px" }} />
+                  <button
+                    onClick={() => {
+                      uiStore.setRightPaneOpen(false)
+                      setPanelMenu(false)
+                    }}
+                    style={paneMenuRow()}
+                  >
+                    <IconChevronRight size={12} strokeWidth={1.5} />
+                    <span style={{ flex: 1, "text-align": "left" }}>hide panel</span>
+                  </button>
+                </div>
+              </Show>
+              <button onClick={() => uiStore.setRightPaneOpen(false)} title="hide panel" style={paneCtl(false)}>
+                <IconChevronRight size={13} strokeWidth={1.5} />
+              </button>
+            </div>
           </div>
-        </div>
+          <div style={{ flex: 1, "min-height": 0, position: "relative", display: "flex", "flex-direction": "column" }}>
+            <Show when={artifactMode() && artifact()}>
+              {(current) => <ArtifactInspector context={current()} onClose={() => uiStore.setRightPaneMode("tools")} />}
+            </Show>
+            <div
+              style={{
+                display: artifactMode() ? "none" : "flex",
+                flex: artifactMode() ? undefined : 1,
+                "min-height": 0,
+                "flex-direction": "column",
+              }}
+            >
+              <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
+                <CanvasTab />
+              </KeepAlive>
+              <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
+                <ComputeJobs />
+              </KeepAlive>
+              <KeepAlive show={tab() === "evidence"} mounted={visited().has("evidence")}>
+                <EvidenceGraph />
+              </KeepAlive>
+              <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
+                <TerminalTab />
+              </KeepAlive>
+            </div>
+          </div>
         </aside>
       </>
     </Show>

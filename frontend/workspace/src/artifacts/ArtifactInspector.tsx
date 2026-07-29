@@ -1,14 +1,4 @@
-import {
-  For,
-  Match,
-  Show,
-  Switch,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  type JSX,
-} from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, type JSX } from "solid-js"
 import { usePlatform } from "@/context/platform"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
@@ -340,11 +330,7 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
               <Environment data={model()} />
             </Match>
             <Match when={tab() === "review"}>
-              <Review
-                annotations={annotations(records()?.notes)}
-                onAdd={addAnnotation}
-                onUpdate={updateAnnotation}
-              />
+              <Review annotations={annotations(records()?.notes)} onAdd={addAnnotation} onUpdate={updateAnnotation} />
             </Match>
             <Match when={tab() === "history"}>
               <History data={model()} />
@@ -428,9 +414,7 @@ function Review(props: {
           </div>
         }
       >
-        <For each={props.annotations}>
-          {(item) => <AnnotationThread annotation={item} onUpdate={props.onUpdate} />}
-        </For>
+        <For each={props.annotations}>{(item) => <AnnotationThread annotation={item} onUpdate={props.onUpdate} />}</For>
       </Show>
     </div>
   )
@@ -493,9 +477,7 @@ function AnnotationThread(props: {
           type="button"
           disabled={busy()}
           style={quietButton()}
-          onClick={() =>
-            void update({ status: props.annotation.status === "open" ? "resolved" : "open" })
-          }
+          onClick={() => void update({ status: props.annotation.status === "open" ? "resolved" : "open" })}
         >
           {props.annotation.status === "open" ? "Resolve" : "Reopen"}
         </button>
@@ -566,9 +548,7 @@ function Details(props: { data: InspectorData }): JSX.Element {
           <>
             <section style={card()}>
               <Heading icon="details">Scientific properties</Heading>
-              <For each={inspection().facts}>
-                {(item) => <Fact label={item.label} value={item.value} mono />}
-              </For>
+              <For each={inspection().facts}>{(item) => <Fact label={item.label} value={item.value} mono />}</For>
               <Show when={inspection().selection}>
                 {(selection) => <Fact label="selection" value={selection().label} />}
               </Show>
@@ -620,7 +600,10 @@ function Details(props: { data: InspectorData }): JSX.Element {
 
 function Environment(props: { data: InspectorData }): JSX.Element {
   return (
-    <Show when={props.data.tabs.environment.available} fallback={<Empty state={props.data.tabs.environment} icon="environment" />}>
+    <Show
+      when={props.data.tabs.environment.available}
+      fallback={<Empty state={props.data.tabs.environment} icon="environment" />}
+    >
       <div style={{ display: "grid", gap: "12px" }}>
         <List title="Environment specifications" items={props.data.environments} />
         <List title="Dependency locks" items={props.data.lockfiles} />
@@ -640,7 +623,8 @@ function History(props: { data: InspectorData }): JSX.Element {
           <Fact label="date" value={new Date(version().date).toLocaleString()} />
           <Fact label="message" value={version().message} />
           <p style={copyStyle()}>
-            This is the latest Git commit touching the file. Artifact-level branches and comparisons are not recorded yet.
+            This is the latest Git commit touching the file. Artifact-level branches and comparisons are not recorded
+            yet.
           </p>
         </section>
       )}
@@ -655,7 +639,11 @@ function List(props: { title: string; items: string[] }): JSX.Element {
       <Show when={props.items.length} fallback={<p style={copyStyle()}>None recorded.</p>}>
         <ul style={{ margin: 0, padding: "0 0 0 18px", display: "grid", gap: "6px" }}>
           <For each={props.items}>
-            {(item) => <li style={{ "font-family": FONT_CODE, "font-size": "11px", color: "var(--color-text-muted)" }}>{item}</li>}
+            {(item) => (
+              <li style={{ "font-family": FONT_CODE, "font-size": "11px", color: "var(--color-text-muted)" }}>
+                {item}
+              </li>
+            )}
           </For>
         </ul>
       </Show>
@@ -663,7 +651,10 @@ function List(props: { title: string; items: string[] }): JSX.Element {
   )
 }
 
-function Empty(props: { state: InspectorState; icon: "code" | "run" | "messages" | "environment" | "review" | "history" }): JSX.Element {
+function Empty(props: {
+  state: InspectorState
+  icon: "code" | "run" | "messages" | "environment" | "review" | "history"
+}): JSX.Element {
   return (
     <div
       data-component="artifact-inspector-empty"
@@ -728,8 +719,12 @@ function Heading(props: {
 
 function Fact(props: { label: string; value: string; mono?: boolean }): JSX.Element {
   return (
-    <div style={{ display: "grid", "grid-template-columns": "78px minmax(0, 1fr)", gap: "10px", "align-items": "start" }}>
-      <span style={{ "font-family": FONT_SANS, "font-size": "11px", color: "var(--color-text-faint)" }}>{props.label}</span>
+    <div
+      style={{ display: "grid", "grid-template-columns": "78px minmax(0, 1fr)", gap: "10px", "align-items": "start" }}
+    >
+      <span style={{ "font-family": FONT_SANS, "font-size": "11px", color: "var(--color-text-faint)" }}>
+        {props.label}
+      </span>
       <span
         title={props.value}
         style={{

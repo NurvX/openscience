@@ -133,9 +133,7 @@ function analyzePdb(raw: string, source: MolecularSummary["source"]): MolecularS
   const lines = raw.split(/\r?\n/)
   const atoms = lines.filter((line) => line.startsWith("ATOM  ") || line.startsWith("HETATM"))
   const chains = new Set(atoms.map((line) => line.slice(21, 22).trim() || "_"))
-  const residues = new Set(
-    atoms.map((line) => `${line.slice(21, 22).trim() || "_"}:${line.slice(22, 27).trim()}`),
-  )
+  const residues = new Set(atoms.map((line) => `${line.slice(21, 22).trim() || "_"}:${line.slice(22, 27).trim()}`))
   const declaredModels = lines.filter((line) => line.startsWith("MODEL ")).length
   return {
     format: "pdb",
@@ -171,7 +169,13 @@ function molRecord(raw: string): MolRecord | undefined {
 }
 
 function analyzeMol(raw: string, source: MolecularSummary["source"], target: "sdf" | "mol"): MolecularSummary {
-  const chunks = target === "sdf" ? raw.split(/\$\$\$\$/).map((item) => item.trim()).filter(Boolean) : [raw]
+  const chunks =
+    target === "sdf"
+      ? raw
+          .split(/\$\$\$\$/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : [raw]
   const records = chunks.flatMap((chunk) => {
     const value = molRecord(chunk)
     return value ? [value] : []

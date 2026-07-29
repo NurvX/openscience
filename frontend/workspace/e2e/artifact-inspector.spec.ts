@@ -12,7 +12,10 @@ async function openFile(page: Page, directory: string, relativePath: string) {
   await location.fill(folder)
   await location.press("Enter")
   await page.getByPlaceholder("filter this folder…").fill(filename)
-  await page.getByRole("button", { name: new RegExp(`^${escapeRegex(filename)}\\b`) }).first().click()
+  await page
+    .getByRole("button", { name: new RegExp(`^${escapeRegex(filename)}\\b`) })
+    .first()
+    .click()
   await expect(page.locator(`[role="tab"][title="${filename}"]`)).toHaveAttribute("aria-selected", "true")
 }
 

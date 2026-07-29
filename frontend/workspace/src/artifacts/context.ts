@@ -154,10 +154,7 @@ export function createArtifactContext(input: ArtifactContextInput): ArtifactCont
   }
 }
 
-export function clearOwnedArtifact(
-  current: ArtifactContext | undefined,
-  owner: string,
-): ArtifactContext | undefined {
+export function clearOwnedArtifact(current: ArtifactContext | undefined, owner: string): ArtifactContext | undefined {
   if (current?.id === owner) return
   return current
 }

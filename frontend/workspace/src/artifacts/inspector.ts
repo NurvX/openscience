@@ -133,11 +133,7 @@ export function normalizeInspectorData(context: ArtifactContext, input: Inspecto
       environment: environment
         ? state(true, "Environment records found", "Project environment specifications and lockfiles are available.")
         : state(false, "No environment is recorded", "Add a lockfile or environment specification to this project."),
-      review: state(
-        true,
-        "Artifact review",
-        "Durable annotations and review threads are available for this artifact.",
-      ),
+      review: state(true, "Artifact review", "Durable annotations and review threads are available for this artifact."),
       history: version?.commit
         ? state(true, "Git provenance available", "The latest commit touching this artifact is recorded.")
         : state(false, "No Git commit is recorded", "Commit this artifact to create a recoverable version."),

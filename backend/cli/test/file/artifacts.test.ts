@@ -39,7 +39,6 @@ describe("File.artifacts", () => {
         await Bun.write(path.join(directory, "node_modules", "package", "paper.pdf"), "skip")
       },
     })
-
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
@@ -77,6 +76,7 @@ describe("File.provenance", () => {
         await Bun.write(path.join(directory, "results.csv"), "metric,value\naccuracy,0.95\n")
       },
     })
+    const branch = (await $`git branch --show-current`.cwd(tmp.path).quiet().text()).trim()
 
     await Instance.provide({
       directory: tmp.path,
@@ -87,7 +87,7 @@ describe("File.provenance", () => {
           tracked: true,
           dirty: true,
           status: "modified",
-          branch: "master",
+          branch,
           commit: {
             author: "OpenScience",
             email: "test@openscience.local",
