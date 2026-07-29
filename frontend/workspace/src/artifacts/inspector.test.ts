@@ -46,7 +46,7 @@ describe("artifact inspector model", () => {
     expect(result.tabs.history.available).toBe(true)
     expect(result.tabs.run.available).toBe(false)
     expect(result.tabs.messages.available).toBe(false)
-    expect(result.tabs.review.available).toBe(false)
+    expect(result.tabs.review.available).toBe(true)
   })
 
   test("keeps malformed and absent records honest instead of inventing metadata", () => {

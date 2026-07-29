@@ -111,6 +111,36 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
     void load(p, data, kind)
   })
 
+  createEffect(() => {
+    const value = summary()
+    const selected = selection()
+    if (!value || !props.onInspect) return
+    const facts = [
+      { label: "format", value: value.format.toUpperCase() },
+      ...(value.atomCount === undefined ? [] : [{ label: "atoms", value: `${value.atomCount} atoms` }]),
+      ...(value.bondCount === undefined ? [] : [{ label: "bonds", value: `${value.bondCount} bonds` }]),
+      ...(value.residueCount === undefined ? [] : [{ label: "residues", value: `${value.residueCount} residues` }]),
+      ...(value.chainCount === undefined ? [] : [{ label: "chains", value: `${value.chainCount} chains` }]),
+      ...(value.elements.length
+        ? [{ label: "elements", value: value.elements.map((item) => `${item.element} ${item.count}`).join(" · ") }]
+        : []),
+    ]
+    props.onInspect({
+      facts,
+      capabilities: [
+        "5 representation presets",
+        "Atom, residue, and chain selection",
+        "Distance measurements",
+        "Camera reset",
+        "Background switching",
+        "PNG export",
+      ],
+      ...(selected.count
+        ? { selection: { kind: "molecule" as const, label: selected.label || `${selected.count} selected`, count: selected.count } }
+        : {}),
+    })
+  })
+
   async function load(p: PluginContext, data: unknown, kind: string) {
     const my = ++token
     const src = narrowMolecularSource(data, kind)

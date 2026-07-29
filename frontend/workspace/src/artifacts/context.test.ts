@@ -49,6 +49,26 @@ describe("artifact context", () => {
     expect(inferArtifactKind("result.dat", "genome-track")).toBe("genomics")
   })
 
+  test("carries live scientific facts, capabilities, and selections without changing artifact identity", () => {
+    const context = createArtifactContext({
+      directory: "/work/project",
+      path: "results/water.xyz",
+      scienceKind: "chem-3d",
+      inspection: {
+        facts: [{ label: "atoms", value: "3" }],
+        capabilities: ["Representations", "PNG export"],
+        selection: { kind: "molecule", label: "O 1", count: 1 },
+      },
+    })
+
+    expect(context.id).toContain("water.xyz")
+    expect(context.inspection).toEqual({
+      facts: [{ label: "atoms", value: "3" }],
+      capabilities: ["Representations", "PNG export"],
+      selection: { kind: "molecule", label: "O 1", count: 1 },
+    })
+  })
+
   test("only the owning document can clear active artifact state", () => {
     const active: ArtifactContext = createArtifactContext({
       directory: "/work/project",

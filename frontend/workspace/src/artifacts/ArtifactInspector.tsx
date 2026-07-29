@@ -46,6 +46,48 @@ const labels: Record<InspectorTab, string> = {
   history: "History",
 }
 
+interface AnnotationMessage {
+  id: string
+  body: string
+  author: string
+  createdAt: number
+}
+
+interface Annotation {
+  id: string
+  path: string
+  anchor: {
+    kind: "artifact" | "text" | "notebook" | "molecule" | "genome"
+    label?: string
+    startLine?: number
+    endLine?: number
+    selection?: string
+    chromosome?: string
+    start?: number
+    end?: number
+    cellId?: string
+  }
+  messages: AnnotationMessage[]
+  status: "open" | "resolved"
+  createdAt: number
+  updatedAt: number
+}
+
+function annotations(value: unknown): Annotation[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is Annotation => {
+    if (!item || typeof item !== "object") return false
+    const row = item as Partial<Annotation>
+    return (
+      typeof row.id === "string" &&
+      (row.status === "open" || row.status === "resolved") &&
+      Array.isArray(row.messages) &&
+      !!row.anchor &&
+      typeof row.anchor.kind === "string"
+    )
+  })
+}
+
 export function ArtifactInspector(props: { context: ArtifactContext; onClose?: () => void }): JSX.Element {
   const sdk = useSDK()
   const platform = usePlatform()
@@ -63,12 +105,13 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
         if (!response?.ok) return
         return response.json().catch(() => undefined)
       }
-      const [file, provenance, audit] = await Promise.all([
+      const [file, provenance, audit, notes] = await Promise.all([
         read("/file/content", current.path),
         read("/file/provenance", current.path),
         read("/file/reproducibility"),
+        read("/file/annotations", current.path),
       ])
-      return { id: current.id, file, provenance, audit }
+      return { id: current.id, file, provenance, audit, notes }
     },
   )
   const model = createMemo<InspectorData>(() => {
@@ -104,6 +147,34 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
     anchor.click()
     URL.revokeObjectURL(object)
   }
+  const mutateAnnotation = async (route: string, method: "POST" | "PATCH", body: Record<string, unknown>) => {
+    const response = await request()(url(route), {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => undefined)
+    if (!response?.ok) {
+      toast.error("annotation failed", response ? `${response.status}` : "request failed")
+      return false
+    }
+    await api.refetch()
+    return true
+  }
+  const addAnnotation = (body: string) =>
+    mutateAnnotation("/file/annotations", "POST", {
+      path: props.context.path,
+      body,
+      anchor:
+        props.context.inspection?.selection?.kind === "molecule"
+          ? {
+              kind: "molecule",
+              selection: props.context.inspection.selection.label,
+              count: props.context.inspection.selection.count,
+            }
+          : { kind: "artifact", label: props.context.name },
+    })
+  const updateAnnotation = (id: string, body: Record<string, unknown>) =>
+    mutateAnnotation(`/file/annotations/${id}`, "PATCH", body)
 
   const move = (event: KeyboardEvent, current: InspectorTab) => {
     const index = inspectorTabs.indexOf(current)
@@ -269,7 +340,11 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
               <Environment data={model()} />
             </Match>
             <Match when={tab() === "review"}>
-              <Empty state={model().tabs.review} icon="review" />
+              <Review
+                annotations={annotations(records()?.notes)}
+                onAdd={addAnnotation}
+                onUpdate={updateAnnotation}
+              />
             </Match>
             <Match when={tab() === "history"}>
               <History data={model()} />
@@ -278,6 +353,197 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
         </Show>
       </div>
     </section>
+  )
+}
+
+function Review(props: {
+  annotations: Annotation[]
+  onAdd(body: string): Promise<boolean>
+  onUpdate(id: string, body: Record<string, unknown>): Promise<boolean>
+}): JSX.Element {
+  const [body, setBody] = createSignal("")
+  const [busy, setBusy] = createSignal(false)
+  const open = () => props.annotations.filter((item) => item.status === "open").length
+  const add = async () => {
+    const value = body().trim()
+    if (!value || busy()) return
+    setBusy(true)
+    const ok = await props.onAdd(value)
+    setBusy(false)
+    if (ok) setBody("")
+  }
+  return (
+    <div style={{ display: "grid", gap: "12px" }}>
+      <section style={card()}>
+        <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", gap: "8px" }}>
+          <Heading icon="review">Review threads</Heading>
+          <span
+            style={{
+              "font-family": FONT_MONO,
+              "font-size": "10px",
+              color: open() ? "var(--color-warning)" : "var(--color-text-faint)",
+            }}
+          >
+            {open()} open
+          </span>
+        </div>
+        <textarea
+          aria-label="New annotation"
+          value={body()}
+          rows={3}
+          placeholder="Record a question, correction, or publication check…"
+          onInput={(event) => setBody(event.currentTarget.value)}
+          style={{
+            width: "100%",
+            resize: "vertical",
+            "box-sizing": "border-box",
+            padding: "9px 10px",
+            border: "1px solid var(--color-border)",
+            "border-radius": "6px",
+            outline: "none",
+            background: "var(--color-bg)",
+            color: "var(--color-text)",
+            "font-family": FONT_SANS,
+            "font-size": "11px",
+            "line-height": 1.5,
+          }}
+        />
+        <button
+          type="button"
+          disabled={!body().trim() || busy()}
+          style={{ ...actionButton(true), opacity: !body().trim() || busy() ? 0.45 : 1 }}
+          onClick={() => void add()}
+        >
+          {busy() ? "Adding…" : "Add annotation"}
+        </button>
+      </section>
+      <Show
+        when={props.annotations.length}
+        fallback={
+          <div style={{ ...card(), "justify-items": "start" }}>
+            <strong style={{ "font-family": FONT_SANS, "font-size": "12px", color: "var(--color-text)" }}>
+              No annotations yet
+            </strong>
+            <p style={copyStyle()}>Add the first review note. Threads persist with this project and artifact.</p>
+          </div>
+        }
+      >
+        <For each={props.annotations}>
+          {(item) => <AnnotationThread annotation={item} onUpdate={props.onUpdate} />}
+        </For>
+      </Show>
+    </div>
+  )
+}
+
+function AnnotationThread(props: {
+  annotation: Annotation
+  onUpdate(id: string, body: Record<string, unknown>): Promise<boolean>
+}): JSX.Element {
+  const [reply, setReply] = createSignal("")
+  const [busy, setBusy] = createSignal(false)
+  const update = async (body: Record<string, unknown>) => {
+    if (busy()) return
+    setBusy(true)
+    const ok = await props.onUpdate(props.annotation.id, body)
+    setBusy(false)
+    if (ok && typeof body.reply === "string") setReply("")
+  }
+  const anchor = () => {
+    const value = props.annotation.anchor
+    if (value.kind === "text") return `Lines ${value.startLine}–${value.endLine}`
+    if (value.kind === "molecule") return value.selection ?? "Molecular selection"
+    if (value.kind === "genome") return `${value.chromosome}:${value.start}–${value.end}`
+    if (value.kind === "notebook") return `Cell ${value.cellId}`
+    return value.label ?? "Whole artifact"
+  }
+  return (
+    <article data-component="artifact-annotation" data-status={props.annotation.status} style={card()}>
+      <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+        <span
+          style={{
+            padding: "3px 6px",
+            "border-radius": "999px",
+            background:
+              props.annotation.status === "open" ? "var(--color-warning-subtle)" : "var(--color-success-subtle)",
+            color: props.annotation.status === "open" ? "var(--color-warning)" : "var(--color-success)",
+            "font-family": FONT_SANS,
+            "font-size": "9px",
+            "font-weight": 650,
+            "text-transform": "capitalize",
+          }}
+        >
+          {props.annotation.status === "open" ? "Open" : "Resolved"}
+        </span>
+        <span
+          title={anchor()}
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            "text-overflow": "ellipsis",
+            "white-space": "nowrap",
+            "font-family": FONT_MONO,
+            "font-size": "9px",
+            color: "var(--color-text-faint)",
+          }}
+        >
+          {anchor()}
+        </span>
+        <button
+          type="button"
+          disabled={busy()}
+          style={quietButton()}
+          onClick={() =>
+            void update({ status: props.annotation.status === "open" ? "resolved" : "open" })
+          }
+        >
+          {props.annotation.status === "open" ? "Resolve" : "Reopen"}
+        </button>
+      </div>
+      <For each={props.annotation.messages}>
+        {(message) => (
+          <div style={{ display: "grid", gap: "4px", padding: "8px 0", "border-top": "1px solid var(--color-border)" }}>
+            <p style={{ ...copyStyle(), color: "var(--color-text)" }}>{message.body}</p>
+            <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+              {message.author} · {new Date(message.createdAt).toLocaleString()}
+            </span>
+          </div>
+        )}
+      </For>
+      <div style={{ display: "flex", gap: "6px" }}>
+        <input
+          aria-label={`Reply to ${props.annotation.id}`}
+          value={reply()}
+          placeholder="Reply…"
+          onInput={(event) => setReply(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || !reply().trim()) return
+            event.preventDefault()
+            void update({ reply: reply().trim() })
+          }}
+          style={{
+            flex: 1,
+            "min-width": 0,
+            padding: "7px 8px",
+            border: "1px solid var(--color-border)",
+            "border-radius": "5px",
+            outline: "none",
+            background: "var(--color-bg)",
+            color: "var(--color-text)",
+            "font-family": FONT_SANS,
+            "font-size": "10px",
+          }}
+        />
+        <button
+          type="button"
+          disabled={!reply().trim() || busy()}
+          style={{ ...quietButton(), border: "1px solid var(--color-border)" }}
+          onClick={() => void update({ reply: reply().trim() })}
+        >
+          Reply
+        </button>
+      </div>
+    </article>
   )
 }
 
@@ -295,6 +561,43 @@ function Details(props: { data: InspectorData }): JSX.Element {
           <Fact label="renderer" value={props.data.context.scienceKind!} mono />
         </Show>
       </section>
+      <Show when={props.data.context.inspection}>
+        {(inspection) => (
+          <>
+            <section style={card()}>
+              <Heading icon="details">Scientific properties</Heading>
+              <For each={inspection().facts}>
+                {(item) => <Fact label={item.label} value={item.value} mono />}
+              </For>
+              <Show when={inspection().selection}>
+                {(selection) => <Fact label="selection" value={selection().label} />}
+              </Show>
+            </section>
+            <section style={card()}>
+              <Heading icon="details">Available operations</Heading>
+              <div style={{ display: "flex", gap: "5px", "flex-wrap": "wrap" }}>
+                <For each={inspection().capabilities}>
+                  {(item) => (
+                    <span
+                      style={{
+                        padding: "4px 6px",
+                        "border-radius": "5px",
+                        border: "1px solid var(--color-border)",
+                        background: "var(--color-bg)",
+                        "font-family": FONT_SANS,
+                        "font-size": "10px",
+                        color: "var(--color-text-muted)",
+                      }}
+                    >
+                      {item}
+                    </span>
+                  )}
+                </For>
+              </div>
+            </section>
+          </>
+        )}
+      </Show>
       <section style={card()}>
         <Heading icon="history">Provenance</Heading>
         <Show

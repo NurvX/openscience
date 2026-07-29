@@ -27,6 +27,7 @@ import { NotebookView } from "@/notebook/NotebookView"
 import { DataTableView } from "@/data/DataTableView"
 import type { TableFormat } from "@/data/table"
 import { artifactContext, createArtifactContext } from "@/artifacts/context"
+import type { ArtifactInspection } from "@/science/renderers"
 import { toast } from "@/atlas/Toast"
 import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, IconRefresh } from "@/atlas/shared/Icon"
 
@@ -151,6 +152,7 @@ export function FileView(props: {
   const [savedText, setSavedText] = createSignal("")
   const [saving, setSaving] = createSignal(false)
   const [refreshKey, setRefreshKey] = createSignal(0)
+  const [inspection, setInspection] = createSignal<ArtifactInspection>()
 
   const [file] = createResource(
     () => [directory(), props.path, refreshKey()] as const,
@@ -216,6 +218,7 @@ export function FileView(props: {
       path: props.path,
       format: badge(),
       scienceKind: scientific()?.kind,
+      inspection: inspection(),
     }),
   )
 
@@ -557,7 +560,12 @@ export function FileView(props: {
                         "box-sizing": "border-box",
                       }}
                     >
-                      <ScienceArtifact kind={artifact().kind} data={artifact().data} height={560} />
+                      <ScienceArtifact
+                        kind={artifact().kind}
+                        data={artifact().data}
+                        height={560}
+                        onInspect={setInspection}
+                      />
                     </div>
                   )}
                 </Show>

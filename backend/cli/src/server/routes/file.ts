@@ -10,6 +10,7 @@ import { ScienceFile } from "../../file/science"
 import { ArtifactFile } from "../../file/artifacts"
 import { StarterFile } from "../../file/starters"
 import { PublicationFile } from "../../file/publication"
+import { ArtifactAnnotation } from "../../file/annotations"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -323,6 +324,71 @@ export const FileRoutes = lazy(() =>
         },
       }),
       async (c) => c.json(await File.reproducibility()),
+    )
+    .get(
+      "/file/annotations",
+      describeRoute({
+        summary: "List artifact annotations",
+        description: "List durable review threads anchored to a project artifact.",
+        operationId: "file.annotations.list",
+        responses: {
+          200: {
+            description: "Artifact annotations",
+            content: { "application/json": { schema: resolver(ArtifactAnnotation.Info.array()) } },
+          },
+        },
+      }),
+      validator("query", z.object({ path: z.string() })),
+      async (c) => c.json(await ArtifactAnnotation.list(c.req.valid("query").path)),
+    )
+    .post(
+      "/file/annotations",
+      describeRoute({
+        summary: "Create an artifact annotation",
+        description: "Create a durable review thread anchored to an artifact, text range, notebook cell, molecule, or locus.",
+        operationId: "file.annotations.create",
+        responses: {
+          200: {
+            description: "Created annotation",
+            content: { "application/json": { schema: resolver(ArtifactAnnotation.Info) } },
+          },
+        },
+      }),
+      validator("json", ArtifactAnnotation.Create),
+      async (c) => c.json(await ArtifactAnnotation.create(c.req.valid("json"))),
+    )
+    .patch(
+      "/file/annotations/:id",
+      describeRoute({
+        summary: "Update an artifact annotation",
+        description: "Reply to, resolve, or reopen an artifact review thread.",
+        operationId: "file.annotations.update",
+        responses: {
+          200: {
+            description: "Updated annotation",
+            content: { "application/json": { schema: resolver(ArtifactAnnotation.Info) } },
+          },
+        },
+      }),
+      validator("param", z.object({ id: z.string().startsWith("ann_") })),
+      validator("json", ArtifactAnnotation.Update),
+      async (c) => c.json(await ArtifactAnnotation.update(c.req.valid("param").id, c.req.valid("json"))),
+    )
+    .delete(
+      "/file/annotations/:id",
+      describeRoute({
+        summary: "Delete an artifact annotation",
+        description: "Permanently remove an artifact review thread.",
+        operationId: "file.annotations.delete",
+        responses: {
+          200: {
+            description: "Deleted annotation",
+            content: { "application/json": { schema: resolver(z.object({ deleted: z.literal(true) })) } },
+          },
+        },
+      }),
+      validator("param", z.object({ id: z.string().startsWith("ann_") })),
+      async (c) => c.json(await ArtifactAnnotation.remove(c.req.valid("param").id)),
     )
     .get(
       "/file/manifest",

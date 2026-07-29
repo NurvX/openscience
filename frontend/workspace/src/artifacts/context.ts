@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js"
 import type { ArtifactKind } from "./model"
+import type { ArtifactInspection } from "@/science/renderers"
 
 export type ArtifactContextKind = ArtifactKind | "file"
 
@@ -11,6 +12,7 @@ export interface ArtifactContext {
   format: string
   kind: ArtifactContextKind
   scienceKind?: string
+  inspection?: ArtifactInspection
 }
 
 export interface ArtifactContextInput {
@@ -18,6 +20,7 @@ export interface ArtifactContextInput {
   path: string
   format?: string
   scienceKind?: string
+  inspection?: ArtifactInspection
 }
 
 const kinds: Partial<Record<string, ArtifactContextKind>> = {
@@ -147,6 +150,7 @@ export function createArtifactContext(input: ArtifactContextInput): ArtifactCont
     format,
     kind: inferArtifactKind(path, input.scienceKind),
     ...(input.scienceKind ? { scienceKind: input.scienceKind } : {}),
+    ...(input.inspection ? { inspection: input.inspection } : {}),
   }
 }
 

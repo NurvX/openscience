@@ -67,4 +67,48 @@ describe("/file research routes", () => {
       },
     })
   })
+
+  test("creates, resolves, and deletes durable artifact annotations", async () => {
+    await using tmp = await tmpdir({
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "results.csv"), "metric,value\naccuracy,0.9\n")
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const created = await FileRoutes().request("/file/annotations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            path: "results.csv",
+            body: "Verify this value against the held-out split.",
+            anchor: { kind: "text", startLine: 2, endLine: 2, quote: "accuracy,0.9" },
+          }),
+        })
+        expect(created.status).toBe(200)
+        const note = (await created.json()) as { id: string; status: string; anchor: { kind: string } }
+        expect(note.id).toStartWith("ann_")
+        expect(note.status).toBe("open")
+        expect(note.anchor.kind).toBe("text")
+
+        const listed = await FileRoutes().request("/file/annotations?path=results.csv")
+        expect(listed.status).toBe(200)
+        expect((await listed.json()) as unknown[]).toHaveLength(1)
+
+        const resolved = await FileRoutes().request(`/file/annotations/${note.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "resolved" }),
+        })
+        expect(resolved.status).toBe(200)
+        expect(((await resolved.json()) as { status: string }).status).toBe("resolved")
+
+        const removed = await FileRoutes().request(`/file/annotations/${note.id}`, { method: "DELETE" })
+        expect(removed.status).toBe(200)
+        expect(await removed.json()).toEqual({ deleted: true })
+        expect(await (await FileRoutes().request("/file/annotations?path=results.csv")).json()).toEqual([])
+      },
+    })
+  })
 })
