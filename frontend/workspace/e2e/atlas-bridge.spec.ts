@@ -63,8 +63,8 @@ test("Atlas canvas distinguishes a connected graph from an unavailable bridge", 
 
   await gotoSession()
 
-  await page.getByRole("button", { name: "atlas", exact: true }).click()
-  const atlasTab = page.getByRole("tab", { name: "atlas", exact: true })
+  await page.getByRole("button", { name: /^atlas$/i }).click()
+  const atlasTab = page.getByRole("tab", { name: /^atlas$/i })
   await expect(atlasTab).toHaveAttribute("aria-selected", "true")
 
   if (response.ok()) {
