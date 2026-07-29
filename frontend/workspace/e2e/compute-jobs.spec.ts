@@ -49,7 +49,9 @@ test("defaults a local compute job to the active research project", async ({ pag
   const firstSdk = createSdk(first)
   const projectSdk = createSdk(project)
   const firstSession = await firstSdk.session.create({ title: "First compute project" }).then((result) => result.data)
-  const projectSession = await projectSdk.session.create({ title: "Current compute project" }).then((result) => result.data)
+  const projectSession = await projectSdk.session
+    .create({ title: "Current compute project" })
+    .then((result) => result.data)
   if (!firstSession?.id || !projectSession?.id) throw new Error("Session create did not return an id")
   try {
     await page.goto(sessionPath(first, firstSession.id))
@@ -62,10 +64,13 @@ test("defaults a local compute job to the active research project", async ({ pag
       .click()
     const pane = page.locator(".session-right-pane")
     await pane.getByTitle("new job").click()
-    await page.evaluate((url) => {
-      window.history.pushState({}, "", url)
-      window.dispatchEvent(new PopStateEvent("popstate"))
-    }, sessionPath(project, projectSession.id))
+    await page.evaluate(
+      (url) => {
+        window.history.pushState({}, "", url)
+        window.dispatchEvent(new PopStateEvent("popstate"))
+      },
+      sessionPath(project, projectSession.id),
+    )
     await expect(page.locator(promptSelector)).toBeVisible()
     await page
       .getByRole("tab", { name: "Compute", exact: true })
