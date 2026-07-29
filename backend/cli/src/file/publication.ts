@@ -55,8 +55,10 @@ export namespace PublicationFile {
   }
 
   export async function capabilities(): Promise<Capabilities> {
-    const pandoc = Boolean(Bun.which("pandoc"))
-    const pdf = Bun.which("xelatex") ?? Bun.which("pdflatex") ?? Bun.which("typst") ?? undefined
+    const options = { PATH: process.env.PATH }
+    const pandoc = Boolean(Bun.which("pandoc", options))
+    const pdf =
+      Bun.which("xelatex", options) ?? Bun.which("pdflatex", options) ?? Bun.which("typst", options) ?? undefined
     return Capabilities.parse({
       pandoc,
       pdf_engine: pdf ? path.basename(pdf) : undefined,
