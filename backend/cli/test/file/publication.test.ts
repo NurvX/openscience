@@ -1,6 +1,9 @@
+import { $ } from "bun"
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { PublicationFile } from "../../src/file/publication"
+import { PublicationReview } from "../../src/file/review"
+import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 
 describe("PublicationFile", () => {
@@ -25,6 +28,7 @@ describe("PublicationFile", () => {
     expect(result.path).toMatch(/^exports\/report-\d{8}-\d{9}-[a-f0-9]{8}\.html$/)
     expect(result.size).toBeGreaterThan(100)
     expect(result.engine).toBe("OpenScience Markdown")
+    expect(result.readiness).toBe("draft")
     const html = await Bun.file(path.join(tmp.path, result.path)).text()
     expect(html).toContain("Treatment response")
     expect(html).toContain("Content-Security-Policy")
@@ -55,5 +59,67 @@ describe("PublicationFile", () => {
     })
     await expect(PublicationFile.render(tmp.path, { path: "data.csv", format: "html" })).rejects.toThrow("Markdown")
     await expect(PublicationFile.render(tmp.path, { path: "../report.md", format: "html" })).rejects.toThrow("escapes")
+  })
+
+  test("gates reviewed exports on a finalized report for the exact source bytes", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "README.md"), "# Publication fixture\n")
+        await Bun.write(path.join(directory, "uv.lock"), "version = 1\n")
+        await Bun.write(path.join(directory, "pyproject.toml"), '[project]\nname = "publication-fixture"\n')
+        await Bun.write(path.join(directory, "report.md"), "# Stable result\n\nAll structural checks pass.\n")
+        await $`git add README.md uv.lock pyproject.toml report.md`.cwd(directory).quiet()
+        await $`git -c user.name=OpenScience -c user.email=test@openscience.local commit -m "publication fixture"`
+          .cwd(directory)
+          .quiet()
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const review = await PublicationReview.run({ path: "report.md", actor: "Reviewer" })
+        await expect(
+          PublicationFile.render(tmp.path, {
+            path: "report.md",
+            format: "html",
+            readiness: "reviewed",
+            review_id: review.id,
+          }),
+        ).rejects.toThrow("finalized")
+
+        const finalized = await PublicationReview.finalize(review.id, { actor: "Aayam Bansal" })
+        const result = await PublicationFile.render(tmp.path, {
+          path: "report.md",
+          format: "html",
+          readiness: "reviewed",
+          review_id: finalized.id,
+        })
+        expect(result).toMatchObject({
+          readiness: "reviewed",
+          review_id: finalized.id,
+        })
+
+        await Bun.write(path.join(tmp.path, "report.md"), "# Changed after review\n")
+        await expect(
+          PublicationFile.render(tmp.path, {
+            path: "report.md",
+            format: "html",
+            readiness: "reviewed",
+            review_id: finalized.id,
+          }),
+        ).rejects.toThrow("changed")
+        expect(
+          (
+            await PublicationFile.render(tmp.path, {
+              path: "report.md",
+              format: "html",
+              readiness: "draft",
+            })
+          ).readiness,
+        ).toBe("draft")
+      },
+    })
   })
 })

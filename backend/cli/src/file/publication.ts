@@ -4,16 +4,28 @@ import { marked, Renderer } from "marked"
 import z from "zod"
 import { OpenScience } from "../openscience"
 import { escapeHtml } from "../util/html"
+import { PublicationReview } from "./review"
 
 export namespace PublicationFile {
   export const Format = z.enum(["html", "pdf", "docx", "latex", "pptx"])
   export type Format = z.infer<typeof Format>
 
-  export const Input = z.object({
-    path: z.string().trim().min(1).max(4_000),
-    format: Format,
-  })
-  export type Input = z.infer<typeof Input>
+  export const Input = z
+    .object({
+      path: z.string().trim().min(1).max(4_000),
+      format: Format,
+      readiness: z.enum(["draft", "reviewed"]).default("draft"),
+      review_id: z.string().startsWith("review_").optional(),
+    })
+    .superRefine((input, context) => {
+      if (input.readiness !== "reviewed" || input.review_id) return
+      context.addIssue({
+        code: "custom",
+        path: ["review_id"],
+        message: "A reviewed publication export requires a finalized review report",
+      })
+    })
+  export type Input = z.input<typeof Input>
 
   export const Capabilities = z.object({
     pandoc: z.boolean(),
@@ -28,6 +40,8 @@ export namespace PublicationFile {
     size: z.number().int().nonnegative(),
     created_at: z.string(),
     engine: z.string(),
+    readiness: z.enum(["draft", "reviewed"]),
+    review_id: z.string().optional(),
   })
   export type Result = z.infer<typeof Result>
 
@@ -62,6 +76,8 @@ export namespace PublicationFile {
       throw new Error("Publication export currently requires a Markdown report")
     }
     if (!(await Bun.file(source).exists())) throw new Error(`Report not found: ${parsed.path}`)
+    const review =
+      parsed.readiness === "reviewed" ? await PublicationReview.assertReady(parsed.path, parsed.review_id!) : undefined
     const support = await capabilities()
     if (!support.formats[parsed.format]) {
       throw new Error(
@@ -150,6 +166,8 @@ ${body}
         size: stat.size,
         created_at: new Date().toISOString(),
         engine: "OpenScience Markdown",
+        readiness: parsed.readiness,
+        ...(review ? { review_id: review.id } : {}),
       })
     }
     const args = [
@@ -184,6 +202,8 @@ ${body}
       size: stat.size,
       created_at: new Date().toISOString(),
       engine: parsed.format === "pdf" ? `pandoc + ${support.pdf_engine}` : "pandoc",
+      readiness: parsed.readiness,
+      ...(review ? { review_id: review.id } : {}),
     })
   }
 
