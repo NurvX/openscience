@@ -1,4 +1,4 @@
-import { createSignal, createMemo, createEffect, type JSX, For, Show } from "solid-js"
+import { createSignal, createMemo, createEffect, onCleanup, onMount, type JSX, For, Show } from "solid-js"
 import { FONT_MONO, FONT_SANS, sectionTitle } from "@/styles/tokens"
 import { useSDK } from "@/context/sdk"
 import { useDialog } from "@synsci/ui/context/dialog"
@@ -9,8 +9,11 @@ import { SkillLibraryDialog } from "@/atlas/SkillsBrowser"
 import { AtlasCanvas } from "@/atlas/AtlasCanvas"
 import { ComputeJobs } from "@/atlas/ComputeJobs"
 import { EvidenceGraph } from "@/atlas/EvidenceGraph"
+import { artifactContext } from "@/artifacts/context"
+import { ArtifactInspector } from "@/artifacts/ArtifactInspector"
 import { toast } from "@/atlas/Toast"
 import {
+  IconAtom,
   IconLayoutGrid,
   IconBraces,
   IconChevronRight,
@@ -36,6 +39,8 @@ function readSavedWidth(): number {
 export function RightPane(): JSX.Element {
   const tab = uiStore.rightPaneTab
   const setTab = uiStore.setRightPaneTab
+  const artifact = artifactContext.active
+  const artifactMode = () => Boolean(artifact()) && uiStore.rightPaneMode() === "artifact"
   // Keep-alive: once a tab has been opened it stays mounted (hidden via CSS),
   // so switching tabs never re-mounts/re-fetches/re-animates — no flash.
   const [visited, setVisited] = createSignal<Set<RightPaneTab>>(new Set([tab()]))
@@ -45,21 +50,33 @@ export function RightPane(): JSX.Element {
   })
   const dialog = useDialog()
   const [width, setWidth] = createSignal(readSavedWidth())
+  const [narrow, setNarrow] = createSignal(typeof window !== "undefined" && window.innerWidth < 1100)
   const [panelMenu, setPanelMenu] = createSignal(false)
+  onMount(() => {
+    const resize = () => setNarrow(window.innerWidth < 1100)
+    window.addEventListener("resize", resize)
+    onCleanup(() => window.removeEventListener("resize", resize))
+  })
   const openSkillLibrary = () =>
     dialog.show(() => <SkillLibraryDialog onPick={(name) => uiStore.setPrefill(`/${name} `)} />)
   const TABS: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[] =
     [
-      { k: "canvas", label: "atlas", Icon: IconLayoutGrid },
-      { k: "evidence", Icon: IconNetwork },
-      { k: "jobs", Icon: IconActivity },
-      { k: "terminal", Icon: IconTerminal },
+      { k: "canvas", label: "Atlas", Icon: IconLayoutGrid },
+      { k: "evidence", label: "Evidence", Icon: IconNetwork },
+      { k: "jobs", label: "Compute", Icon: IconActivity },
+      { k: "terminal", label: "Terminal", Icon: IconTerminal },
     ]
   const visibleTabs = createMemo(() => TABS.filter((t) => !uiStore.isTabHidden(t.k)))
   // Keep the active tab pointed at a visible one.
   createEffect(() => {
     const vis = visibleTabs()
     if (vis.length && !vis.some((t) => t.k === tab())) setTab(vis[0].k)
+  })
+  createEffect(() => {
+    const id = artifact()?.id
+    if (!id) return
+    uiStore.setRightPaneMode("artifact")
+    uiStore.setRightPaneOpen(true)
   })
   // Run a command requested from elsewhere (e.g. the Local models settings
   // panel's "run in terminal") in a fresh terminal tab, then reveal it.
@@ -101,9 +118,17 @@ export function RightPane(): JSX.Element {
       when={uiStore.rightPaneOpen()}
       fallback={
         <CollapsedRail
+          artifact={Boolean(artifact())}
+          onInspect={() => {
+            uiStore.setRightPaneMode("artifact")
+            uiStore.setRightPaneOpen(true)
+          }}
           tabs={visibleTabs()}
           onOpen={(t) => {
-            if (t) setTab(t)
+            if (t) {
+              setTab(t)
+              uiStore.setRightPaneMode("tools")
+            }
             uiStore.setRightPaneOpen(true)
           }}
         />
@@ -112,14 +137,19 @@ export function RightPane(): JSX.Element {
       <aside
         class="session-right-pane"
         style={{
-          flex: `0 0 ${width()}px`,
-          width: `${width()}px`,
+          flex: narrow() ? "none" : `0 0 ${width()}px`,
+          width: narrow() ? "min(420px, calc(100vw - 52px))" : `${width()}px`,
           display: "flex",
           "flex-direction": "column",
           "border-left": "1px solid var(--color-border)",
           background: "var(--color-bg-subtle)",
-          "min-width": `${MIN_PANE_WIDTH}px`,
-          position: "relative",
+          "min-width": narrow() ? "280px" : `${MIN_PANE_WIDTH}px`,
+          position: narrow() ? "fixed" : "relative",
+          top: narrow() ? "0" : undefined,
+          right: narrow() ? "0" : undefined,
+          bottom: narrow() ? "0" : undefined,
+          "z-index": narrow() ? 70 : undefined,
+          "box-shadow": narrow() ? "-18px 0 48px rgba(0, 0, 0, 0.22)" : "none",
         }}
       >
         {/* Drag handle on the left edge of the right pane. 6px wide, full
@@ -157,9 +187,27 @@ export function RightPane(): JSX.Element {
           <div
             style={{ display: "flex", gap: "5px", padding: "7px 10px", flex: 1, "min-width": 0, "overflow-x": "auto" }}
           >
+            <Show when={artifact()}>
+              <TabBtn
+                k="artifact"
+                label="Inspect"
+                Icon={IconAtom}
+                active={artifactMode()}
+                onClick={() => uiStore.setRightPaneMode("artifact")}
+              />
+            </Show>
             <For each={visibleTabs()}>
               {(t) => (
-                <TabBtn k={t.k} label={t.label} Icon={t.Icon} active={tab() === t.k} onClick={() => setTab(t.k)} />
+                <TabBtn
+                  k={t.k}
+                  label={t.label}
+                  Icon={t.Icon}
+                  active={!artifactMode() && tab() === t.k}
+                  onClick={() => {
+                    setTab(t.k)
+                    uiStore.setRightPaneMode("tools")
+                  }}
+                />
               )}
             </For>
           </div>
@@ -224,18 +272,35 @@ export function RightPane(): JSX.Element {
           </div>
         </div>
         <div style={{ flex: 1, "min-height": 0, position: "relative", display: "flex", "flex-direction": "column" }}>
-          <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
-            <CanvasTab />
-          </KeepAlive>
-          <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
-            <ComputeJobs />
-          </KeepAlive>
-          <KeepAlive show={tab() === "evidence"} mounted={visited().has("evidence")}>
-            <EvidenceGraph />
-          </KeepAlive>
-          <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
-            <TerminalTab />
-          </KeepAlive>
+          <Show when={artifactMode() && artifact()}>
+            {(current) => (
+              <ArtifactInspector
+                context={current()}
+                onClose={() => uiStore.setRightPaneMode("tools")}
+              />
+            )}
+          </Show>
+          <div
+            style={{
+              display: artifactMode() ? "none" : "flex",
+              flex: artifactMode() ? undefined : 1,
+              "min-height": 0,
+              "flex-direction": "column",
+            }}
+          >
+            <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
+              <CanvasTab />
+            </KeepAlive>
+            <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
+              <ComputeJobs />
+            </KeepAlive>
+            <KeepAlive show={tab() === "evidence"} mounted={visited().has("evidence")}>
+              <EvidenceGraph />
+            </KeepAlive>
+            <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
+              <TerminalTab />
+            </KeepAlive>
+          </div>
         </div>
       </aside>
     </Show>
@@ -385,6 +450,8 @@ function TerminalTab(): JSX.Element {
 }
 
 function CollapsedRail(props: {
+  artifact: boolean
+  onInspect: () => void
   tabs: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[]
   onOpen: (t?: RightPaneTab) => void
 }): JSX.Element {
@@ -406,6 +473,11 @@ function CollapsedRail(props: {
         <IconChevronLeft size={14} strokeWidth={1.5} />
       </button>
       <span style={{ width: "18px", height: "1px", background: "var(--color-border)", margin: "4px 0" }} />
+      <Show when={props.artifact}>
+        <button onClick={props.onInspect} title="inspect artifact" aria-label="inspect artifact" style={railBtn()}>
+          <IconAtom size={15} strokeWidth={1.5} />
+        </button>
+      </Show>
       <For each={props.tabs}>
         {(t) => (
           <button

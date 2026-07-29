@@ -11,7 +11,11 @@ test("runs a reproducible local job and captures outputs from the right pane", a
   try {
     await gotoSession()
 
-    await page.getByTitle("jobs").click()
+    await page
+      .getByRole("tab", { name: "Compute", exact: true })
+      .or(page.getByRole("button", { name: "Compute", exact: true }))
+      .first()
+      .click()
     const pane = page.locator(".session-right-pane")
     await expect(pane.getByText("compute jobs", { exact: true })).toBeVisible()
 

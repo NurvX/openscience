@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js"
 
 export type RightPaneTab = "canvas" | "evidence" | "jobs" | "terminal"
+export type RightPaneMode = "artifact" | "tools"
 
 const PANE_OPEN_KEY = "openscience-rightpane-open-v2"
 const HIDDEN_TABS_KEY = "thesis-rightpane-hidden-tabs-v1"
@@ -40,6 +41,7 @@ function readHiddenTabs(): RightPaneTab[] {
 const [helpOpen, setHelpOpen] = createSignal(false)
 const [paletteOpen, setPaletteOpen] = createSignal(false)
 const [rightPaneTab, setRightPaneTab] = createSignal<RightPaneTab>("canvas")
+const [rightPaneMode, setRightPaneMode] = createSignal<RightPaneMode>("tools")
 const [rightPaneOpen, setRightPaneOpenRaw] = createSignal(readPaneOpen())
 const [hiddenTabs, setHiddenTabs] = createSignal<RightPaneTab[]>(readHiddenTabs())
 const [agent, setAgentRaw] = createSignal<string>(readAgent())
@@ -87,6 +89,8 @@ export const uiStore = {
   setPaletteOpen,
   rightPaneTab,
   setRightPaneTab,
+  rightPaneMode,
+  setRightPaneMode,
   rightPaneOpen,
   setRightPaneOpen,
   hiddenTabs,
