@@ -27,13 +27,22 @@ import { analyzeMolecularSource, narrowMolecularSource } from "./model"
  */
 
 type Status = "idle" | "loading" | "ready" | "empty" | "error"
+type Preset = "auto" | "polymer-cartoon" | "atomic-detail" | "illustrative" | "molecular-surface"
+type Granularity = "element" | "residue" | "chain"
+type Theme = "dark" | "light"
 
 export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
   let host!: HTMLDivElement
   const [plugin, setPlugin] = createSignal<PluginContext | undefined>()
   const [status, setStatus] = createSignal<Status>("idle")
   const [error, setError] = createSignal<string>("")
+  const [preset, setPreset] = createSignal<Preset>("auto")
+  const [granularity, setGranularity] = createSignal<Granularity>("element")
+  const [theme, setTheme] = createSignal<Theme>("dark")
+  const [selection, setSelection] = createSignal({ label: "", count: 0, history: 0 })
+  const [measurements, setMeasurements] = createSignal(0)
   const summary = createMemo(() => analyzeMolecularSource(props.data, props.kind))
+  const subscriptions: Array<{ unsubscribe(): void }> = []
   let disposed = false
   let token = 0
 
@@ -62,6 +71,29 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
         p.dispose()
         return
       }
+      p.selectionMode = true
+      p.managers.interactivity.setProps({ granularity: granularity() })
+      const syncSelection = () => {
+        const stats = p.managers.structure.selection.stats
+        setSelection({
+          label: stats.label,
+          count: stats.elementCount,
+          history: p.managers.structure.selection.additionsHistory.length,
+        })
+      }
+      const syncMeasurements = () => {
+        const state = p.managers.structure.measurement.state
+        setMeasurements(
+          state.distances.length +
+            state.angles.length +
+            state.dihedrals.length +
+            state.orientations.length +
+            state.planes.length,
+        )
+      }
+      subscriptions.push(p.managers.structure.selection.events.changed.subscribe(syncSelection))
+      subscriptions.push(p.managers.structure.selection.events.additionsHistoryUpdated.subscribe(syncSelection))
+      subscriptions.push(p.managers.structure.measurement.behaviors.state.subscribe(syncMeasurements))
       setPlugin(p)
     } catch (e) {
       if (!disposed) {
@@ -98,7 +130,9 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
       if (my !== token || disposed) return
       const trajectory = await p.builders.structure.parseTrajectory(raw, src.format as BuiltInTrajectoryFormat)
       if (my !== token || disposed) return
-      await p.builders.structure.hierarchy.applyPreset(trajectory, "default")
+      await p.builders.structure.hierarchy.applyPreset(trajectory, "default", {
+        representationPreset: preset(),
+      })
       if (my !== token || disposed) return
       p.handleResize()
       setStatus("ready")
@@ -110,9 +144,87 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
     }
   }
 
+  async function changePreset(value: Preset) {
+    setPreset(value)
+    const p = plugin()
+    if (!p || status() !== "ready") return
+    await load(p, props.data, props.kind)
+  }
+
+  function changeGranularity(value: Granularity) {
+    setGranularity(value)
+    plugin()?.managers.interactivity.setProps({ granularity: value })
+  }
+
+  async function toggleTheme() {
+    const p = plugin()
+    const next: Theme = theme() === "dark" ? "light" : "dark"
+    setTheme(next)
+    if (!p?.canvas3d) return
+    const { Color } = await import("molstar/lib/mol-util/color")
+    p.canvas3d.setProps({
+      renderer: {
+        ...p.canvas3d.props.renderer,
+        backgroundColor: Color(next === "light" ? 0xf5f6f8 : 0x0b0d12),
+      },
+    })
+  }
+
+  async function measureDistance() {
+    const p = plugin()
+    if (!p) return
+    const history = p.managers.structure.selection.additionsHistory
+    if (history.length < 2) return
+    await p.managers.structure.measurement.addDistance(history[0].loci, history[1].loci)
+  }
+
+  function clearSelection() {
+    const p = plugin()
+    if (!p) return
+    p.managers.interactivity.lociSelects.deselectAll()
+    p.managers.structure.selection.clear()
+  }
+
+  async function clearMeasurements() {
+    const p = plugin()
+    if (!p) return
+    const state = p.managers.structure.measurement.state
+    const cells = [
+      ...state.distances,
+      ...state.angles,
+      ...state.dihedrals,
+      ...state.orientations,
+      ...state.planes,
+    ]
+    if (!cells.length) return
+    const { PluginCommands } = await import("molstar/lib/mol-plugin/commands")
+    await Promise.all(
+      cells.map((cell) => {
+        if (!cell.parent) return Promise.resolve()
+        return PluginCommands.State.RemoveObject(p, {
+          state: cell.parent,
+          ref: cell.transform.parent,
+          removeParentGhosts: true,
+        })
+      }),
+    )
+  }
+
+  function exportName() {
+    const src = narrowMolecularSource(props.data, props.kind)
+    if (!src?.raw || src.format !== "xyz") return "molecule-structure.png"
+    const name = src.raw.split(/\r?\n/)[1]?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+    return `${name || "molecule"}-structure.png`
+  }
+
+  async function exportPng() {
+    await plugin()?.helpers.viewportScreenshot?.download(exportName())
+  }
+
   onCleanup(() => {
     disposed = true
     token++
+    subscriptions.forEach((subscription) => subscription.unsubscribe())
     const p = plugin()
     if (!p) return
     try {
@@ -128,6 +240,7 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
     <div
       data-component="mol-structure"
       data-kind={props.kind}
+      data-status={status()}
       style={{
         position: "relative",
         width: "100%",
@@ -138,6 +251,104 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
       }}
     >
       <div ref={host} style={{ position: "absolute", inset: "0" }} />
+      <div
+        data-component="molecular-controls"
+        data-preset={preset()}
+        data-granularity={granularity()}
+        data-background={theme()}
+        style={{
+          position: "absolute",
+          top: "12px",
+          left: "12px",
+          right: "12px",
+          display: "flex",
+          "align-items": "center",
+          gap: "6px",
+          "flex-wrap": "wrap",
+          "z-index": 3,
+          "pointer-events": status() === "ready" ? "auto" : "none",
+          opacity: status() === "ready" ? 1 : 0,
+          transition: "opacity 160ms ease",
+        }}
+      >
+        <select
+          aria-label="Representation"
+          value={preset()}
+          onChange={(event) => void changePreset(event.currentTarget.value as Preset)}
+          style={selectStyle()}
+        >
+          <option value="auto">Automatic</option>
+          <option value="polymer-cartoon">Polymer cartoon</option>
+          <option value="atomic-detail">Atomic detail</option>
+          <option value="illustrative">Illustrative</option>
+          <option value="molecular-surface">Molecular surface</option>
+        </select>
+        <select
+          aria-label="Selection granularity"
+          value={granularity()}
+          onChange={(event) => changeGranularity(event.currentTarget.value as Granularity)}
+          style={selectStyle()}
+        >
+          <option value="element">Atom selection</option>
+          <option value="residue">Residue selection</option>
+          <option value="chain">Chain selection</option>
+        </select>
+        <button type="button" style={buttonStyle()} onClick={() => plugin()?.managers.camera.reset()}>
+          Reset camera
+        </button>
+        <button type="button" style={buttonStyle()} onClick={() => void toggleTheme()}>
+          {theme() === "dark" ? "Light background" : "Dark background"}
+        </button>
+        <button type="button" style={buttonStyle()} onClick={() => void exportPng()}>
+          Export PNG
+        </button>
+        <button
+          type="button"
+          style={buttonStyle()}
+          disabled={selection().history < 2}
+          onClick={() => void measureDistance()}
+        >
+          Measure distance
+        </button>
+        <Show when={selection().count > 0}>
+          <button type="button" style={buttonStyle()} onClick={clearSelection}>
+            Clear selection
+          </button>
+        </Show>
+        <Show when={measurements() > 0}>
+          <button type="button" style={buttonStyle()} onClick={() => void clearMeasurements()}>
+            Clear measurements
+          </button>
+        </Show>
+      </div>
+      <Show when={selection().count > 0 || measurements() > 0}>
+        <div
+          data-component="molecular-selection"
+          style={{
+            position: "absolute",
+            top: "58px",
+            left: "12px",
+            padding: "7px 9px",
+            "border-radius": "6px",
+            border: "1px solid rgba(255,255,255,0.14)",
+            background: "rgba(9, 12, 18, 0.82)",
+            color: "#e8ebf2",
+            font: "11px/1.35 ui-sans-serif, system-ui, sans-serif",
+            "backdrop-filter": "blur(12px)",
+            "z-index": 2,
+          }}
+        >
+          <Show when={selection().count > 0}>
+            <span>{selection().label || `${selection().count} selected atoms`}</span>
+          </Show>
+          <Show when={selection().count > 0 && measurements() > 0}> · </Show>
+          <Show when={measurements() > 0}>
+            <span>
+              {measurements()} measurement{measurements() === 1 ? "" : "s"}
+            </span>
+          </Show>
+        </div>
+      </Show>
       <Show when={summary()}>
         {(value) => (
           <div
@@ -234,6 +445,34 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
       </Show>
     </div>
   )
+}
+
+function selectStyle(): JSX.CSSProperties {
+  return {
+    height: "30px",
+    padding: "0 27px 0 9px",
+    border: "1px solid rgba(255,255,255,0.17)",
+    "border-radius": "6px",
+    background: "rgba(9, 12, 18, 0.88)",
+    color: "#eef1f6",
+    font: "11px/1 ui-sans-serif, system-ui, sans-serif",
+    "backdrop-filter": "blur(12px)",
+    cursor: "pointer",
+  }
+}
+
+function buttonStyle(): JSX.CSSProperties {
+  return {
+    height: "30px",
+    padding: "0 9px",
+    border: "1px solid rgba(255,255,255,0.17)",
+    "border-radius": "6px",
+    background: "rgba(9, 12, 18, 0.88)",
+    color: "#eef1f6",
+    font: "11px/1 ui-sans-serif, system-ui, sans-serif",
+    "backdrop-filter": "blur(12px)",
+    cursor: "pointer",
+  }
 }
 
 export default ProteinStructure
