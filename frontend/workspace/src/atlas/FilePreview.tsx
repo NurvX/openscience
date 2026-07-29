@@ -26,6 +26,7 @@ import { detectBinaryScienceFormat } from "@/science/formats/binary"
 import { NotebookView } from "@/notebook/NotebookView"
 import { DataTableView } from "@/data/DataTableView"
 import type { TableFormat } from "@/data/table"
+import { artifactContext, createArtifactContext } from "@/artifacts/context"
 import { toast } from "@/atlas/Toast"
 import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, IconRefresh } from "@/atlas/shared/Icon"
 
@@ -134,6 +135,7 @@ export function FileView(props: {
   directory?: string
   subtitle?: string
   onClose?: () => void
+  active?: boolean
 }): JSX.Element {
   const sdk = useSDK()
   const sync = useSync()
@@ -208,6 +210,25 @@ export function FileView(props: {
     if (k === "table") return tabular() ?? e()
     return k
   }
+  const context = createMemo(() =>
+    createArtifactContext({
+      directory: directory(),
+      path: props.path,
+      format: badge(),
+      scienceKind: scientific()?.kind,
+    }),
+  )
+
+  createEffect(() => {
+    const current = context()
+    if (props.active === false) {
+      artifactContext.clear(current.id)
+      return
+    }
+    artifactContext.activate(current)
+  })
+
+  onCleanup(() => artifactContext.clear(context().id))
 
   createEffect(() => {
     if (file.loading) return
@@ -277,6 +298,8 @@ export function FileView(props: {
 
   return (
     <div
+      data-component="file-view"
+      data-artifact-id={context().id}
       style={{
         flex: 1,
         "min-height": 0,
