@@ -255,10 +255,11 @@ export function ArtifactGallery(props: { directory: string; onOpen: (path: strin
           <button
             type="button"
             title="refresh artifacts"
-            style={iconButton()}
+            aria-label="Refresh artifacts"
+            style={actionButton()}
             onClick={() => setRefresh((value) => value + 1)}
           >
-            <IconRefresh size={12} strokeWidth={1.5} />
+            <IconRefresh size={12} strokeWidth={1.5} /> refresh
           </button>
         </div>
         <div class="atlas-scroll" style={{ display: "flex", gap: "5px", overflow: "auto hidden" }}>
@@ -498,7 +499,6 @@ function ArtifactCard(props: {
 }
 
 function ArtifactVisual(props: { item: ArtifactInfo; preview: string }): JSX.Element {
-  const seed = () => Array.from(props.item.path).reduce((total, value) => total + value.charCodeAt(0), 0)
   const image = () =>
     props.item.kind === "figure" && ["png", "jpg", "jpeg", "svg", "webp", "gif"].includes(props.item.format)
   return (
@@ -513,26 +513,13 @@ function ArtifactVisual(props: { item: ArtifactInfo; preview: string }): JSX.Ele
     >
       <Show
         when={image()}
-        fallback={
-          <div style={{ position: "absolute", inset: "12px", display: "flex", "align-items": "flex-end", gap: "4px" }}>
-            <For each={Array.from({ length: 13 })}>
-              {(_, index) => (
-                <span
-                  style={{
-                    flex: 1,
-                    height: `${18 + ((seed() + index() * 29) % 56)}%`,
-                    "border-radius": "2px 2px 0 0",
-                    background: `color-mix(in srgb, ${accent(props.item.kind)} ${22 + ((index() * 7) % 28)}%, transparent)`,
-                  }}
-                />
-              )}
-            </For>
-          </div>
-        }
+        fallback={<ArtifactPlaceholder item={props.item} />}
       >
         <img
+          data-preview-source="file"
+          data-preview-kind="figure"
           src={props.preview}
-          alt=""
+          alt={`Preview of ${props.item.name}`}
           loading="lazy"
           style={{ width: "100%", height: "100%", "object-fit": "cover", display: "block" }}
         />
@@ -561,6 +548,48 @@ function ArtifactVisual(props: { item: ArtifactInfo; preview: string }): JSX.Ele
         }}
       >
         <KindIcon kind={props.item.kind} size={20} />
+      </span>
+    </div>
+  )
+}
+
+function ArtifactPlaceholder(props: { item: ArtifactInfo }): JSX.Element {
+  const copy = () => {
+    if (props.item.kind === "notebook") return ["Notebook", "Executable cells"]
+    if (props.item.kind === "dataset") return ["Tabular data", props.item.format.toUpperCase()]
+    if (props.item.kind === "report")
+      return props.item.format === "pdf" ? ["PDF document", "Open for page preview"] : ["Document", "Rendered on open"]
+    if (props.item.kind === "structure") return ["Molecular structure", "Open for interactive 3D"]
+    if (props.item.kind === "sequence") return ["Biological sequence", "Open for sequence inspection"]
+    if (props.item.kind === "genomics") return ["Genomic data", "Open for records and tracks"]
+    if (props.item.kind === "spectrum") return ["Mass spectrum", "Open for spectral inspection"]
+    if (props.item.kind === "model") return ["Model artifact", "Inspect inputs and provenance"]
+    if (props.item.kind === "archive") return ["Archive", "Open for a safe inventory"]
+    return ["Figure", `${props.item.format.toUpperCase()} preview unavailable`]
+  }
+  return (
+    <div
+      data-preview-source="placeholder"
+      data-preview-kind={props.item.kind}
+      style={{
+        position: "absolute",
+        inset: 0,
+        display: "grid",
+        "place-content": "center",
+        "justify-items": "center",
+        gap: "5px",
+        padding: "10px",
+        "text-align": "center",
+      }}
+    >
+      <span style={{ color: accent(props.item.kind), opacity: 0.78 }}>
+        <KindIcon kind={props.item.kind} size={21} />
+      </span>
+      <strong style={{ "font-family": FONT_SANS, "font-size": "10px", color: "var(--color-text)" }}>
+        {copy()[0]}
+      </strong>
+      <span style={{ "font-family": FONT_MONO, "font-size": "8px", color: "var(--color-text-faint)" }}>
+        {copy()[1]}
       </span>
     </div>
   )

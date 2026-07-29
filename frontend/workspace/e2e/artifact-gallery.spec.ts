@@ -42,6 +42,15 @@ test("discovers, filters, opens, downloads, and contextualizes local research ar
     await expect(gallery.locator("[data-artifact]")).toHaveCount(4)
     await expect(gallery.getByText("pipeline.py", { exact: true })).toHaveCount(0)
     await expect(gallery.locator('[data-component="reproducibility-score"]')).toHaveAttribute("data-status", "blocked")
+    await expect(gallery.locator('[data-artifact="results/plot.svg"] [data-preview-source="file"]')).toBeVisible()
+    await expect(gallery.locator('[data-artifact="analysis.ipynb"] [data-preview-kind="notebook"]')).toContainText(
+      "Notebook",
+    )
+    await expect(gallery.locator('[data-artifact="results/counts.csv"] [data-preview-kind="dataset"]')).toContainText(
+      "Tabular data",
+    )
+    await expect(gallery.locator("[data-preview-chart]")).toHaveCount(0)
+    await expect(gallery.getByRole("button", { name: "Refresh artifacts", exact: true })).toBeVisible()
 
     await gallery.getByRole("button", { name: /^figure 1$/ }).click()
     await expect(gallery.locator("[data-artifact]")).toHaveCount(1)
