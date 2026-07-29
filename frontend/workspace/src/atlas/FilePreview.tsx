@@ -26,6 +26,7 @@ import { detectBinaryScienceFormat } from "@/science/formats/binary"
 import { NotebookView } from "@/notebook/NotebookView"
 import { DataTableView } from "@/data/DataTableView"
 import type { TableFormat } from "@/data/table"
+import { ManuscriptWorkbench } from "@/manuscript/ManuscriptWorkbench"
 import { artifactContext, createArtifactContext } from "@/artifacts/context"
 import type { ArtifactInspection } from "@/science/renderers"
 import { toast } from "@/atlas/Toast"
@@ -501,9 +502,14 @@ export function FileView(props: {
             <Switch>
               {/* markdown */}
               <Match when={kind() === "markdown" && !showSource()}>
-                <div style={{ padding: "22px 26px", "max-width": "820px", margin: "0 auto" }}>
-                  <Markdown class="atlas-md" text={draft()} />
-                </div>
+                <ManuscriptWorkbench
+                  directory={directory()}
+                  path={props.path}
+                  text={draft()}
+                  dirty={dirty()}
+                  saving={saving()}
+                  onChange={setDraft}
+                />
               </Match>
 
               {/* notebook */}
