@@ -1,8 +1,9 @@
-import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import type { JSX } from "solid-js"
 import type { PluginContext } from "molstar/lib/mol-plugin/context"
 import type { BuiltInTrajectoryFormat } from "molstar/lib/mol-plugin-state/formats/trajectory"
 import type { ArtifactRenderProps } from "../registry"
+import { analyzeMolecularSource, narrowMolecularSource } from "./model"
 
 /**
  * 3D molecular structure renderer backed by Mol* (molstar), used for both the
@@ -27,79 +28,12 @@ import type { ArtifactRenderProps } from "../registry"
 
 type Status = "idle" | "loading" | "ready" | "empty" | "error"
 
-interface Source {
-  format: BuiltInTrajectoryFormat
-  url?: string
-  raw?: string
-  binary?: boolean
-}
-
-const EXT_FORMAT: Record<string, { format: BuiltInTrajectoryFormat; binary?: boolean }> = {
-  pdb: { format: "pdb" },
-  ent: { format: "pdb" },
-  cif: { format: "mmcif" },
-  mmcif: { format: "mmcif" },
-  bcif: { format: "mmcif", binary: true },
-  pdbqt: { format: "pdbqt" },
-  gro: { format: "gro" },
-  xyz: { format: "xyz" },
-  sdf: { format: "sdf" },
-  mol: { format: "mol" },
-  mol2: { format: "mol2" },
-}
-
-function formatFromUrl(url: string): { format: BuiltInTrajectoryFormat; binary?: boolean } | undefined {
-  const clean = url.split(/[?#]/)[0]
-  const ext = clean.slice(clean.lastIndexOf(".") + 1).toLowerCase()
-  return EXT_FORMAT[ext]
-}
-
-function narrow(data: unknown, kind: string): Source | undefined {
-  const fallback: BuiltInTrajectoryFormat = kind === "chem-3d" ? "sdf" : "pdb"
-  if (typeof data === "string") {
-    const s = data.trim()
-    if (/^[0-9A-Za-z]{4}$/.test(s)) return { url: rcsbUrl(s), format: "mmcif" }
-    return { raw: data, format: fallback }
-  }
-  if (!data || typeof data !== "object") return undefined
-  const d = data as Record<string, unknown>
-  const inlineMap: Array<[string, BuiltInTrajectoryFormat]> = [
-    ["pdb", "pdb"],
-    ["cif", "mmcif"],
-    ["mmcif", "mmcif"],
-    ["sdf", "sdf"],
-    ["mol2", "mol2"],
-    ["mol", "mol"],
-    ["xyz", "xyz"],
-  ]
-  for (const [key, format] of inlineMap) {
-    if (typeof d[key] === "string") return { raw: d[key] as string, format }
-  }
-  const explicit = typeof d.format === "string" ? (d.format as BuiltInTrajectoryFormat) : undefined
-  const inline = d.data ?? d.inline ?? d.text
-  if (typeof inline === "string") return { raw: inline, format: explicit ?? fallback }
-  if (typeof d.url === "string") {
-    const guess = formatFromUrl(d.url)
-    return {
-      url: d.url,
-      format: explicit ?? guess?.format ?? (kind === "chem-3d" ? "sdf" : "mmcif"),
-      binary: guess?.binary,
-    }
-  }
-  if (typeof d.id === "string") return { url: rcsbUrl(d.id), format: "mmcif" }
-  if (typeof d.pdbId === "string") return { url: rcsbUrl(d.pdbId as string), format: "mmcif" }
-  return undefined
-}
-
-function rcsbUrl(id: string): string {
-  return `https://files.rcsb.org/download/${id.trim().toUpperCase()}.cif`
-}
-
 export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
   let host!: HTMLDivElement
   const [plugin, setPlugin] = createSignal<PluginContext | undefined>()
   const [status, setStatus] = createSignal<Status>("idle")
   const [error, setError] = createSignal<string>("")
+  const summary = createMemo(() => analyzeMolecularSource(props.data, props.kind))
   let disposed = false
   let token = 0
 
@@ -147,7 +81,7 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
 
   async function load(p: PluginContext, data: unknown, kind: string) {
     const my = ++token
-    const src = narrow(data, kind)
+    const src = narrowMolecularSource(data, kind)
     if (!src) {
       await p.clear().catch(() => {})
       if (my === token) setStatus("empty")
@@ -162,7 +96,7 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
         ? await p.builders.data.download({ url: src.url, isBinary: src.binary ?? false }, { state: { isGhost: true } })
         : await p.builders.data.rawData({ data: src.raw ?? "" })
       if (my !== token || disposed) return
-      const trajectory = await p.builders.structure.parseTrajectory(raw, src.format)
+      const trajectory = await p.builders.structure.parseTrajectory(raw, src.format as BuiltInTrajectoryFormat)
       if (my !== token || disposed) return
       await p.builders.structure.hierarchy.applyPreset(trajectory, "default")
       if (my !== token || disposed) return
@@ -204,6 +138,72 @@ export function ProteinStructure(props: ArtifactRenderProps): JSX.Element {
       }}
     >
       <div ref={host} style={{ position: "absolute", inset: "0" }} />
+      <Show when={summary()}>
+        {(value) => (
+          <div
+            data-component="molecular-summary"
+            style={{
+              position: "absolute",
+              left: "12px",
+              bottom: "12px",
+              display: "grid",
+              gap: "7px",
+              padding: "10px 11px",
+              "max-width": "min(360px, calc(100% - 24px))",
+              "border-radius": "7px",
+              border: "1px solid rgba(255,255,255,0.14)",
+              background: "rgba(9, 12, 18, 0.82)",
+              "backdrop-filter": "blur(12px)",
+              color: "#e8ebf2",
+              "font-family": "ui-sans-serif, system-ui, sans-serif",
+              "font-size": "11px",
+              "line-height": 1.35,
+              "z-index": 2,
+            }}
+          >
+            <div style={{ display: "flex", "align-items": "center", gap: "8px", "flex-wrap": "wrap" }}>
+              <strong style={{ "font-size": "11px", "letter-spacing": "0.02em" }}>
+                {value().format.toUpperCase()}
+              </strong>
+              <Show when={value().atomCount !== undefined}>
+                <span>{value().atomCount} atoms</span>
+              </Show>
+              <Show when={value().bondCount !== undefined}>
+                <span>{value().bondCount} bonds</span>
+              </Show>
+              <Show when={value().residueCount !== undefined}>
+                <span>{value().residueCount} residues</span>
+              </Show>
+              <Show when={value().chainCount !== undefined}>
+                <span>{value().chainCount} chains</span>
+              </Show>
+              <Show when={value().moleculeCount !== undefined}>
+                <span>{value().moleculeCount} molecules</span>
+              </Show>
+            </div>
+            <Show when={value().elements.length}>
+              <div style={{ display: "flex", gap: "5px", "flex-wrap": "wrap", color: "#bac2d2" }}>
+                <For each={value().elements}>
+                  {(item) => (
+                    <span
+                      style={{
+                        padding: "2px 5px",
+                        "border-radius": "4px",
+                        background: "rgba(255,255,255,0.08)",
+                      }}
+                    >
+                      {item.element} {item.count}
+                    </span>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <For each={value().warnings}>
+              {(warning) => <span style={{ color: "#f2c879" }}>{warning}</span>}
+            </For>
+          </div>
+        )}
+      </Show>
       <Show when={status() !== "ready"}>
         <div
           style={{

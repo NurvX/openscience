@@ -64,6 +64,10 @@ test("XYZ files open as interactive 3D chemistry with source access", async ({ p
   const artifact = page.locator('[data-component="science-artifact"][data-kind="chem-3d"]')
   await expect(artifact).toBeVisible()
   await expect(artifact.locator('[data-component="mol-structure"]')).toBeVisible()
+  const summary = artifact.locator('[data-component="molecular-summary"]')
+  await expect(summary).toContainText("3 atoms")
+  await expect(summary).toContainText("H 2")
+  await expect(summary).toContainText("O 1")
 
   await page.getByTitle("raw source", { exact: true }).click()
   await expect(page.getByTitle("rendered view", { exact: true })).toBeVisible()
