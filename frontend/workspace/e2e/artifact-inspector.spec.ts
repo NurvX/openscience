@@ -29,6 +29,7 @@ test("opened files drive a contextual artifact inspector without stale state", a
   await expect(inspector).toHaveAttribute("data-artifact-id", /water\.xyz/)
   await expect(inspector.locator("header strong")).toHaveText("water.xyz")
   await expect(inspector.getByRole("tab")).toHaveCount(7)
+  expect((await inspector.boundingBox())?.width).toBeGreaterThanOrEqual(400)
   await expect(inspector.getByText("3 atoms", { exact: true })).toBeVisible()
   await expect(inspector.getByText("PNG export", { exact: true })).toBeVisible()
 
@@ -68,6 +69,10 @@ test("artifact inspector overlays rather than crushing the workbench at narrow d
   expect(inspectorBox?.width).toBeGreaterThanOrEqual(280)
   expect(fileBox?.width).toBeGreaterThanOrEqual(520)
   expect(inspectorBox?.x).toBeGreaterThan(fileBox?.x ?? 0)
+  const backdrop = page.getByRole("button", { name: "Close inspector overlay", exact: true })
+  await expect(backdrop).toBeVisible()
+  await backdrop.click({ position: { x: 10, y: 300 } })
+  await expect(inspector).toHaveCount(0)
 })
 
 test("artifact review threads persist and can be resolved", async ({ page, directory, gotoSession }) => {

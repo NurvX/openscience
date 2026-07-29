@@ -33,7 +33,7 @@ function readSavedWidth(): number {
     const v = Number(localStorage.getItem(RIGHT_PANE_WIDTH_KEY))
     if (Number.isFinite(v) && v >= MIN_PANE_WIDTH && v <= MAX_PANE_WIDTH) return v
   } catch {}
-  return 360
+  return 420
 }
 
 export function RightPane(): JSX.Element {
@@ -134,24 +134,42 @@ export function RightPane(): JSX.Element {
         />
       }
     >
-      <aside
-        class="session-right-pane"
-        style={{
-          flex: narrow() ? "none" : `0 0 ${width()}px`,
-          width: narrow() ? "min(420px, calc(100vw - 52px))" : `${width()}px`,
-          display: "flex",
-          "flex-direction": "column",
-          "border-left": "1px solid var(--color-border)",
-          background: "var(--color-bg-subtle)",
-          "min-width": narrow() ? "280px" : `${MIN_PANE_WIDTH}px`,
-          position: narrow() ? "fixed" : "relative",
-          top: narrow() ? "0" : undefined,
-          right: narrow() ? "0" : undefined,
-          bottom: narrow() ? "0" : undefined,
-          "z-index": narrow() ? 70 : undefined,
-          "box-shadow": narrow() ? "-18px 0 48px rgba(0, 0, 0, 0.22)" : "none",
-        }}
-      >
+      <>
+        <Show when={narrow()}>
+          <button
+            type="button"
+            class="session-right-pane-backdrop"
+            aria-label="Close inspector overlay"
+            onClick={() => uiStore.setRightPaneOpen(false)}
+            style={{
+              all: "unset",
+              position: "fixed",
+              inset: 0,
+              "z-index": 69,
+              cursor: "default",
+              background: "color-mix(in srgb, var(--color-bg) 62%, transparent)",
+              "backdrop-filter": "blur(1px)",
+            }}
+          />
+        </Show>
+        <aside
+          class="session-right-pane"
+          style={{
+            flex: narrow() ? "none" : `0 0 ${width()}px`,
+            width: narrow() ? "min(420px, calc(100vw - 52px))" : `${width()}px`,
+            display: "flex",
+            "flex-direction": "column",
+            "border-left": "1px solid var(--color-border)",
+            background: "var(--color-bg-subtle)",
+            "min-width": narrow() ? "280px" : `${MIN_PANE_WIDTH}px`,
+            position: narrow() ? "fixed" : "relative",
+            top: narrow() ? "0" : undefined,
+            right: narrow() ? "0" : undefined,
+            bottom: narrow() ? "0" : undefined,
+            "z-index": narrow() ? 70 : undefined,
+            "box-shadow": narrow() ? "-18px 0 48px rgba(0, 0, 0, 0.22)" : "none",
+          }}
+        >
         {/* Drag handle on the left edge of the right pane. 6px wide, full
           height, invisible until hover. Cursor goes ew-resize. */}
         <div
@@ -302,7 +320,8 @@ export function RightPane(): JSX.Element {
             </KeepAlive>
           </div>
         </div>
-      </aside>
+        </aside>
+      </>
     </Show>
   )
 }

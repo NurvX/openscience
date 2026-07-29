@@ -1872,7 +1872,7 @@ button.research-launchpad__status-item:hover {
   .session-right-pane {
     position: absolute !important;
     inset: 0 !important;
-    z-index: 20;
+    z-index: 70 !important;
     width: 100% !important;
     min-width: 0 !important;
     flex: 0 0 100% !important;
