@@ -218,6 +218,12 @@ export namespace File {
     state()
   }
 
+  async function contained(file: string): Promise<string> {
+    const full = path.join(Instance.directory, file)
+    if (await Instance.containsCanonicalPath(full)) return full
+    throw new Error(`Access denied: path escapes project directory`)
+  }
+
   export async function status() {
     const project = Instance.project
     if (project.vcs !== "git") return []
@@ -295,13 +301,7 @@ export namespace File {
   export async function read(file: string): Promise<Content> {
     using _ = log.time("read", { file })
     const project = Instance.project
-    const full = path.join(Instance.directory, file)
-
-    // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
-    // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    const full = await contained(file)
 
     const bunFile = Bun.file(full)
 
@@ -350,18 +350,12 @@ export namespace File {
   }
 
   export async function inspect(file: string): Promise<ScienceFile.Inspection> {
-    const full = path.join(Instance.directory, file)
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    const full = await contained(file)
     return ScienceFile.inspect(full, file)
   }
 
   export async function raw(file: string): Promise<BunFile> {
-    const full = path.join(Instance.directory, file)
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    const full = await contained(file)
     const content = Bun.file(full)
     if (!(await content.exists())) throw new HTTPException(404, { message: `File not found: ${file}` })
     return content
@@ -372,10 +366,7 @@ export namespace File {
   }
 
   export async function provenance(file: string): Promise<ArtifactFile.Provenance> {
-    const full = path.join(Instance.directory, file)
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    await contained(file)
     return ArtifactFile.provenance(Instance.directory, file)
   }
 
@@ -401,10 +392,7 @@ export namespace File {
 
   export async function write(file: string, content: string): Promise<Content> {
     using _ = log.time("write", { file })
-    const full = path.join(Instance.directory, file)
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    const full = await contained(file)
 
     const exists = await Bun.file(full).exists()
     await Bun.write(full, content)
@@ -435,10 +423,7 @@ export namespace File {
       ignored = ig.ignores.bind(ig)
     }
     const resolved = dir ? path.join(Instance.directory, dir) : Instance.directory
-
-    // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
-    // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(resolved)) {
+    if (!(await Instance.containsCanonicalPath(resolved))) {
       throw new Error(`Access denied: path escapes project directory`)
     }
 
