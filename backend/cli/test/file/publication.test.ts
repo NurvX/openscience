@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import { describe, expect, test } from "bun:test"
+import fs from "node:fs/promises"
 import path from "node:path"
 import { PublicationFile } from "../../src/file/publication"
 import { PublicationReview } from "../../src/file/review"
@@ -61,6 +62,21 @@ describe("PublicationFile", () => {
     await expect(PublicationFile.render(tmp.path, { path: "../report.md", format: "html" })).rejects.toThrow("escapes")
   })
 
+  test("rejects a Markdown source symlink that escapes the project", async () => {
+    await using outside = await tmpdir({
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "secret.md"), "# External secret\n")
+      },
+    })
+    await using tmp = await tmpdir({
+      init: async (directory) => {
+        await fs.symlink(path.join(outside.path, "secret.md"), path.join(directory, "report.md"))
+      },
+    })
+
+    await expect(PublicationFile.render(tmp.path, { path: "report.md", format: "html" })).rejects.toThrow("escapes")
+  })
+
   test("gates reviewed exports on a finalized report for the exact source bytes", async () => {
     await using tmp = await tmpdir({
       git: true,
@@ -119,6 +135,79 @@ describe("PublicationFile", () => {
             })
           ).readiness,
         ).toBe("draft")
+      },
+    })
+  })
+
+  test("a reviewed Pandoc export renders the finalized snapshot when the source changes mid-export", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "README.md"), "# Publication snapshot fixture\n")
+        await Bun.write(path.join(directory, "uv.lock"), "version = 1\n")
+        await Bun.write(path.join(directory, "pyproject.toml"), '[project]\nname = "publication-snapshot-fixture"\n')
+        await Bun.write(path.join(directory, "report.md"), "# Reviewed result\n\nThe finalized value is 42%.\n")
+        await $`git add README.md uv.lock pyproject.toml report.md`.cwd(directory).quiet()
+        await $`git -c user.name=OpenScience -c user.email=test@openscience.local commit -m "snapshot fixture"`
+          .cwd(directory)
+          .quiet()
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const review = await PublicationReview.run({ path: "report.md", actor: "Reviewer" })
+        const finalized = await PublicationReview.finalize(review.id, { actor: "Aayam Bansal" })
+        const original = await Bun.file(path.join(tmp.path, "report.md")).text()
+        const bin = path.join(tmp.path, "bin")
+        const ready = path.join(tmp.path, "pandoc-ready")
+        const resume = path.join(tmp.path, "pandoc-resume")
+        const pandoc = path.join(bin, "pandoc")
+        await fs.mkdir(bin, { recursive: true })
+        await Bun.write(
+          pandoc,
+          `#!/bin/sh
+source="$1"
+shift
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+printf ready > ${JSON.stringify(ready)}
+while [ ! -f ${JSON.stringify(resume)} ]; do sleep 0.01; done
+cp "$source" "$output"
+`,
+        )
+        await fs.chmod(pandoc, 0o755)
+        const prior = process.env.PATH
+        process.env.PATH = `${bin}${path.delimiter}${prior ?? ""}`
+        const pending = PublicationFile.render(tmp.path, {
+          path: "report.md",
+          format: "docx",
+          readiness: "reviewed",
+          review_id: finalized.id,
+        })
+        try {
+          await (async () => {
+            for (const _ of Array.from({ length: 200 })) {
+              if (await Bun.file(ready).exists()) return
+              await Bun.sleep(10)
+            }
+            throw new Error("Timed out waiting for the controlled Pandoc process")
+          })()
+          await Bun.write(path.join(tmp.path, "report.md"), "# Changed after validation\n")
+          await Bun.write(resume, "resume")
+          const result = await pending
+          expect(await Bun.file(path.join(tmp.path, result.path)).text()).toBe(original)
+        } finally {
+          process.env.PATH = prior
+          await Bun.write(resume, "resume")
+        }
       },
     })
   })

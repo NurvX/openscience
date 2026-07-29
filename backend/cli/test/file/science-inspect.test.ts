@@ -115,3 +115,26 @@ describe("large binary reads", () => {
     })
   })
 })
+
+describe("large text reads", () => {
+  test("returns a bounded read-only preview instead of loading the whole scientific file", async () => {
+    await using tmp = await tmpdir({
+      init: async (directory) => {
+        const writer = Bun.file(path.join(directory, "variants.vcf")).writer()
+        const chunk = new TextEncoder().encode("chr1\t1\t.\tA\tG\t60\tPASS\tDP=20\n".repeat(32_768))
+        for (const _ of Array.from({ length: 10 })) writer.write(chunk)
+        await writer.end()
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const result = await File.read("variants.vcf")
+        expect(result.truncated).toBe(true)
+        expect(result.size).toBeGreaterThan(8 * 1024 * 1024)
+        expect(new TextEncoder().encode(result.content).byteLength).toBeLessThanOrEqual(8 * 1024 * 1024)
+      },
+    })
+  })
+})

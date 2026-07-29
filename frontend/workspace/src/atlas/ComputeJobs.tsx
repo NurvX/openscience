@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, type JSX } from "solid-js"
 import { Dynamic } from "solid-js/web"
-import { useGlobalSDK } from "@/context/global-sdk"
+import { useSDK } from "@/context/sdk"
 import { usePlatform } from "@/context/platform"
 import { settingsApi } from "@/components/settings/api"
 import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
@@ -95,7 +95,7 @@ interface Job {
 const terminal = new Set<Status>(["succeeded", "failed", "cancelled", "interrupted"])
 
 export function ComputeJobs(): JSX.Element {
-  const sdk = useGlobalSDK()
+  const sdk = useSDK()
   const platform = usePlatform()
   const fetchFn = platform.fetch ?? fetch
   const call = <T,>(path: string, init?: RequestInit) =>
@@ -177,7 +177,7 @@ export function ComputeJobs(): JSX.Element {
       body: JSON.stringify({
         name: name().trim(),
         command: command().trim(),
-        cwd: cwd().trim() || undefined,
+        cwd: cwd().trim() || (value === "local" ? sdk.directory : undefined),
         target: value === "local" ? { kind: "local" } : { kind: "ssh", host_id: value.slice(4) },
         resources: hasResources ? resources : undefined,
         modules: listValue(modules()),

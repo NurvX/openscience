@@ -244,11 +244,11 @@ export namespace PublicationReview {
     )
   }
 
-  export async function assertReady(filepath: string, id: string): Promise<Report> {
+  export async function assertReady(filepath: string, id: string, artifactHash?: string): Promise<Report> {
     const report = await get(id)
     const source = await target(filepath)
     if (report.path !== source.relative) throw new Error("The publication review belongs to a different manuscript")
-    await assertCurrent(report)
+    await assertCurrent(report, artifactHash)
     if (!report.finalized) throw new Error("The publication review has not been finalized")
     if (report.findings.some((finding) => finding.severity === "blocking" && finding.status === "open")) {
       throw new Error("The publication review still has open blocking findings")
@@ -527,13 +527,13 @@ export namespace PublicationReview {
     }
   }
 
-  async function assertCurrent(report: Report) {
+  async function assertCurrent(report: Report, artifactHash?: string) {
     const absolute = path.resolve(Instance.worktree, report.path)
     if (!(await Instance.containsCanonicalPath(absolute))) {
       throw new Error("The reviewed manuscript is outside the current project")
     }
     if (!(await Bun.file(absolute).exists())) throw new Error("The reviewed manuscript no longer exists")
-    if ((await digest(absolute)) !== report.artifactHash) {
+    if ((artifactHash ?? (await digest(absolute))) !== report.artifactHash) {
       throw new Error("The manuscript changed after this publication review was generated")
     }
   }

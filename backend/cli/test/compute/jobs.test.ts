@@ -69,6 +69,43 @@ describe("ComputeJobs command adapters", () => {
 })
 
 describe("ComputeJobs local lifecycle", () => {
+  test("a missing working directory fails durably without crashing the server process", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const cwd = path.join(tmp.path, "missing")
+    const cli = path.join(import.meta.dir, "../..")
+    const script = `
+      import { ComputeJobs } from "./src/compute/jobs"
+      const job = await ComputeJobs.start(
+        {
+          name: "missing cwd",
+          command: "printf unreachable",
+          cwd: ${JSON.stringify(cwd)},
+          target: { kind: "local" },
+        },
+        { root: ${JSON.stringify(root)} },
+      )
+      const result = await ComputeJobs.wait(job.id, { root: ${JSON.stringify(root)}, timeout: 5_000 })
+      console.log(JSON.stringify(result))
+    `
+    const proc = Bun.spawn([process.execPath, "-e", script], {
+      cwd: cli,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+
+    expect(code, stderr).toBe(0)
+    const job = ComputeJobs.Job.parse(JSON.parse(stdout.trim()))
+    expect(job.status).toBe("failed")
+    expect(job.exit_code).toBeNull()
+    expect(job.error).toMatch(/ENOENT|no such file or directory/i)
+  })
+
   test("runs a real local job, persists status, and streams its log", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")

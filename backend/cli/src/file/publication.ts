@@ -3,6 +3,7 @@ import path from "node:path"
 import { marked, Renderer } from "marked"
 import z from "zod"
 import { OpenScience } from "../openscience"
+import { Filesystem } from "../util/filesystem"
 import { escapeHtml } from "../util/html"
 import { PublicationReview } from "./review"
 
@@ -75,9 +76,17 @@ export namespace PublicationFile {
     if (![".md", ".markdown"].includes(path.extname(source).toLowerCase())) {
       throw new Error("Publication export currently requires a Markdown report")
     }
+    if (!(await Filesystem.containsCanonical(root, source))) {
+      throw new Error("Publication path escapes the project directory")
+    }
     if (!(await Bun.file(source).exists())) throw new Error(`Report not found: ${parsed.path}`)
+    const snapshot = await Bun.file(source).arrayBuffer()
+    const markdown = new TextDecoder().decode(snapshot)
+    const artifactHash = await hash(snapshot)
     const review =
-      parsed.readiness === "reviewed" ? await PublicationReview.assertReady(parsed.path, parsed.review_id!) : undefined
+      parsed.readiness === "reviewed"
+        ? await PublicationReview.assertReady(parsed.path, parsed.review_id!, artifactHash)
+        : undefined
     const support = await capabilities()
     if (!support.formats[parsed.format]) {
       throw new Error(
@@ -117,7 +126,6 @@ export namespace PublicationFile {
         const hint = title ? ` title="${escapeHtml(title)}"` : ""
         return `<img src="${escapeHtml(target)}" alt="${escapeHtml(text)}"${hint}>`
       }
-      const markdown = await Bun.file(source).text()
       const body = await marked.parse(markdown, { gfm: true, renderer })
       const base = `${path.relative(folder, path.dirname(source)).split(path.sep).join("/") || "."}/`
       const title = path.basename(source, path.extname(source))
@@ -170,9 +178,11 @@ ${body}
         ...(review ? { review_id: review.id } : {}),
       })
     }
+    const snapshotFile = path.join(folder, `.openscience-publication-${nonce}.md`)
+    await Bun.write(snapshotFile, snapshot)
     const args = [
       "pandoc",
-      source,
+      snapshotFile,
       "--standalone",
       `--resource-path=${path.dirname(source)}${path.delimiter}${root}`,
       "--output",
@@ -190,7 +200,7 @@ ${body}
       proc.exited,
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
-    ])
+    ]).finally(() => fs.rm(snapshotFile, { force: true }))
     if (code !== 0) {
       await fs.rm(target, { force: true })
       throw new Error(stderr.trim() || stdout.trim() || `Pandoc exited with code ${code}`)
@@ -223,5 +233,10 @@ ${body}
     if (!image && scheme === "mailto") return value
     if (image && scheme === "data" && /^data:image\//i.test(value)) return value
     return undefined
+  }
+
+  async function hash(value: ArrayBuffer) {
+    const digest = await crypto.subtle.digest("SHA-256", value)
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
   }
 }

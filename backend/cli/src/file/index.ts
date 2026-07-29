@@ -23,6 +23,7 @@ import { PublicationReview } from "./review"
 
 export namespace File {
   const log = Log.create({ service: "file" })
+  const preview = 8 * 1024 * 1024
 
   export const Info = z
     .object({
@@ -329,10 +330,18 @@ export namespace File {
       return { type: "text", content, mimeType, encoding: "base64", size: bunFile.size }
     }
 
-    // Return the file content verbatim — callers like the web editor write
-    // it back, so trimming here would silently strip leading/trailing
-    // whitespace and the trailing newline on the first save.
-    const content = await bunFile.text().catch(() => "")
+    const truncated = bunFile.size > preview
+    // Keep scientific/text previews bounded. The UI treats this response as
+    // read-only, so a partial preview can never overwrite the source file.
+    const content = await (truncated ? bunFile.slice(0, preview) : bunFile).text().catch(() => "")
+    if (truncated) {
+      return {
+        type: "text",
+        content,
+        size: bunFile.size,
+        truncated: true,
+      }
+    }
 
     if (project.vcs === "git") {
       let diff = await $`git diff ${file}`.cwd(Instance.directory).quiet().nothrow().text()

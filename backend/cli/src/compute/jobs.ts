@@ -572,6 +572,10 @@ export namespace ComputeJobs {
       windowsHide: true,
       stdio: ["ignore", output.fd, output.fd],
     })
+    const result = new Promise<{ code: number | null; error?: string }>((resolve) => {
+      proc.once("error", (error) => resolve({ code: null, error: error.message }))
+      proc.once("exit", (code) => resolve({ code }))
+    })
     await output.close()
     const current = await get(job.id, { root })
     if (current?.status === "cancelled") {
@@ -587,10 +591,7 @@ export namespace ComputeJobs {
       started_at: new Date().toISOString(),
       pid: proc.pid,
     })
-    const result = await new Promise<{ code: number | null; error?: string }>((resolve) => {
-      proc.once("error", (error) => resolve({ code: null, error: error.message }))
-      proc.once("exit", (code) => resolve({ code }))
-    })
+    const completed = await result
     const final = await get(job.id, { root })
     if (final?.status === "cancelled") {
       active.delete(keyOf(root, job.id))
@@ -604,10 +605,10 @@ export namespace ComputeJobs {
             capture_error: error instanceof Error ? error.message : String(error),
           }))
     await patch(root, job.id, {
-      status: result.code === 0 ? "succeeded" : "failed",
+      status: completed.code === 0 ? "succeeded" : "failed",
       completed_at: new Date().toISOString(),
-      exit_code: result.code,
-      error: result.error,
+      exit_code: completed.code,
+      error: completed.error,
       ...captureResult,
     }).finally(() => active.delete(keyOf(root, job.id)))
   }

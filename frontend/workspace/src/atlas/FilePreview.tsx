@@ -170,6 +170,7 @@ export function FileView(props: {
 
   const data = () => file()
   const isBinary = () => data()?.encoding === "base64"
+  const truncated = () => data()?.truncated === true
   const mime = () => data()?.mimeType ?? ""
   const b64 = () => data()?.content ?? ""
   const dataUrl = () => `data:${mime() || "application/octet-stream"};base64,${b64()}`
@@ -242,7 +243,7 @@ export function FileView(props: {
   })
 
   const save = async () => {
-    if (saving() || isBinary() || !dirty()) return
+    if (saving() || isBinary() || truncated() || !dirty()) return
     setSaving(true)
     try {
       // The generated SDK has no file.write; hit the real PUT /file/content
@@ -382,7 +383,7 @@ export function FileView(props: {
           </button>
         </Show>
 
-        <Show when={toggleable()}>
+        <Show when={toggleable() && !truncated()}>
           <button
             type="button"
             onClick={() => setShowSource((v) => !v)}
@@ -500,6 +501,35 @@ export function FileView(props: {
             }}
           >
             <Switch>
+              <Match when={truncated()}>
+                <div
+                  style={{
+                    padding: "16px 18px 28px",
+                    "font-family": FONT_CODE,
+                    "font-size": "12px",
+                    "line-height": 1.65,
+                    color: "var(--color-text)",
+                  }}
+                >
+                  <div
+                    role="status"
+                    style={{
+                      padding: "10px 12px",
+                      "margin-bottom": "14px",
+                      border: "1px solid var(--color-border)",
+                      "border-radius": "6px",
+                      background: "var(--color-bg)",
+                      "font-family": FONT_SANS,
+                      color: "var(--color-text-muted)",
+                      "white-space": "normal",
+                    }}
+                  >
+                    Preview limited to 8 MB of {formatBytes(data()?.size ?? 0)}. Download the file or use a compute tool
+                    for the complete dataset.
+                  </div>
+                  <pre style={{ margin: 0, "white-space": "pre-wrap", "overflow-wrap": "anywhere" }}>{draft()}</pre>
+                </div>
+              </Match>
               {/* markdown */}
               <Match when={kind() === "markdown" && !showSource()}>
                 <ManuscriptWorkbench
@@ -733,6 +763,13 @@ function langFor(k: Kind, x: string): string {
   if (k === "notebook") return "json"
   if (k === "table") return x === "jsonl" ? "json" : x
   return LANG[x] ?? "text"
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
 // Wrap raw file text in a fenced code block so the shared Markdown renderer

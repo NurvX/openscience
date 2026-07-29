@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { expect, test } from "./fixtures"
+import { createSdk, promptSelector, sessionPath } from "./utils"
 
 test("runs a reproducible local job and captures outputs from the right pane", async ({ page, gotoSession }) => {
   const directory = mkdtempSync(path.join(tmpdir(), "openscience-compute-e2e-"))
@@ -39,5 +40,51 @@ test("runs a reproducible local job and captures outputs from the right pane", a
     await expect(pane.getByRole("button", { name: "export manifest" })).toBeVisible()
   } finally {
     rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("defaults a local compute job to the active research project", async ({ page }) => {
+  const first = mkdtempSync(path.join(tmpdir(), "openscience-compute-first-"))
+  const project = mkdtempSync(path.join(tmpdir(), "openscience-compute-project-"))
+  const firstSdk = createSdk(first)
+  const projectSdk = createSdk(project)
+  const firstSession = await firstSdk.session.create({ title: "First compute project" }).then((result) => result.data)
+  const projectSession = await projectSdk.session.create({ title: "Current compute project" }).then((result) => result.data)
+  if (!firstSession?.id || !projectSession?.id) throw new Error("Session create did not return an id")
+  try {
+    await page.goto(sessionPath(first, firstSession.id))
+    await expect(page.locator(promptSelector)).toBeVisible()
+
+    await page
+      .getByRole("tab", { name: "Compute", exact: true })
+      .or(page.getByRole("button", { name: "Compute", exact: true }))
+      .first()
+      .click()
+    const pane = page.locator(".session-right-pane")
+    await pane.getByTitle("new job").click()
+    await page.evaluate((url) => {
+      window.history.pushState({}, "", url)
+      window.dispatchEvent(new PopStateEvent("popstate"))
+    }, sessionPath(project, projectSession.id))
+    await expect(page.locator(promptSelector)).toBeVisible()
+    await page
+      .getByRole("tab", { name: "Compute", exact: true })
+      .or(page.getByRole("button", { name: "Compute", exact: true }))
+      .first()
+      .click()
+    if (!(await pane.getByLabel("Job name").isVisible())) await pane.getByTitle("new job").click()
+
+    await pane.getByLabel("Job name").fill("Project cwd smoke")
+    await pane.getByRole("textbox", { name: "Command", exact: true }).fill("pwd")
+    await pane.getByRole("button", { name: "run job" }).click()
+
+    await expect(pane.getByText("Project cwd smoke", { exact: true }).first()).toBeVisible()
+    await expect(pane.locator("pre")).toContainText(project)
+    await expect(pane.getByText(`cwd · ${project}`, { exact: true })).toBeVisible()
+  } finally {
+    await firstSdk.session.delete({ sessionID: firstSession.id }).catch(() => undefined)
+    await projectSdk.session.delete({ sessionID: projectSession.id }).catch(() => undefined)
+    rmSync(first, { recursive: true, force: true })
+    rmSync(project, { recursive: true, force: true })
   }
 })
