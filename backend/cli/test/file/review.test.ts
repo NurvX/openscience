@@ -132,10 +132,13 @@ describe("PublicationReview", () => {
         await Bun.write(path.join(directory, "README.md"), "# Ready fixture\n")
         await Bun.write(path.join(directory, "uv.lock"), "version = 1\n")
         await Bun.write(path.join(directory, "pyproject.toml"), '[project]\nname = "ready-fixture"\n')
-        await Bun.write(path.join(directory, "references.bib"), "@article{known2024, title={Known result}}\n")
-        await Bun.write(path.join(directory, "figures", "response.svg"), "<svg></svg>")
         await Bun.write(
-          path.join(directory, "report.md"),
+          path.join(directory, "manuscript", "references.bib"),
+          "@article{known2024, title={Known result}}\n",
+        )
+        await Bun.write(path.join(directory, "manuscript", "figures", "response.svg"), "<svg></svg>")
+        await Bun.write(
+          path.join(directory, "manuscript", "report.md"),
           [
             "---",
             "bibliography: references.bib",
@@ -159,19 +162,20 @@ describe("PublicationReview", () => {
       kind: "artifact",
       label: "Response figure",
       artifactType: "figure",
-      path: "figures/response.svg",
+      path: "manuscript/figures/response.svg",
       meta: { directory: tmp.path },
     } as Parameters<typeof Provenance.record>[0])
     await Instance.provide({
-      directory: tmp.path,
+      directory: path.join(tmp.path, "manuscript"),
       fn: async () => {
         const first = await PublicationReview.run({ path: "report.md", actor: "Reviewer" })
         expect(first.findings.filter((finding) => finding.severity === "blocking")).toEqual([])
         expect(first.status).not.toBe("blocked")
+        expect(first.path).toBe("manuscript/report.md")
 
         await Bun.write(
-          path.join(tmp.path, "report.md"),
-          `${await Bun.file(path.join(tmp.path, "report.md")).text()}\n`,
+          path.join(tmp.path, "manuscript", "report.md"),
+          `${await Bun.file(path.join(tmp.path, "manuscript", "report.md")).text()}\n`,
         )
         const second = await PublicationReview.run({ path: "report.md", actor: "Reviewer" })
         expect(second.id).not.toBe(first.id)

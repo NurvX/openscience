@@ -127,9 +127,9 @@ export namespace PublicationReview {
     const [text, artifactHash, graph, provenance, audit] = await Promise.all([
       Bun.file(source.absolute).text(),
       digest(source.absolute),
-      Provenance.project(Instance.directory),
-      ArtifactFile.provenance(Instance.directory, source.relative),
-      ArtifactFile.audit(Instance.directory),
+      Provenance.project(Instance.worktree),
+      ArtifactFile.provenance(Instance.worktree, source.relative),
+      ArtifactFile.audit(Instance.worktree),
     ])
     const findings = [
       ...(await citations(text, source)),
@@ -292,7 +292,7 @@ export namespace PublicationReview {
             title: `Bibliography key @${key} is unresolved`,
             detail: "The manuscript cites a key that is absent from its local bibliography files.",
             evidence: bib.length
-              ? bib.map((file) => path.relative(Instance.directory, file).replaceAll("\\", "/"))
+              ? bib.map((file) => path.relative(Instance.worktree, file).replaceAll("\\", "/"))
               : ["No local bibliography file was found."],
             location: { path: source.relative, line },
           }),
@@ -372,7 +372,7 @@ export namespace PublicationReview {
         const value = (match[2] ?? match[3]!).trim()
         if (/^(?:https?:|data:)/i.test(value)) continue
         const absolute = path.resolve(path.dirname(source.absolute), decodeURIComponent(value.split(/[?#]/)[0]!))
-        const relative = path.relative(Instance.directory, absolute).replaceAll("\\", "/")
+        const relative = path.relative(Instance.worktree, absolute).replaceAll("\\", "/")
         const inside = await Instance.containsCanonicalPath(absolute)
         const exists = inside && (await Bun.file(absolute).exists())
         if (!exists) {
@@ -404,10 +404,9 @@ export namespace PublicationReview {
         }
         const recorded = nodes.some((node) => {
           if (node.kind !== "artifact" || !("path" in node) || !node.path) return false
-          const nodePath = path.isAbsolute(node.path)
-            ? path.relative(Instance.directory, node.path).replaceAll("\\", "/")
-            : node.path.replaceAll("\\", "/").replace(/^\.\//, "")
-          return nodePath === relative
+          const owner = typeof node.meta?.directory === "string" ? node.meta.directory : Instance.worktree
+          const nodePath = path.isAbsolute(node.path) ? node.path : path.resolve(owner, node.path)
+          return path.resolve(nodePath) === path.resolve(absolute)
         })
         if (recorded) continue
         output.push(
@@ -504,6 +503,9 @@ export namespace PublicationReview {
       path.join(Instance.directory, "references.bib"),
       path.join(Instance.directory, "bibliography.bib"),
       path.join(Instance.directory, "refs.bib"),
+      path.join(Instance.worktree, "references.bib"),
+      path.join(Instance.worktree, "bibliography.bib"),
+      path.join(Instance.worktree, "refs.bib"),
     ]
     const unique = [...new Set(candidates)]
     const safe = await Promise.all(
@@ -521,14 +523,17 @@ export namespace PublicationReview {
     }
     return {
       absolute,
-      relative: path.relative(Instance.directory, absolute).replaceAll("\\", "/"),
+      relative: path.relative(Instance.worktree, absolute).replaceAll("\\", "/"),
     }
   }
 
   async function assertCurrent(report: Report) {
-    const source = await target(report.path)
-    if (!(await Bun.file(source.absolute).exists())) throw new Error("The reviewed manuscript no longer exists")
-    if ((await digest(source.absolute)) !== report.artifactHash) {
+    const absolute = path.resolve(Instance.worktree, report.path)
+    if (!(await Instance.containsCanonicalPath(absolute))) {
+      throw new Error("The reviewed manuscript is outside the current project")
+    }
+    if (!(await Bun.file(absolute).exists())) throw new Error("The reviewed manuscript no longer exists")
+    if ((await digest(absolute)) !== report.artifactHash) {
       throw new Error("The manuscript changed after this publication review was generated")
     }
   }
