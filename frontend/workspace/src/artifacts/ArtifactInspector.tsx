@@ -21,9 +21,12 @@ import type { ArtifactContext } from "./context"
 import {
   inspectorTabs,
   normalizeInspectorData,
+  normalizePublicationReview,
   type InspectorData,
   type InspectorState,
   type InspectorTab,
+  type PublicationReviewFinding,
+  type PublicationReviewState,
 } from "./inspector"
 
 const labels: Record<InspectorTab, string> = {
@@ -106,13 +109,14 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
         if (!response?.ok) return
         return response.json().catch(() => undefined)
       }
-      const [file, provenance, audit, notes] = await Promise.all([
+      const [file, provenance, audit, notes, review] = await Promise.all([
         read("/file/content", current.path),
         read("/file/provenance", current.path),
         read("/file/reproducibility"),
         read("/file/annotations", current.path),
+        read("/file/reviews", current.path),
       ])
-      return { id: current.id, file, provenance, audit, notes }
+      return { id: current.id, file, provenance, audit, notes, review }
     },
   )
   const model = createMemo<InspectorData>(() => {
@@ -120,6 +124,7 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
     const input = value?.id === props.context.id ? value : {}
     return normalizeInspectorData(props.context, input)
   })
+  const review = createMemo(() => normalizePublicationReview(props.context.format, records()?.review))
 
   createEffect(() => {
     props.context.id
@@ -176,6 +181,38 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
     })
   const updateAnnotation = (id: string, body: Record<string, unknown>) =>
     mutateAnnotation(`/file/annotations/${id}`, "PATCH", body)
+  const mutateReview = async (route: string, method: "POST" | "PATCH", body: Record<string, unknown>) => {
+    const response = await request()(url(route), {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => undefined)
+    if (!response?.ok) {
+      const payload = (await response?.json().catch(() => undefined)) as { error?: unknown } | undefined
+      const detail =
+        typeof payload?.error === "string" ? payload.error : response ? `${response.status}` : "request failed"
+      toast.error("publication review failed", detail)
+      return false
+    }
+    await api.refetch()
+    return true
+  }
+  const actor = () => model().provenance?.commit?.author ?? "Local user"
+  const runReview = () =>
+    mutateReview("/file/reviews", "POST", {
+      path: props.context.path,
+      actor: actor(),
+    })
+  const resolveFinding = (report: string, finding: string, status: "resolved" | "overridden", reason: string) =>
+    mutateReview(`/file/reviews/${report}/findings/${finding}`, "PATCH", {
+      status,
+      actor: actor(),
+      reason,
+    })
+  const finalizeReview = (report: string) =>
+    mutateReview(`/file/reviews/${report}/finalize`, "POST", {
+      actor: actor(),
+    })
 
   const move = (event: KeyboardEvent, current: InspectorTab) => {
     const index = inspectorTabs.indexOf(current)
@@ -341,7 +378,15 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
               <Environment data={model()} />
             </Match>
             <Match when={tab() === "review"}>
-              <Review annotations={annotations(records()?.notes)} onAdd={addAnnotation} onUpdate={updateAnnotation} />
+              <Review
+                state={review()}
+                annotations={annotations(records()?.notes)}
+                onRun={runReview}
+                onFinding={resolveFinding}
+                onFinalize={finalizeReview}
+                onAdd={addAnnotation}
+                onUpdate={updateAnnotation}
+              />
             </Match>
             <Match when={tab() === "history"}>
               <History data={model()} />
@@ -354,13 +399,30 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
 }
 
 function Review(props: {
+  state: PublicationReviewState
   annotations: Annotation[]
+  onRun(): Promise<boolean>
+  onFinding(report: string, finding: string, status: "resolved" | "overridden", reason: string): Promise<boolean>
+  onFinalize(report: string): Promise<boolean>
   onAdd(body: string): Promise<boolean>
   onUpdate(id: string, body: Record<string, unknown>): Promise<boolean>
 }): JSX.Element {
   const [body, setBody] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const open = () => props.annotations.filter((item) => item.status === "open").length
+  const run = async () => {
+    if (busy()) return
+    setBusy(true)
+    await props.onRun()
+    setBusy(false)
+  }
+  const finalize = async () => {
+    const report = props.state.report
+    if (!report || busy()) return
+    setBusy(true)
+    await props.onFinalize(report.id)
+    setBusy(false)
+  }
   const add = async () => {
     const value = body().trim()
     if (!value || busy()) return
@@ -371,9 +433,128 @@ function Review(props: {
   }
   return (
     <div style={{ display: "grid", gap: "12px" }}>
+      <section
+        data-component="publication-review"
+        data-review-state={props.state.kind}
+        style={{
+          ...card(),
+          "border-left": `3px solid ${reviewColor(props.state.kind)}`,
+          gap: "10px",
+        }}
+      >
+        <div style={{ display: "flex", "align-items": "flex-start", "justify-content": "space-between", gap: "10px" }}>
+          <div style={{ display: "grid", gap: "3px" }}>
+            <span
+              style={{
+                "font-family": FONT_MONO,
+                "font-size": "9px",
+                "text-transform": "uppercase",
+                "letter-spacing": "0.08em",
+                color: reviewColor(props.state.kind),
+              }}
+            >
+              {props.state.kind.replace("-", " ")}
+            </span>
+            <strong style={{ "font-family": FONT_SANS, "font-size": "13px", color: "var(--color-text)" }}>
+              {props.state.title}
+            </strong>
+            <p style={copyStyle()}>{props.state.detail}</p>
+          </div>
+          <Show when={props.state.kind !== "not-applicable"}>
+            <button
+              type="button"
+              disabled={busy()}
+              style={{ ...actionButton(true), "white-space": "nowrap" }}
+              onClick={() => void run()}
+            >
+              {busy() ? "Checking…" : props.state.report ? "Run again" : "Run checks"}
+            </button>
+          </Show>
+        </div>
+        <Show when={props.state.report}>
+          {(report) => (
+            <>
+              <div
+                style={{
+                  display: "grid",
+                  "grid-template-columns": "repeat(4, minmax(0, 1fr))",
+                  gap: "6px",
+                }}
+              >
+                <ReviewMetric label="blocking" value={report().summary.blocking} tone="blocking" />
+                <ReviewMetric label="major" value={report().summary.major} tone="major" />
+                <ReviewMetric label="minor" value={report().summary.minor} tone="minor" />
+                <ReviewMetric label="closed" value={report().summary.resolved + report().summary.overridden} />
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  "align-items": "center",
+                  "justify-content": "space-between",
+                  gap: "8px",
+                  "flex-wrap": "wrap",
+                }}
+              >
+                <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+                  v{report().version} · sha256 {report().artifactHash.slice(0, 12)}
+                </span>
+                <Show
+                  when={report().finalized}
+                  fallback={
+                    <button
+                      type="button"
+                      disabled={
+                        busy() ||
+                        report().stale ||
+                        report().findings.some(
+                          (finding) => finding.severity === "blocking" && finding.status === "open",
+                        )
+                      }
+                      style={{
+                        ...actionButton(true),
+                        opacity:
+                          busy() ||
+                          report().stale ||
+                          report().findings.some(
+                            (finding) => finding.severity === "blocking" && finding.status === "open",
+                          )
+                            ? 0.45
+                            : 1,
+                      }}
+                      onClick={() => void finalize()}
+                    >
+                      Finalize reviewed bytes
+                    </button>
+                  }
+                >
+                  {(value) => (
+                    <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-success)" }}>
+                      Finalized by {value().actor} · {new Date(value().at).toLocaleString()}
+                    </span>
+                  )}
+                </Show>
+              </div>
+              <Show
+                when={report().findings.length}
+                fallback={
+                  <p style={copyStyle()}>No deterministic findings were recorded for these manuscript bytes.</p>
+                }
+              >
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <For each={report().findings}>
+                    {(finding) => (
+                      <ReviewFindingCard report={report().id} finding={finding} onFinding={props.onFinding} />
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </>
+          )}
+        </Show>
+      </section>
       <section style={card()}>
         <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", gap: "8px" }}>
-          <Heading icon="review">Review threads</Heading>
+          <Heading icon="review">Manual review threads</Heading>
           <span
             style={{
               "font-family": FONT_MONO,
@@ -428,6 +609,167 @@ function Review(props: {
         <For each={props.annotations}>{(item) => <AnnotationThread annotation={item} onUpdate={props.onUpdate} />}</For>
       </Show>
     </div>
+  )
+}
+
+function ReviewMetric(props: {
+  label: string
+  value: number
+  tone?: PublicationReviewFinding["severity"]
+}): JSX.Element {
+  return (
+    <div
+      style={{
+        padding: "7px 8px",
+        display: "grid",
+        gap: "2px",
+        border: "1px solid var(--color-border)",
+        "border-radius": "5px",
+        background: "var(--color-surface)",
+      }}
+    >
+      <strong
+        style={{
+          "font-family": FONT_MONO,
+          "font-size": "13px",
+          color: props.tone ? findingColor(props.tone) : "var(--color-text)",
+        }}
+      >
+        {props.value}
+      </strong>
+      <span
+        style={{
+          "font-family": FONT_MONO,
+          "font-size": "8px",
+          "text-transform": "uppercase",
+          color: "var(--color-text-faint)",
+        }}
+      >
+        {props.label}
+      </span>
+    </div>
+  )
+}
+
+function ReviewFindingCard(props: {
+  report: string
+  finding: PublicationReviewFinding
+  onFinding(report: string, finding: string, status: "resolved" | "overridden", reason: string): Promise<boolean>
+}): JSX.Element {
+  const [mode, setMode] = createSignal<"resolved" | "overridden">()
+  const [reason, setReason] = createSignal("")
+  const [busy, setBusy] = createSignal(false)
+  const submit = async () => {
+    const status = mode()
+    const note = reason().trim()
+    if (!status || !note || busy()) return
+    setBusy(true)
+    const ok = await props.onFinding(props.report, props.finding.id, status, note)
+    setBusy(false)
+    if (!ok) return
+    setMode()
+    setReason("")
+  }
+  return (
+    <article
+      data-component="publication-finding"
+      data-finding-id={props.finding.id}
+      style={{
+        padding: "10px",
+        display: "grid",
+        gap: "7px",
+        border: "1px solid var(--color-border)",
+        "border-left": `3px solid ${findingColor(props.finding.severity)}`,
+        "border-radius": "5px",
+        background: "var(--color-bg)",
+      }}
+    >
+      <div style={{ display: "flex", "align-items": "center", gap: "6px", "flex-wrap": "wrap" }}>
+        <span style={findingBadge(props.finding.severity)}>{props.finding.severity}</span>
+        <span style={findingBadge()}>{props.finding.check}</span>
+        <span style={{ ...findingBadge(), "margin-left": "auto" }}>{props.finding.status}</span>
+      </div>
+      <strong style={{ "font-family": FONT_SANS, "font-size": "11px", color: "var(--color-text)" }}>
+        {props.finding.title}
+      </strong>
+      <p style={copyStyle()}>{props.finding.detail}</p>
+      <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+        {props.finding.location.path}
+        {props.finding.location.line ? `:${props.finding.location.line}` : ""}
+      </span>
+      <Show when={props.finding.evidence.length}>
+        <ul style={{ margin: 0, padding: "0 0 0 16px", display: "grid", gap: "3px" }}>
+          <For each={props.finding.evidence}>
+            {(evidence) => (
+              <li style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-muted)" }}>
+                {evidence}
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+      <Show when={props.finding.resolution}>
+        {(resolution) => (
+          <p style={{ ...copyStyle(), color: "var(--color-text-muted)" }}>
+            {resolution().kind} by {resolution().actor}: {resolution().reason}
+          </p>
+        )}
+      </Show>
+      <Show when={props.finding.status === "open"}>
+        <div style={{ display: "flex", gap: "6px" }}>
+          <button type="button" disabled={busy()} style={quietButton()} onClick={() => setMode("resolved")}>
+            Resolve
+          </button>
+          <button type="button" disabled={busy()} style={quietButton()} onClick={() => setMode("overridden")}>
+            Override
+          </button>
+        </div>
+        <Show when={mode()}>
+          {(status) => (
+            <div style={{ display: "grid", gap: "6px" }}>
+              <textarea
+                aria-label={`${status() === "resolved" ? "Resolution" : "Override"} reason for ${props.finding.title}`}
+                value={reason()}
+                rows={2}
+                placeholder={
+                  status() === "resolved"
+                    ? "What evidence or edit resolves this finding?"
+                    : "Why is it acceptable to publish despite this finding?"
+                }
+                onInput={(event) => setReason(event.currentTarget.value)}
+                style={{
+                  width: "100%",
+                  resize: "vertical",
+                  "box-sizing": "border-box",
+                  padding: "8px",
+                  border: "1px solid var(--color-border)",
+                  "border-radius": "5px",
+                  outline: "none",
+                  background: "var(--color-bg)",
+                  color: "var(--color-text)",
+                  "font-family": FONT_SANS,
+                  "font-size": "10px",
+                  "line-height": 1.5,
+                }}
+              />
+              <div style={{ display: "flex", gap: "6px" }}>
+                <button
+                  type="button"
+                  disabled={!reason().trim() || busy()}
+                  style={{ ...actionButton(true), opacity: !reason().trim() || busy() ? 0.45 : 1 }}
+                  onClick={() => void submit()}
+                >
+                  {busy() ? "Saving…" : `Confirm ${status()}`}
+                </button>
+                <button type="button" disabled={busy()} style={quietButton()} onClick={() => setMode()}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </Show>
+      </Show>
+    </article>
   )
 }
 
@@ -910,6 +1252,35 @@ function quietButton(): JSX.CSSProperties {
     "font-family": FONT_SANS,
     "font-size": "11px",
     color: "var(--color-text-muted)",
+  }
+}
+
+function reviewColor(kind: PublicationReviewState["kind"]): string {
+  if (kind === "blocked" || kind === "stale") return "var(--color-danger, var(--color-error))"
+  if (kind === "warnings") return "var(--color-warning)"
+  if (kind === "ready" || kind === "finalized") return "var(--color-success)"
+  return "var(--color-text-faint)"
+}
+
+function findingColor(severity: PublicationReviewFinding["severity"]): string {
+  if (severity === "blocking") return "var(--color-danger, var(--color-error))"
+  if (severity === "major") return "var(--color-warning)"
+  if (severity === "minor") return "var(--color-text-muted)"
+  return "var(--color-text-faint)"
+}
+
+function findingBadge(severity?: PublicationReviewFinding["severity"]): JSX.CSSProperties {
+  return {
+    padding: "3px 6px",
+    "border-radius": "999px",
+    border: "1px solid var(--color-border)",
+    background: "var(--color-bg-subtle)",
+    color: severity ? findingColor(severity) : "var(--color-text-muted)",
+    "font-family": FONT_MONO,
+    "font-size": "8px",
+    "font-weight": severity ? 650 : 500,
+    "text-transform": "uppercase",
+    "letter-spacing": "0.04em",
   }
 }
 

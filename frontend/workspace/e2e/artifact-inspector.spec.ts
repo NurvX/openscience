@@ -118,3 +118,47 @@ test("artifact review threads persist and can be resolved", async ({ page, direc
   ).toBeVisible()
   await expect(inspector.getByText("0 open", { exact: true })).toBeVisible()
 })
+
+test("publication review blocks, audits overrides, finalizes, and persists exact manuscript bytes", async ({
+  page,
+  directory,
+  gotoSession,
+}) => {
+  await gotoSession()
+  await openFile(page, directory, "frontend/workspace/e2e/science/review-report.md")
+
+  const inspector = page.locator('[data-component="artifact-inspector"]')
+  await inspector.getByRole("tab", { name: "Review", exact: true }).click()
+  const review = inspector.locator('[data-component="publication-review"]')
+  await expect(review).toHaveAttribute("data-review-state", "not-run")
+  await review.getByRole("button", { name: "Run checks", exact: true }).click()
+  await expect(review).toHaveAttribute("data-review-state", "blocked", { timeout: 30_000 })
+  await expect(review.getByText("Publication is blocked", { exact: true })).toBeVisible()
+  await expect(review.locator('[data-component="publication-finding"]')).not.toHaveCount(0)
+
+  const blockers = () =>
+    review
+      .locator('[data-component="publication-finding"]')
+      .filter({ has: page.getByText("blocking", { exact: true }) })
+      .filter({ has: page.getByRole("button", { name: "Override", exact: true }) })
+  while ((await blockers().count()) > 0) {
+    const before = await blockers().count()
+    const finding = blockers().first()
+    await finding.getByRole("button", { name: "Override", exact: true }).click()
+    await finding.getByLabel(/Override reason for/).fill("Accepted in this preview with an explicit audit record.")
+    await finding.getByRole("button", { name: "Confirm overridden", exact: true }).click()
+    await expect(blockers()).toHaveCount(before - 1)
+  }
+
+  const finalize = review.getByRole("button", { name: "Finalize reviewed bytes", exact: true })
+  await expect(finalize).toBeEnabled()
+  await finalize.click()
+  await expect(review).toHaveAttribute("data-review-state", "finalized")
+  await expect(review.getByText(/Finalized by/)).toBeVisible()
+
+  await openFile(page, directory, "frontend/workspace/e2e/science/water.xyz")
+  await openFile(page, directory, "frontend/workspace/e2e/science/review-report.md")
+  await inspector.getByRole("tab", { name: "Review", exact: true }).click()
+  await expect(review).toHaveAttribute("data-review-state", "finalized")
+  await expect(review.getByText(/sha256 [a-f0-9]{12}/)).toBeVisible()
+})

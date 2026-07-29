@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createArtifactContext } from "./context"
-import { inspectorTabs, normalizeInspectorData } from "./inspector"
+import { inspectorTabs, normalizeInspectorData, normalizePublicationReview } from "./inspector"
 
 const context = createArtifactContext({
   directory: "/work/project",
@@ -70,5 +70,68 @@ describe("artifact inspector model", () => {
 
   test("publishes the complete stable inspector tab order", () => {
     expect(inspectorTabs).toEqual(["details", "code", "run", "messages", "environment", "review", "history"])
+  })
+
+  test("normalizes publication readiness without inventing a review", () => {
+    const skipped = normalizePublicationReview("pdb", undefined)
+    expect(skipped.kind).toBe("not-applicable")
+    expect(skipped.report).toBeUndefined()
+    const missing = normalizePublicationReview("md", { status: "ready" })
+    expect(missing.kind).toBe("not-run")
+    expect(missing.report).toBeUndefined()
+  })
+
+  test("distinguishes blocked, stale, and finalized manuscript states", () => {
+    const report = {
+      format: "openscience.publication-review.v1",
+      id: "review_01",
+      path: "report.md",
+      artifactHash: "a".repeat(64),
+      version: 2,
+      status: "blocked",
+      stale: false,
+      summary: {
+        total: 2,
+        open: 1,
+        blocking: 1,
+        major: 1,
+        minor: 0,
+        info: 0,
+        resolved: 1,
+        overridden: 0,
+      },
+      findings: [
+        {
+          id: "finding_01",
+          check: "citation",
+          severity: "blocking",
+          status: "open",
+          title: "Citation is unresolved",
+          detail: "Add a bibliography entry.",
+          evidence: ["report.md:4"],
+          location: { path: "report.md", line: 4 },
+        },
+      ],
+      events: [{ version: 1, type: "generated", actor: "Reviewer", at: 1 }],
+      createdAt: 1,
+      updatedAt: 2,
+    }
+    expect(normalizePublicationReview("md", report)).toMatchObject({
+      kind: "blocked",
+      report: { id: "review_01" },
+    })
+    expect(normalizePublicationReview("md", { ...report, stale: true })).toMatchObject({
+      kind: "stale",
+    })
+    expect(
+      normalizePublicationReview("md", {
+        ...report,
+        status: "warnings",
+        finalized: { actor: "Aayam Bansal", at: 3, artifactHash: "a".repeat(64) },
+      }),
+    ).toMatchObject({
+      kind: "finalized",
+      report: { finalized: { actor: "Aayam Bansal" } },
+    })
   })
 })
