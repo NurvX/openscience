@@ -43,17 +43,33 @@ export namespace ArtifactAnnotation {
   })
   export type Message = z.infer<typeof Message>
 
+  export const Revision = z.object({
+    version: z.number().int().positive(),
+    event: z.enum(["created", "edited", "replied", "resolved", "reopened", "deleted"]),
+    actor: z.string(),
+    at: z.number(),
+    status: z.enum(["open", "resolved"]),
+    messages: Message.array(),
+    deletedAt: z.number().optional(),
+  })
+  export type Revision = z.infer<typeof Revision>
+
   export const Info = z.object({
     id: z.string(),
     projectID: z.string(),
     path: z.string(),
+    artifactHash: z.string().regex(/^[a-f0-9]{64}$/),
     anchor: Anchor,
     messages: Message.array(),
     status: z.enum(["open", "resolved"]),
+    version: z.number().int().positive(),
+    revisions: Revision.array(),
     createdAt: z.number(),
     updatedAt: z.number(),
+    deletedAt: z.number().optional(),
   })
   export type Info = z.infer<typeof Info>
+  const Legacy = Info.omit({ artifactHash: true, version: true, revisions: true, deletedAt: true })
 
   export const Create = z.object({
     path: z.string().trim().min(1).max(10_000),
@@ -66,10 +82,14 @@ export namespace ArtifactAnnotation {
   export const Update = z
     .object({
       status: z.enum(["open", "resolved"]).optional(),
+      body: z.string().trim().min(1).max(100_000).optional(),
       reply: z.string().trim().min(1).max(100_000).optional(),
       author: z.string().trim().min(1).max(200).optional(),
     })
-    .refine((value) => value.status !== undefined || value.reply !== undefined, "No annotation update supplied")
+    .refine(
+      (value) => value.status !== undefined || value.body !== undefined || value.reply !== undefined,
+      "No annotation update supplied",
+    )
   export type Update = z.infer<typeof Update>
 
   const prefix = () => ["artifact_annotation", Instance.project.id]
@@ -80,23 +100,84 @@ export namespace ArtifactAnnotation {
     if (!(await Instance.containsCanonicalPath(absolute))) {
       throw new Error(`Annotation target is outside the project: ${value}`)
     }
-    return path.relative(Instance.directory, absolute).replaceAll("\\", "/")
+    return {
+      absolute,
+      relative: path.relative(Instance.directory, absolute).replaceAll("\\", "/"),
+    }
+  }
+
+  async function digest(file: string) {
+    const hasher = new Bun.CryptoHasher("sha256")
+    const reader = Bun.file(file).stream().getReader()
+    const feed = async (): Promise<void> => {
+      const chunk = await reader.read()
+      if (chunk.done) return
+      hasher.update(chunk.value)
+      return feed()
+    }
+    await feed()
+    return hasher.digest("hex")
+  }
+
+  function hash(value: string) {
+    const hasher = new Bun.CryptoHasher("sha256")
+    hasher.update(value)
+    return hasher.digest("hex")
+  }
+
+  function revision(record: Info, event: Revision["event"], actor: string, at: number): Revision {
+    return {
+      version: record.version,
+      event,
+      actor,
+      at,
+      status: record.status,
+      messages: record.messages.map((message) => ({ ...message })),
+      ...(record.deletedAt ? { deletedAt: record.deletedAt } : {}),
+    }
+  }
+
+  async function read(id: string) {
+    const stored = await Storage.read<unknown>(key(id))
+    const current = Info.safeParse(stored)
+    if (current.success) return current.data
+    const legacy = Legacy.parse(stored)
+    const location = await target(legacy.path)
+    const artifactHash = (await Bun.file(location.absolute).exists())
+      ? await digest(location.absolute)
+      : hash(`missing:${legacy.path}`)
+    const record: Info = {
+      ...legacy,
+      artifactHash,
+      version: 1,
+      revisions: [],
+    }
+    record.revisions.push(revision(record, "created", record.messages[0]?.author ?? "You", record.createdAt))
+    await Storage.write(key(id), record)
+    return record
   }
 
   export async function list(filepath: string) {
-    const relative = await target(filepath)
+    const location = await target(filepath)
     const keys = await Storage.list(prefix())
-    const records = await Promise.all(keys.map((item) => Storage.read<Info>(item)))
-    return records.filter((item) => item.path === relative).toSorted((a, b) => a.createdAt - b.createdAt)
+    const records = await Promise.all(keys.map((item) => read(item.at(-1)!)))
+    return records
+      .filter((item) => item.path === location.relative && !item.deletedAt)
+      .toSorted((a, b) => a.createdAt - b.createdAt)
   }
 
   export async function create(input: Create) {
     const now = Date.now()
     const id = `ann_${ulid()}`
+    const location = await target(input.path)
+    if (!(await Bun.file(location.absolute).exists())) {
+      throw new Error(`Annotation target does not exist: ${input.path}`)
+    }
     const record: Info = {
       id,
       projectID: Instance.project.id,
-      path: await target(input.path),
+      path: location.relative,
+      artifactHash: await digest(location.absolute),
       anchor: input.anchor,
       messages: [
         {
@@ -107,30 +188,62 @@ export namespace ArtifactAnnotation {
         },
       ],
       status: "open",
+      version: 1,
+      revisions: [],
       createdAt: now,
       updatedAt: now,
     }
+    record.revisions.push(revision(record, "created", input.author ?? "You", now))
     await Storage.write(key(id), record)
     return record
   }
 
   export async function update(id: string, input: Update) {
+    await read(id)
     return Storage.update<Info>(key(id), (record) => {
+      if (record.deletedAt) throw new Error(`Annotation ${id} has been deleted`)
+      const now = Date.now()
+      const actor = input.author ?? "You"
+      const event: Revision["event"] = input.body
+        ? "edited"
+        : input.reply
+          ? "replied"
+          : input.status === "resolved"
+            ? "resolved"
+            : "reopened"
       if (input.status) record.status = input.status
+      if (input.body && record.messages[0]) {
+        record.messages[0].body = input.body
+        record.messages[0].author = actor
+      }
       if (input.reply) {
         record.messages.push({
           id: `msg_${ulid()}`,
           body: input.reply,
-          author: input.author ?? "You",
-          createdAt: Date.now(),
+          author: actor,
+          createdAt: now,
         })
       }
-      record.updatedAt = Date.now()
+      record.version += 1
+      record.updatedAt = now
+      record.revisions.push(revision(record, event, actor, now))
     })
   }
 
   export async function remove(id: string) {
-    await Storage.remove(key(id))
-    return { deleted: true as const }
+    await read(id)
+    const record = await Storage.update<Info>(key(id), (record) => {
+      if (record.deletedAt) return
+      const now = Date.now()
+      record.deletedAt = now
+      record.updatedAt = now
+      record.version += 1
+      record.revisions.push(revision(record, "deleted", "You", now))
+    })
+    return { deleted: true as const, version: record.version }
+  }
+
+  export async function history(id: string) {
+    return read(id)
   }
 }

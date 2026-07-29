@@ -91,13 +91,30 @@ test("artifact review threads persist and can be resolved", async ({ page, direc
   const thread = inspector.locator('[data-component="artifact-annotation"]').filter({ hasText: "Confirm the O–H" })
   await expect(thread).toBeVisible()
   await expect(inspector.getByText("1 open", { exact: true })).toBeVisible()
+  await expect(thread.getByText("v1", { exact: true })).toBeVisible()
+  await expect(thread.getByText("History · 1 revisions", { exact: true })).toBeVisible()
 
   await thread.getByRole("button", { name: "Resolve", exact: true }).click()
   await expect(thread.getByText("Resolved", { exact: true })).toBeVisible()
+  await expect(thread.getByText("v2", { exact: true })).toBeVisible()
+
+  await thread.getByRole("button", { name: "Edit", exact: true }).click()
+  await inspector.getByLabel(/Edit annotation/).fill("O–H bond length verified against the source structure.")
+  await inspector.getByRole("button", { name: "Save edit", exact: true }).click()
+  const updated = inspector
+    .locator('[data-component="artifact-annotation"]')
+    .filter({ hasText: "O–H bond length verified against the source structure." })
+  await expect(
+    updated.getByText("O–H bond length verified against the source structure.", { exact: true }),
+  ).toBeVisible()
+  await expect(updated.getByText("v3", { exact: true })).toBeVisible()
+  await expect(updated.getByText("History · 3 revisions", { exact: true })).toBeVisible()
 
   await openFile(page, directory, "frontend/workspace/e2e/science/alignment.fasta")
   await openFile(page, directory, "frontend/workspace/e2e/science/water.xyz")
   await inspector.getByRole("tab", { name: "Review", exact: true }).click()
-  await expect(inspector.getByText("Confirm the O–H bond length before publication.", { exact: true })).toBeVisible()
+  await expect(
+    inspector.getByText("O–H bond length verified against the source structure.", { exact: true }),
+  ).toBeVisible()
   await expect(inspector.getByText("0 open", { exact: true })).toBeVisible()
 })

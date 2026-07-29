@@ -345,7 +345,8 @@ export const FileRoutes = lazy(() =>
       "/file/annotations",
       describeRoute({
         summary: "Create an artifact annotation",
-        description: "Create a durable review thread anchored to an artifact, text range, notebook cell, molecule, or locus.",
+        description:
+          "Create a durable review thread anchored to an artifact, text range, notebook cell, molecule, or locus.",
         operationId: "file.annotations.create",
         responses: {
           200: {
@@ -356,6 +357,22 @@ export const FileRoutes = lazy(() =>
       }),
       validator("json", ArtifactAnnotation.Create),
       async (c) => c.json(await ArtifactAnnotation.create(c.req.valid("json"))),
+    )
+    .get(
+      "/file/annotations/:id/history",
+      describeRoute({
+        summary: "Read artifact annotation history",
+        description: "Read every immutable revision of an artifact review thread, including a recoverable tombstone.",
+        operationId: "file.annotations.history",
+        responses: {
+          200: {
+            description: "Versioned artifact annotation",
+            content: { "application/json": { schema: resolver(ArtifactAnnotation.Info) } },
+          },
+        },
+      }),
+      validator("param", z.object({ id: z.string().startsWith("ann_") })),
+      async (c) => c.json(await ArtifactAnnotation.history(c.req.valid("param").id)),
     )
     .patch(
       "/file/annotations/:id",
@@ -377,13 +394,17 @@ export const FileRoutes = lazy(() =>
     .delete(
       "/file/annotations/:id",
       describeRoute({
-        summary: "Delete an artifact annotation",
-        description: "Permanently remove an artifact review thread.",
+        summary: "Tombstone an artifact annotation",
+        description: "Hide an artifact review thread while retaining its recoverable revision history.",
         operationId: "file.annotations.delete",
         responses: {
           200: {
-            description: "Deleted annotation",
-            content: { "application/json": { schema: resolver(z.object({ deleted: z.literal(true) })) } },
+            description: "Tombstoned annotation",
+            content: {
+              "application/json": {
+                schema: resolver(z.object({ deleted: z.literal(true), version: z.number().int().positive() })),
+              },
+            },
           },
         },
       }),

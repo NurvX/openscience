@@ -46,6 +46,7 @@ interface AnnotationMessage {
 interface Annotation {
   id: string
   path: string
+  artifactHash: string
   anchor: {
     kind: "artifact" | "text" | "notebook" | "molecule" | "genome"
     label?: string
@@ -59,6 +60,14 @@ interface Annotation {
   }
   messages: AnnotationMessage[]
   status: "open" | "resolved"
+  version: number
+  revisions: Array<{
+    version: number
+    event: "created" | "edited" | "replied" | "resolved" | "reopened" | "deleted"
+    actor: string
+    at: number
+    status: "open" | "resolved"
+  }>
   createdAt: number
   updatedAt: number
 }
@@ -71,6 +80,8 @@ function annotations(value: unknown): Annotation[] {
     return (
       typeof row.id === "string" &&
       (row.status === "open" || row.status === "resolved") &&
+      typeof row.version === "number" &&
+      Array.isArray(row.revisions) &&
       Array.isArray(row.messages) &&
       !!row.anchor &&
       typeof row.anchor.kind === "string"
@@ -425,6 +436,8 @@ function AnnotationThread(props: {
   onUpdate(id: string, body: Record<string, unknown>): Promise<boolean>
 }): JSX.Element {
   const [reply, setReply] = createSignal("")
+  const [edit, setEdit] = createSignal("")
+  const [editing, setEditing] = createSignal(false)
   const [busy, setBusy] = createSignal(false)
   const update = async (body: Record<string, unknown>) => {
     if (busy()) return
@@ -432,6 +445,7 @@ function AnnotationThread(props: {
     const ok = await props.onUpdate(props.annotation.id, body)
     setBusy(false)
     if (ok && typeof body.reply === "string") setReply("")
+    if (ok && typeof body.body === "string") setEditing(false)
   }
   const anchor = () => {
     const value = props.annotation.anchor
@@ -473,6 +487,20 @@ function AnnotationThread(props: {
         >
           {anchor()}
         </span>
+        <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+          v{props.annotation.version}
+        </span>
+        <button
+          type="button"
+          disabled={busy()}
+          style={quietButton()}
+          onClick={() => {
+            setEdit(props.annotation.messages[0]?.body ?? "")
+            setEditing(true)
+          }}
+        >
+          Edit
+        </button>
         <button
           type="button"
           disabled={busy()}
@@ -483,15 +511,73 @@ function AnnotationThread(props: {
         </button>
       </div>
       <For each={props.annotation.messages}>
-        {(message) => (
+        {(message, index) => (
           <div style={{ display: "grid", gap: "4px", padding: "8px 0", "border-top": "1px solid var(--color-border)" }}>
-            <p style={{ ...copyStyle(), color: "var(--color-text)" }}>{message.body}</p>
+            <Show
+              when={index() === 0 && editing()}
+              fallback={<p style={{ ...copyStyle(), color: "var(--color-text)" }}>{message.body}</p>}
+            >
+              <textarea
+                aria-label={`Edit annotation ${props.annotation.id}`}
+                value={edit()}
+                rows={3}
+                onInput={(event) => setEdit(event.currentTarget.value)}
+                style={{
+                  width: "100%",
+                  resize: "vertical",
+                  "box-sizing": "border-box",
+                  padding: "8px",
+                  border: "1px solid var(--color-border)",
+                  "border-radius": "5px",
+                  outline: "none",
+                  background: "var(--color-bg)",
+                  color: "var(--color-text)",
+                  "font-family": FONT_SANS,
+                  "font-size": "10px",
+                  "line-height": 1.5,
+                }}
+              />
+              <div style={{ display: "flex", gap: "6px" }}>
+                <button
+                  type="button"
+                  disabled={!edit().trim() || busy()}
+                  style={{ ...quietButton(), border: "1px solid var(--color-border)" }}
+                  onClick={() => void update({ body: edit().trim() })}
+                >
+                  Save edit
+                </button>
+                <button type="button" disabled={busy()} style={quietButton()} onClick={() => setEditing(false)}>
+                  Cancel
+                </button>
+              </div>
+            </Show>
             <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
               {message.author} · {new Date(message.createdAt).toLocaleString()}
             </span>
           </div>
         )}
       </For>
+      <details>
+        <summary
+          style={{
+            cursor: "pointer",
+            "font-family": FONT_SANS,
+            "font-size": "10px",
+            color: "var(--color-text-muted)",
+          }}
+        >
+          History · {props.annotation.revisions.length} revisions
+        </summary>
+        <ol style={{ margin: "8px 0 0", padding: "0 0 0 20px", display: "grid", gap: "5px" }}>
+          <For each={props.annotation.revisions}>
+            {(item) => (
+              <li style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+                v{item.version} · {item.event} · {item.actor} · {new Date(item.at).toLocaleString()}
+              </li>
+            )}
+          </For>
+        </ol>
+      </details>
       <div style={{ display: "flex", gap: "6px" }}>
         <input
           aria-label={`Reply to ${props.annotation.id}`}
