@@ -27,10 +27,11 @@ import { NotebookView } from "@/notebook/NotebookView"
 import { DataTableView } from "@/data/DataTableView"
 import type { TableFormat } from "@/data/table"
 import { ManuscriptWorkbench } from "@/manuscript/ManuscriptWorkbench"
+import { parseManuscript } from "@/manuscript/model"
 import { artifactContext, createArtifactContext } from "@/artifacts/context"
 import type { ArtifactInspection } from "@/science/renderers"
 import { toast } from "@/atlas/Toast"
-import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces, IconRefresh } from "@/atlas/shared/Icon"
+import { IconFile, IconX, IconCopy, IconDownload, IconBookOpen, IconBraces } from "@/atlas/shared/Icon"
 
 /**
  * Slide-in SIDE PREVIEW pane for opening a file from the Files tree.
@@ -204,6 +205,7 @@ export function FileView(props: {
     // KaTeX, which blanks on a full \documentclass document.
     return "code"
   })
+  const manuscript = createMemo(() => parseManuscript(draft()).bibliographies.length > 0)
 
   const badge = () => {
     const k = kind()
@@ -358,22 +360,6 @@ export function FileView(props: {
             </span>
           </Show>
         </div>
-        <span
-          style={{
-            "flex-shrink": 0,
-            padding: "2px 8px",
-            "border-radius": "4px",
-            border: "1px solid var(--color-border)",
-            background: "var(--color-bg-subtle)",
-            "font-family": FONT_MONO,
-            "font-size": "10px",
-            color: "var(--color-text-faint)",
-            "letter-spacing": "0.03em",
-          }}
-        >
-          {badge()}
-        </span>
-
         <Show when={dirty()}>
           <button type="button" onClick={() => setDraft(savedText())} style={ctlBtn()}>
             reset
@@ -389,19 +375,17 @@ export function FileView(props: {
             onClick={() => setShowSource((v) => !v)}
             title={showSource() ? "rendered view" : kind() === "code" ? "edit source" : "raw source"}
             aria-label={showSource() ? "Rendered view" : "Source"}
-            style={headerBtn(showSource())}
+            style={iconBtn(showSource())}
           >
             <Show when={showSource()} fallback={<IconBraces size={13} strokeWidth={1.6} />}>
               <IconBookOpen size={13} strokeWidth={1.6} />
             </Show>
-            <span>{showSource() ? "view" : "source"}</span>
           </button>
         </Show>
 
         <Show when={!isBinary()}>
-          <button type="button" onClick={() => void copy()} title="copy contents" aria-label="Copy" style={headerBtn()}>
+          <button type="button" onClick={() => void copy()} title="copy contents" aria-label="Copy" style={iconBtn()}>
             <IconCopy size={13} strokeWidth={1.6} />
-            <span>copy</span>
           </button>
         </Show>
         <Show when={isBinary()}>
@@ -410,23 +394,11 @@ export function FileView(props: {
             onClick={() => void download()}
             title="download"
             aria-label="Download"
-            style={headerBtn()}
+            style={iconBtn()}
           >
             <IconDownload size={13} strokeWidth={1.6} />
-            <span>download</span>
           </button>
         </Show>
-
-        <button
-          type="button"
-          onClick={() => setRefreshKey((k) => k + 1)}
-          title="refresh"
-          aria-label="Refresh"
-          style={headerBtn()}
-        >
-          <IconRefresh size={13} strokeWidth={1.6} />
-          <span>refresh</span>
-        </button>
 
         <Show when={props.onClose}>
           <button type="button" onClick={() => props.onClose!()} title="close" style={iconBtn()}>
@@ -530,8 +502,8 @@ export function FileView(props: {
                   <pre style={{ margin: 0, "white-space": "pre-wrap", "overflow-wrap": "anywhere" }}>{draft()}</pre>
                 </div>
               </Match>
-              {/* markdown */}
-              <Match when={kind() === "markdown" && !showSource()}>
+              {/* citation-aware manuscripts keep the research authoring workbench */}
+              <Match when={kind() === "markdown" && !showSource() && manuscript()}>
                 <ManuscriptWorkbench
                   directory={directory()}
                   path={props.path}
@@ -540,6 +512,13 @@ export function FileView(props: {
                   saving={saving()}
                   onChange={setDraft}
                 />
+              </Match>
+
+              {/* ordinary Markdown opens as a quiet document */}
+              <Match when={kind() === "markdown" && !showSource() && !manuscript()}>
+                <div style={{ padding: "24px 28px 48px", width: "100%", "max-width": "920px", margin: "0 auto" }}>
+                  <Markdown class="atlas-md" text={draft()} />
+                </div>
               </Match>
 
               {/* notebook */}
@@ -654,6 +633,7 @@ export function FileView(props: {
               <Match
                 when={
                   (kind() === "code" ||
+                    kind() === "markdown" ||
                     kind() === "science" ||
                     kind() === "scientific-data" ||
                     kind() === "notebook" ||
@@ -662,6 +642,7 @@ export function FileView(props: {
                 }
               >
                 <textarea
+                  aria-label="File source"
                   value={draft()}
                   spellcheck={false}
                   onInput={(ev) => setDraft(ev.currentTarget.value)}
@@ -682,7 +663,7 @@ export function FileView(props: {
                   }}
                 />
               </Match>
-              <Match when={kind() === "code" || (kind() === "markdown" && showSource())}>
+              <Match when={kind() === "code"}>
                 <div style={{ padding: "14px 16px" }}>
                   <Markdown
                     class="atlas-md"
@@ -796,29 +777,6 @@ function iconBtn(active = false): JSX.CSSProperties {
     "flex-shrink": 0,
     transition: "background 120ms ease, color 120ms ease",
   } as JSX.CSSProperties
-}
-
-function headerBtn(active = false): JSX.CSSProperties {
-  return {
-    all: "unset",
-    cursor: "pointer",
-    height: "28px",
-    display: "inline-flex",
-    "align-items": "center",
-    "justify-content": "center",
-    gap: "5px",
-    padding: "0 7px",
-    "border-radius": "5px",
-    border: "1px solid var(--color-border)",
-    color: active ? "var(--color-text)" : "var(--color-text-muted)",
-    background: active ? "var(--color-accent-subtle)" : "var(--color-bg-subtle)",
-    "font-family": FONT_SANS,
-    "font-size": "10px",
-    "font-weight": 550,
-    "text-transform": "capitalize",
-    "flex-shrink": 0,
-    transition: "background 120ms ease, color 120ms ease",
-  }
 }
 
 function retryBtn(): JSX.CSSProperties {

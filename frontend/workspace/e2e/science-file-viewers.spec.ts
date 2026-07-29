@@ -20,7 +20,7 @@ async function openFile(page: Page, directory: string, relativePath: string) {
   await expect(page.locator(`[role="tab"][title="${filename}"]`)).toHaveAttribute("aria-selected", "true")
 }
 
-test("markdown files render and can toggle their raw source", async ({ page, directory, gotoSession }) => {
+test("markdown files render and can toggle their editable source", async ({ page, directory, gotoSession }) => {
   await gotoSession()
   await openFile(page, directory, "README.md")
 
@@ -28,9 +28,7 @@ test("markdown files render and can toggle their raw source", async ({ page, dir
   await expect(page.getByText("The open-source AI workbench for scientific research", { exact: true })).toBeVisible()
   await page.getByTitle("raw source", { exact: true }).click()
   await expect(page.getByTitle("rendered view", { exact: true })).toBeVisible()
-  await expect(
-    page.getByText("### The open-source AI workbench for scientific research", { exact: true }),
-  ).toBeVisible()
+  await expect(page.getByLabel("File source")).toHaveValue(/### The open-source AI workbench for scientific research/)
 })
 
 test("image files render their decoded dimensions", async ({ page, directory, gotoSession }) => {
@@ -70,7 +68,7 @@ test("XYZ files open as interactive 3D chemistry with source access", async ({ p
   await expect(summary).toContainText("O 1")
   await expect(page.getByRole("button", { name: "Source", exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Copy", exact: true })).toBeVisible()
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0)
 
   const structure = artifact.locator('[data-component="mol-structure"]')
   await expect(structure).toHaveAttribute("data-status", "ready", { timeout: 30_000 })
