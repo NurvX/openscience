@@ -1,6 +1,6 @@
 /** Atlas graph client backed by the selected OpenScience server's bridge. */
 
-import { resolveServerRoute } from "@/config/server-url"
+import type { ProjectRequest } from "@/utils/openscience-fetch"
 
 export interface AtlasNode {
   node_id: string
@@ -59,9 +59,13 @@ export interface InitProjectResponse {
   host?: string
 }
 
-async function requestJSON<T>(server: string, method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
-  const route = `/api/atlas${path}`
-  const res = await fetch(resolveServerRoute(route, server, window.location.origin), {
+async function requestJSON<T>(
+  request: ProjectRequest,
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const res = await request(`/api/atlas${path}`, {
     method,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -86,27 +90,25 @@ export interface GraphTreeResponse {
   node_count?: number
 }
 
-export function createAtlasAPI(server: () => string) {
-  const get = <T>(path: string) => requestJSON<T>(server(), "GET", path)
-  const post = <T>(path: string, body: unknown) => requestJSON<T>(server(), "POST", path, body)
+export function createAtlasAPI(request: ProjectRequest) {
+  const get = <T>(path: string) => requestJSON<T>(request, "GET", path)
+  const post = <T>(path: string, body: unknown) => requestJSON<T>(request, "POST", path, body)
 
   return {
     /** The user's graphs = root nodes; the canvas shows one at a time. */
     listGraphs: () => get<NodesListResponse>("/graphs"),
     /** Full subgraph for a single graph/root. */
     getGraphTree: (id: string) => get<GraphTreeResponse>(`/graphs/${id}/tree`),
-    createNode: (input: { title: string; directory: string; parentID: string }) =>
+    createNode: (input: { title: string; projectID: string; parentID: string }) =>
       post<AtlasNode>("/nodes", {
         title: input.title,
-        directory: input.directory,
+        projectID: input.projectID,
         parent_id: input.parentID,
       }),
     /** Resolve the opened project's root without creating one. */
-    resolveProject: (directory: string) =>
-      get<{ project_id: string | null }>(`/project?directory=${encodeURIComponent(directory)}`),
+    resolveProject: () => get<{ project_id: string | null }>("/project"),
     /** Find or create the opened project's root after explicit user action. */
-    initProject: (directory: string) =>
-      post<InitProjectResponse>(`/project/init?directory=${encodeURIComponent(directory)}`, {}),
+    initProject: () => post<InitProjectResponse>("/project/init", {}),
     listArtifacts: (nodeID: string) => get<ArtifactsListResponse | AtlasArtifact[]>(`/nodes/${nodeID}/artifacts`),
   }
 }

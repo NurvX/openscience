@@ -11,8 +11,8 @@ import { managedOpenRouterBaseURL } from "../../src/openscience/synced-env-polic
 // billed managed one (the "billing flip" bug).
 //
 // OpenRouter is the only provider Atlas sync may deliver a managed credential
-// for; every other model provider is BYOK-local-only, so its synced credential is dropped
-// (see synced-env-policy.ts) — Atlas still emits them for the hosted web agents.
+// for. User-owned direct-provider keys may sync, but scoped thk_ credentials
+// and provider base URLs are rejected (see synced-env-policy.ts).
 
 const realFetch = globalThis.fetch
 afterEach(() => {
@@ -77,7 +77,7 @@ test("Meta sync is dropped even when it looks like an old managed route", async 
   expect(process.env["META_MODEL_BASE_URL"]).toBeUndefined()
 })
 
-test("Meta sync rejects an upstream shared key or public endpoint", async () => {
+test("Meta sync transfers a user-owned key but rejects its base URL", async () => {
   await seedSession()
   stubSync({
     meta: {
@@ -86,14 +86,22 @@ test("Meta sync rejects an upstream shared key or public endpoint", async () => 
     },
   })
   await OpenScience.syncServices()
-  expect(process.env["META_MODEL_API_KEY"]).toBeUndefined()
+  expect(process.env["META_MODEL_API_KEY"]).toBe("meta-shared-secret")
   expect(process.env["META_MODEL_BASE_URL"]).toBeUndefined()
 })
 
-test("a synced non-OpenRouter LLM key is dropped — those providers are BYOK-local-only", async () => {
+test("a synced direct-provider managed token is dropped", async () => {
   await seedSession()
   delete process.env["ANTHROPIC_API_KEY"]
   stubSync({ anthropic: { ANTHROPIC_API_KEY: "thk_managed.value" } })
   await OpenScience.syncServices()
   expect(process.env["ANTHROPIC_API_KEY"]).toBeUndefined()
+})
+
+test("a synced direct-provider BYOK key transfers when the slot is empty", async () => {
+  await seedSession()
+  delete process.env["ANTHROPIC_API_KEY"]
+  stubSync({ anthropic: { ANTHROPIC_API_KEY: "sk-ant-user-owned" } })
+  await OpenScience.syncServices()
+  expect(process.env["ANTHROPIC_API_KEY"]).toBe("sk-ant-user-owned")
 })

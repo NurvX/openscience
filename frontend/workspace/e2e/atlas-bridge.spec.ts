@@ -43,6 +43,13 @@ async function readTransform(layer: Locator) {
 }
 
 test("Atlas canvas distinguishes a connected graph from an unavailable bridge", async ({ page, gotoSession }) => {
+  // The Atlas workspace action only renders for a signed-in Atlas account.
+  // The harness has none, so pin the account probe to exercise the surface;
+  // the /api/atlas requests below still hit the real bridge.
+  await page.route("**/account/session", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session: true }) }),
+  )
+
   const response = await page.request.get(`${serverUrl}/api/atlas/graphs`)
   const graphBody = response.ok() ? ((await response.json()) as { nodes?: AtlasGraphNode[] }) : undefined
   const connected = graphBody ? await findConnectedGraph(page.request, graphBody.nodes ?? []) : undefined
@@ -63,9 +70,10 @@ test("Atlas canvas distinguishes a connected graph from an unavailable bridge", 
 
   await gotoSession()
 
-  await page.getByRole("button", { name: /^atlas$/i }).click()
-  const atlasTab = page.getByRole("tab", { name: /^atlas$/i })
-  await expect(atlasTab).toHaveAttribute("aria-selected", "true")
+  const action = page.getByRole("button", { name: "Open Atlas", exact: true })
+  await action.click()
+  await expect(action).toHaveAttribute("aria-pressed", "true")
+  await expect(page.locator(".research-inspector__context strong")).toHaveText("Atlas")
 
   if (response.ok()) {
     const body = graphBody!

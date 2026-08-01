@@ -252,7 +252,7 @@ export const dict = {
   "dialog.directory.search.placeholder": "search folders",
   "dialog.directory.empty": "no folders found",
 
-  "dialog.server.title": "servers",
+  "dialog.server.title": "Servers",
   "dialog.server.description": "switch which OpenScience server this app connects to.",
   "dialog.server.search.placeholder": "search servers",
   "dialog.server.empty": "no servers yet",
@@ -665,7 +665,7 @@ export const dict = {
 
   "settings.permissions.title": "permissions",
   "settings.permissions.description": "control what tools the server can use by default.",
-  "settings.permissions.section.tools": "tools",
+  "settings.permissions.section.tools": "Tools",
   "settings.permissions.toast.updateFailed.title": "failed to update permissions",
 
   "settings.permissions.action.allow": "allow",

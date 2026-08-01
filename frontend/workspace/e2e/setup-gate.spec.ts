@@ -27,8 +27,7 @@ test("first-run setup offers every path and remembers dismissal", async ({ page,
   await expect(dialog.getByText("Add a provider key.", { exact: false })).toBeVisible()
   await expect(dialog.getByRole("button", { name: "Anthropic", exact: true })).toBeVisible()
   await expect(dialog.getByRole("button", { name: "OpenAI", exact: true })).toBeVisible()
-  await expect(dialog.getByRole("button", { name: "Google", exact: true })).toBeVisible()
-  await expect(dialog.getByRole("button", { name: "OpenRouter", exact: true })).toBeVisible()
+  await expect(dialog.getByRole("button", { name: "Google Gemini", exact: true })).toBeVisible()
   await expect(dialog.getByRole("button", { name: "save key", exact: true })).toBeDisabled()
 
   await dialog.getByRole("button", { name: "back", exact: true }).click()

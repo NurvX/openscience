@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures"
 import { promptSelector } from "./utils"
 
-test("context panel can be opened from the prompt", async ({ page, sdk, gotoSession }) => {
+test("observable session context opens in the local trace", async ({ page, sdk, gotoSession }) => {
   const title = `e2e smoke context ${Date.now()}`
   const created = await sdk.session.create({ title }).then((r) => r.data)
 
@@ -36,17 +36,13 @@ test("context panel can be opened from the prompt", async ({ page, sdk, gotoSess
 
     await gotoSession(sessionID)
 
-    const contextButton = page
-      .locator('[data-component="button"]')
-      .filter({ has: page.locator('[data-component="progress-circle"]').first() })
-      .first()
+    await page.getByRole("button", { name: "Open session trace", exact: true }).click()
 
-    await expect(contextButton).toBeVisible()
-    await contextButton.click()
-
-    const dialog = page.getByRole("dialog", { name: "context", exact: true })
-    await expect(dialog).toBeVisible()
-    await expect(dialog.getByText("messages", { exact: true })).toBeVisible()
+    const trace = page.getByRole("region", { name: "Session trace", exact: true })
+    await expect(trace).toBeVisible()
+    await expect(trace.getByText("Local observable record", { exact: true })).toBeVisible()
+    await expect(trace.getByText("first output", { exact: true })).toBeVisible()
+    await expect(trace.getByText("Observable activity", { exact: true })).toBeVisible()
   } finally {
     await sdk.session.delete({ sessionID }).catch(() => undefined)
   }

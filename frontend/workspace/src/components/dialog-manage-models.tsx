@@ -3,9 +3,8 @@ import { List } from "@synsci/ui/list"
 import { Switch } from "@synsci/ui/switch"
 import type { Component } from "solid-js"
 import { useLocal } from "@/context/local"
-import { displayProviderForModel } from "@/context/model-catalog"
-import { popularProviders } from "@/hooks/use-providers"
 import { useLanguage } from "@/context/language"
+import { displayProviderForModel } from "@/context/model-catalog"
 
 export const DialogManageModels: Component = () => {
   const local = useLocal()
@@ -14,20 +13,13 @@ export const DialogManageModels: Component = () => {
   return (
     <Dialog title={language.t("dialog.model.manage")} description={language.t("dialog.model.manage.description")}>
       <List
+        class="[&_[data-slot=list-item]]:!py-2"
         search={{ placeholder: language.t("dialog.model.search.placeholder"), autofocus: true }}
         emptyMessage={language.t("dialog.model.empty")}
         key={(x) => `${x?.provider?.id}:${x?.id}`}
         items={local.model.list()}
-        filterKeys={["provider.name", "name", "id"]}
+        filterKeys={["name"]}
         sortBy={(a, b) => a.name.localeCompare(b.name)}
-        groupBy={(x) => displayProviderForModel(x.provider, x.id).name}
-        sortGroupsBy={(a, b) => {
-          const aProvider = displayProviderForModel(a.items[0].provider, a.items[0].id).id
-          const bProvider = displayProviderForModel(b.items[0].provider, b.items[0].id).id
-          if (popularProviders.includes(aProvider) && !popularProviders.includes(bProvider)) return -1
-          if (!popularProviders.includes(aProvider) && popularProviders.includes(bProvider)) return 1
-          return popularProviders.indexOf(aProvider) - popularProviders.indexOf(bProvider)
-        }}
         onSelect={(x) => {
           if (!x) return
           const visible = local.model.visible({
@@ -39,9 +31,15 @@ export const DialogManageModels: Component = () => {
       >
         {(i) => (
           <div class="w-full flex items-center justify-between gap-x-3">
-            <span>{i.name}</span>
+            <span class="min-w-0 flex flex-col truncate text-left">
+              <span class="truncate text-13-medium text-text-strong">{i.name}</span>
+              <span class="truncate text-11-regular text-text-weak">
+                {displayProviderForModel(i.provider, i.id).name}
+              </span>
+            </span>
             <div onClick={(e) => e.stopPropagation()}>
               <Switch
+                hideLabel
                 checked={
                   !!local.model.visible({
                     modelID: i.id,
@@ -51,7 +49,9 @@ export const DialogManageModels: Component = () => {
                 onChange={(checked) => {
                   local.model.setVisibility({ modelID: i.id, providerID: i.provider.id }, checked)
                 }}
-              />
+              >
+                {`${local.model.visible({ modelID: i.id, providerID: i.provider.id }) ? "hide" : "show"} ${i.name}`}
+              </Switch>
             </div>
           </div>
         )}

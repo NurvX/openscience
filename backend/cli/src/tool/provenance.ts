@@ -9,6 +9,11 @@ import { Instance } from "../project/instance"
  * produced and audit the lineage of any artifact/claim later.
  */
 
+const scope = () => ({
+  projectID: Instance.project.id,
+  directory: Instance.directory,
+})
+
 export const ProvenanceRecordTool = Tool.define("provenance_record", {
   description: [
     "Record a node (and optional edge) in the provenance DAG.",
@@ -32,22 +37,27 @@ export const ProvenanceRecordTool = Tool.define("provenance_record", {
   }),
   async execute(params, ctx) {
     if (params.derived_from) {
-      const graph = await Provenance.project(Instance.directory)
+      const graph = await Provenance.project(scope())
       if (!graph.nodes.some((node) => node.id === params.derived_from)) {
         throw new Error(`Provenance node ${params.derived_from} is not part of this project`)
       }
     }
-    const node = await Provenance.record({
+    const node = await Provenance.recordOwned(scope(), {
       kind: params.kind,
       label: params.label,
       ...(params.artifact_type ? { artifactType: params.artifact_type } : {}),
       ...(params.path ? { path: params.path } : {}),
       ...(params.tool ? { tool: params.tool } : {}),
-      meta: { sessionID: ctx.sessionID, directory: Instance.directory, ...params.meta },
+      meta: {
+        ...params.meta,
+        sessionID: ctx.sessionID,
+        directory: Instance.directory,
+        projectID: Instance.project.id,
+      },
     } as Parameters<typeof Provenance.record>[0])
 
     if (params.derived_from) {
-      await Provenance.link({ from: node.id, to: params.derived_from, relation: "derived-from" })
+      await Provenance.linkOwned(scope(), { from: node.id, to: params.derived_from, relation: "derived-from" })
     }
 
     return {
@@ -75,7 +85,7 @@ export const ProvenanceQueryTool = Tool.define("provenance_query", {
     id: z.string().optional().describe("Node id to trace lineage for. Omit to list everything."),
   }),
   async execute(params, _ctx) {
-    const graph = await Provenance.project(Instance.directory)
+    const graph = await Provenance.project(scope())
     if (!params.id) {
       const nodes = graph.nodes
       if (!nodes.length) {
@@ -148,7 +158,7 @@ export const ProvenanceReviewTool = Tool.define("provenance_review", {
       .describe("'refutes' flags a defect (default); 'supports' records a verified-sound check"),
   }),
   async execute(params, ctx) {
-    const graph = await Provenance.project(Instance.directory)
+    const graph = await Provenance.project(scope())
     if (!graph.nodes.some((node) => node.id === params.target)) {
       throw new Error(`Provenance node ${params.target} is not part of this project`)
     }
@@ -163,6 +173,9 @@ export const ProvenanceReviewTool = Tool.define("provenance_review", {
       verdict: params.verdict,
       reviewer: ctx.agent,
       sessionID: ctx.sessionID,
+      messageID: ctx.messageID,
+      callID: ctx.callID,
+      projectID: Instance.project.id,
       directory: Instance.directory,
     })
     return {

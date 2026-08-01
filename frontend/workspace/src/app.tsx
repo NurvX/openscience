@@ -28,8 +28,8 @@ import { URLS } from "@/config/urls"
 import { resolveDefaultServerUrl } from "@/config/server-url"
 import { Suspense } from "solid-js"
 import { AsciiSpinner } from "@/atlas/shared/AsciiSpinner"
+import Home from "@/pages/home"
 
-const Home = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session-shell"))
 const Loading = () => (
   <div class="size-full" style={{ display: "flex", "align-items": "center", "justify-content": "center" }}>

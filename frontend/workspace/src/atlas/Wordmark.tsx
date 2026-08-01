@@ -1,5 +1,5 @@
 import { type JSX, Show } from "solid-js"
-import { FONT_SERIF } from "@/styles/tokens"
+import { FONT_SANS } from "@/styles/tokens"
 
 interface WordmarkProps {
   size?: "sm" | "md" | "lg"
@@ -38,7 +38,7 @@ export function Wordmark(props: WordmarkProps): JSX.Element {
       </Show>
       <span
         style={{
-          "font-family": FONT_SERIF,
+          "font-family": FONT_SANS,
           "font-size": `${px().text}px`,
           "font-weight": 400,
           "letter-spacing": "-0.02em",

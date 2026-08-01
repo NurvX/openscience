@@ -1,27 +1,59 @@
 import { Popover as Kobalte } from "@kobalte/core/popover"
-import { Component, ComponentProps, createEffect, createMemo, JSX, onCleanup, Show, ValidComponent } from "solid-js"
+import {
+  Component,
+  ComponentProps,
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  JSX,
+  onCleanup,
+  Show,
+  ValidComponent,
+} from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLocal } from "@/context/local"
 import { useDialog } from "@synsci/ui/context/dialog"
-import { popularProviders } from "@/hooks/use-providers"
 import { Button } from "@synsci/ui/button"
 import { IconButton } from "@synsci/ui/icon-button"
 import { Tag } from "@synsci/ui/tag"
 import { Dialog } from "@synsci/ui/dialog"
 import { List } from "@synsci/ui/list"
 import { Tooltip } from "@synsci/ui/tooltip"
-import { ProviderIcon } from "@synsci/ui/provider-icon"
-import type { IconName } from "@synsci/ui/icons/provider"
 import { DialogManageModels } from "./dialog-manage-models"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
 import { displayProviderForModel } from "@/context/model-catalog"
+import "./dialog-select-model.css"
+
+type ModelGroup = "all" | "anthropic" | "openai" | "codex" | "other"
+
+const groups: Array<{ id: ModelGroup; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "anthropic", label: "Anthropic" },
+  { id: "openai", label: "OpenAI" },
+  { id: "codex", label: "OpenAI (Codex subscription)" },
+  { id: "other", label: "Other" },
+]
+
+const group = (model: { id: string; provider: { id: string; name: string } }): ModelGroup => {
+  if (model.provider.id === "openai-codex") return "codex"
+  const provider = displayProviderForModel(model.provider, model.id).id
+  if (provider === "anthropic") return "anthropic"
+  if (provider === "openai") return "openai"
+  return "other"
+}
+
+const rank = (model: { id: string; provider: { id: string; name: string } }) =>
+  ({ anthropic: 0, openai: 1, codex: 2, other: 3, all: 4 })[group(model)]
 
 const ModelList: Component<{
   provider?: string
   class?: string
   onSelect: () => void
   action?: JSX.Element
+  group?: ModelGroup
+  onPinLimit?: () => void
 }> = (props) => {
   const local = useLocal()
   const language = useLanguage()
@@ -32,29 +64,26 @@ const ModelList: Component<{
       .filter((m) => local.model.visible({ modelID: m.id, providerID: m.provider.id }))
       .filter((m) => {
         if (!props.provider) return true
-        const display = displayProviderForModel(m.provider, m.id)
-        return m.provider.id === props.provider || display.id === props.provider
-      }),
+        return m.provider.id === props.provider
+      })
+      .filter((m) => !props.group || props.group === "all" || group(m) === props.group),
   )
+  const context = (limit: number) => {
+    if (limit >= 1_000_000) return `${(limit / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}m`
+    if (limit >= 1_000) return `${Math.round(limit / 1_000).toLocaleString()}k`
+    return limit.toLocaleString()
+  }
 
   return (
     <List
-      class={`flex-1 min-h-0 [&_[data-slot=list-scroll]]:flex-1 [&_[data-slot=list-scroll]]:min-h-0 [&_[data-slot=list-search-input]]:!text-[13px] [&_[data-slot=list-header]]:!text-[11px] [&_[data-slot=list-header]]:!uppercase [&_[data-slot=list-header]]:!tracking-wider [&_[data-slot=list-item]]:!py-1 [&_[data-slot=list-search]]:!p-1.5 ${props.class ?? ""}`}
+      class={`flex-1 min-h-0 [&_[data-slot=list-scroll]]:flex-1 [&_[data-slot=list-scroll]]:min-h-0 [&_[data-slot=list-search-input]]:!text-[13px] [&_[data-slot=list-header]]:!text-[11px] [&_[data-slot=list-header]]:!font-medium [&_[data-slot=list-header]]:!tracking-[0.02em] [&_[data-slot=list-item]]:focus-visible:!outline [&_[data-slot=list-item]]:focus-visible:!outline-1 [&_[data-slot=list-item]]:focus-visible:!outline-border-strong ${props.class ?? ""}`}
       search={{ placeholder: language.t("dialog.model.search.placeholder"), autofocus: true, action: props.action }}
       emptyMessage={language.t("dialog.model.empty")}
       key={(x) => `${x.provider.id}:${x.id}`}
       items={models}
       current={local.model.current()}
-      filterKeys={["provider.name", "name", "id"]}
-      sortBy={(a, b) => a.name.localeCompare(b.name)}
-      groupBy={(x) => displayProviderForModel(x.provider, x.id).name}
-      sortGroupsBy={(a, b) => {
-        const aProvider = displayProviderForModel(a.items[0].provider, a.items[0].id).id
-        const bProvider = displayProviderForModel(b.items[0].provider, b.items[0].id).id
-        if (popularProviders.includes(aProvider) && !popularProviders.includes(bProvider)) return -1
-        if (!popularProviders.includes(aProvider) && popularProviders.includes(bProvider)) return 1
-        return popularProviders.indexOf(aProvider) - popularProviders.indexOf(bProvider)
-      }}
+      filterKeys={["name"]}
+      sortBy={(a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)}
       itemWrapper={(item, node) => (
         <Tooltip
           class="w-full"
@@ -63,7 +92,7 @@ const ModelList: Component<{
           forceMount={false}
           value={
             <ModelTooltip
-              model={{ ...item, provider: displayProviderForModel(item.provider, item.id) }}
+              model={item}
               latest={item.latest}
               free={item.provider.id === "synsci" && (!item.cost || item.cost.input === 0)}
             />
@@ -80,19 +109,55 @@ const ModelList: Component<{
       }}
     >
       {(i) => (
-        <div class="w-full flex items-center gap-x-2 text-13-regular">
-          <ProviderIcon
-            id={displayProviderForModel(i.provider, i.id).id as IconName}
-            class="size-4 shrink-0 opacity-90"
-          />
-          <span class="truncate">{i.name}</span>
-          <span class="flex items-center gap-x-1.5 ml-auto shrink-0">
+        <div class="w-full min-w-0 flex items-center gap-x-3 text-13-regular">
+          <span class="min-w-0 flex flex-1 flex-col text-left">
+            <span class="truncate text-13-medium text-text-strong">{i.name}</span>
+            <span class="flex items-center gap-1.5 truncate text-11-regular text-text-weak">
+              <span>{i.capabilities.reasoning ? "reasoning" : "standard"}</span>
+              <span aria-hidden="true">·</span>
+              <span>{context(i.limit.context)} context</span>
+            </span>
+          </span>
+          <span class="flex items-center gap-x-1 ml-auto shrink-0">
+            <Tag>{displayProviderForModel(i.provider, i.id).name}</Tag>
             <Show when={i.provider.id === "synsci" && (!i.cost || i.cost?.input === 0)}>
               <Tag>{language.t("model.tag.free")}</Tag>
             </Show>
             <Show when={i.latest}>
               <Tag>{language.t("model.tag.latest")}</Tag>
             </Show>
+            <span
+              role="button"
+              tabindex="0"
+              class="model-picker-sheet__pin"
+              data-pinned={local.model.pin.has({ providerID: i.provider.id, modelID: i.id }) ? "true" : undefined}
+              aria-pressed={local.model.pin.has({ providerID: i.provider.id, modelID: i.id })}
+              aria-label={`${local.model.pin.has({ providerID: i.provider.id, modelID: i.id }) ? "Unpin" : "Pin"} ${i.name}`}
+              title={
+                local.model.pin.has({ providerID: i.provider.id, modelID: i.id })
+                  ? "Remove from quick models"
+                  : "Pin to quick models"
+              }
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                const result = local.model.pin.toggle({ providerID: i.provider.id, modelID: i.id })
+                if (result.limited) props.onPinLimit?.()
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return
+                event.preventDefault()
+                event.stopPropagation()
+                const result = local.model.pin.toggle({ providerID: i.provider.id, modelID: i.id })
+                if (result.limited) props.onPinLimit?.()
+              }}
+            >
+              <span aria-hidden="true">
+                {local.model.pin.has({ providerID: i.provider.id, modelID: i.id }) ? "●" : "○"}
+              </span>
+              <span>{local.model.pin.has({ providerID: i.provider.id, modelID: i.id }) ? "Pinned" : "Pin"}</span>
+            </span>
           </span>
         </div>
       )}
@@ -195,7 +260,7 @@ export function ModelSelectorPopover<T extends ValidComponent = "div">(props: {
       <Kobalte.Portal>
         <Kobalte.Content
           ref={(el) => setStore("content", el)}
-          class="w-[264px] h-[min(52vh,288px)] flex flex-col p-1.5 rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden"
+          class="w-[min(390px,calc(100vw-24px))] h-[min(64vh,430px)] flex flex-col rounded-lg border border-border-strong bg-surface-raised-stronger-non-alpha shadow-lg z-50 outline-none overflow-hidden"
           onEscapeKeyDown={(event) => {
             setStore("dismiss", "escape")
             setStore("open", false)
@@ -215,11 +280,19 @@ export function ModelSelectorPopover<T extends ValidComponent = "div">(props: {
             setStore("dismiss", null)
           }}
         >
-          <Kobalte.Title class="sr-only">{language.t("dialog.model.select.title")}</Kobalte.Title>
+          <div class="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
+            <div class="min-w-0">
+              <Kobalte.Title class="text-13-medium text-text-strong">
+                {language.t("dialog.model.select.title")}
+              </Kobalte.Title>
+              <p class="mt-0.5 text-11-regular text-text-weak">Choose the model for this research session.</p>
+            </div>
+            <span class="shrink-0 font-mono text-[10px] text-text-weak">↑↓ select · enter</span>
+          </div>
           <ModelList
             provider={props.provider}
             onSelect={() => setStore("open", false)}
-            class="p-1"
+            class="px-1 pb-2"
             action={
               <Tooltip placement="top" forceMount={false} value={language.t("dialog.model.manage")}>
                 <IconButton
@@ -242,16 +315,47 @@ export function ModelSelectorPopover<T extends ValidComponent = "div">(props: {
 export const DialogSelectModel: Component<{ provider?: string }> = (props) => {
   const dialog = useDialog()
   const language = useLanguage()
+  const [filter, setFilter] = createSignal<ModelGroup>("all")
+  const [notice, setNotice] = createSignal("Pin up to three models for the quick selector.")
+  const manage = () => dialog.show(() => <DialogManageModels />)
 
   return (
-    <Dialog title={language.t("dialog.model.select.title")}>
-      <ModelList provider={props.provider} onSelect={() => dialog.close()} />
-      <Button
-        variant="ghost"
-        class="ml-3 mt-5 mb-6 text-text-base self-start"
-        onClick={() => dialog.show(() => <DialogManageModels />)}
-      >
-        {language.t("dialog.model.manage")}
+    <Dialog title={language.t("dialog.model.select.title")} class="model-picker-sheet" transition>
+      <div class="model-picker-sheet__discovery">
+        <div class="model-picker-sheet__groups" role="group" aria-label="Model providers">
+          <For each={groups}>
+            {(item) => (
+              <button
+                type="button"
+                class="model-picker-sheet__group"
+                data-active={filter() === item.id ? "true" : undefined}
+                aria-pressed={filter() === item.id}
+                onClick={() => setFilter(item.id)}
+              >
+                {item.label}
+              </button>
+            )}
+          </For>
+        </div>
+        <p class="model-picker-sheet__pin-note" aria-live="polite">
+          {notice()}
+        </p>
+      </div>
+      <ModelList
+        provider={props.provider}
+        group={filter()}
+        onSelect={() => dialog.close()}
+        onPinLimit={() => setNotice("Three models are already pinned. Unpin one before adding another.")}
+        class="model-picker-sheet__list"
+      />
+      <Button variant="ghost" icon="sliders" class="model-picker-sheet__manage" onClick={manage}>
+        <span class="model-picker-sheet__manage-copy">
+          <strong>{language.t("dialog.model.manage")}</strong>
+          <span>Choose which providers and models appear</span>
+        </span>
+        <span class="model-picker-sheet__manage-arrow" aria-hidden="true">
+          ›
+        </span>
       </Button>
     </Dialog>
   )

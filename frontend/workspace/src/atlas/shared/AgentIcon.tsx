@@ -3,7 +3,6 @@ import { type JSX } from "solid-js"
 interface AgentIconProps {
   size?: number
   strokeWidth?: number
-  animated?: boolean
   class?: string
   style?: JSX.CSSProperties
 }
@@ -11,10 +10,9 @@ interface AgentIconProps {
 export function AgentIcon(props: AgentIconProps): JSX.Element {
   const size = () => props.size ?? 16
   const strokeWidth = () => props.strokeWidth ?? 1.4
-  const animated = () => props.animated ?? true
   return (
     <span
-      class={`atlas-agent-orbit ${props.class ?? ""}`.trim()}
+      class={props.class}
       style={{
         width: `${size()}px`,
         height: `${size()}px`,
@@ -34,8 +32,8 @@ export function AgentIcon(props: AgentIconProps): JSX.Element {
         stroke-width={strokeWidth()}
         stroke-linecap="round"
       >
-        <ellipse cx="12" cy="12" rx="10" ry="4" class={animated() ? "atlas-orbit-ring-1" : undefined} />
-        <ellipse cx="12" cy="12" rx="4" ry="10" class={animated() ? "atlas-orbit-ring-2" : undefined} />
+        <ellipse cx="12" cy="12" rx="10" ry="4" />
+        <ellipse cx="12" cy="12" rx="4" ry="10" />
         <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
       </svg>
     </span>

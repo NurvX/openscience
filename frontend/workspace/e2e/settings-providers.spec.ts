@@ -1,35 +1,40 @@
 import { test, expect } from "./fixtures"
+import { openSettings } from "./utils"
 
-test("credentials settings exposes provider connection controls", async ({ page, gotoSession }) => {
+test("models settings exposes provider connection controls", async ({ page, gotoSession }) => {
   await gotoSession()
 
-  await page.getByRole("button", { name: "More", exact: true }).click()
-  await page.getByRole("menuitem", { name: "Settings", exact: true }).click()
-  const dialog = page.getByRole("dialog")
-  await dialog.getByRole("button", { name: "Credentials", exact: true }).click()
+  const dialog = await openSettings(page)
 
-  await expect(dialog.getByRole("heading", { name: "Credentials" })).toBeVisible()
+  await expect(dialog.getByRole("heading", { name: "Models", exact: true })).toBeVisible()
   await expect(dialog.getByRole("heading", { name: "Provider keys" })).toBeVisible()
   await expect(dialog.getByText("Sign in with ChatGPT", { exact: true }).first()).toBeVisible()
-  await expect(dialog.getByPlaceholder("sk-…")).toBeVisible()
+  await expect(dialog.getByLabel("API key", { exact: true })).toBeVisible()
   await expect(dialog.getByRole("button", { name: "save key" })).toBeDisabled()
 
   await dialog.getByRole("button", { name: "Close" }).click()
   await expect(dialog).toHaveCount(0)
 })
 
-test("credentials settings saves and removes a local provider key", async ({ page, gotoSession, sdk }) => {
+test("Models keeps ChatGPT Codex access first-class", async ({ page, gotoSession }) => {
+  await gotoSession()
+
+  const dialog = await openSettings(page)
+
+  await expect(dialog.getByRole("heading", { name: "Models", exact: true })).toBeVisible()
+  await expect(dialog.getByRole("heading", { name: "ChatGPT / Codex" })).toBeVisible()
+  await expect(dialog.getByText("Sign in with ChatGPT", { exact: true }).first()).toBeVisible()
+})
+
+test("models settings saves and removes a local provider key", async ({ page, gotoSession, sdk }) => {
   await sdk.auth.remove({ providerID: "openai" }).catch(() => undefined)
 
   try {
     await gotoSession()
-    await page.getByRole("button", { name: "More", exact: true }).click()
-    await page.getByRole("menuitem", { name: "Settings", exact: true }).click()
-    const dialog = page.getByRole("dialog")
-    await dialog.getByRole("button", { name: "Credentials", exact: true }).click()
+    const dialog = await openSettings(page)
 
     await dialog.locator("select").selectOption("openai")
-    await dialog.getByPlaceholder("sk-…").fill("sk-e2e-local-only")
+    await dialog.getByLabel("API key", { exact: true }).fill("sk-e2e-local-only")
     await dialog.getByRole("button", { name: "save key", exact: true }).click()
 
     await expect
@@ -41,8 +46,10 @@ test("credentials settings saves and removes a local provider key", async ({ pag
     await expect(dialog.getByText("OpenAI", { exact: true }).last()).toBeVisible()
 
     page.once("dialog", (prompt) => prompt.accept())
-    const row = dialog.getByText("OpenAI", { exact: true }).last().locator("xpath=../..")
-    await row.getByRole("button", { name: "remove", exact: true }).click()
+    await dialog
+      .getByRole("region", { name: "Provider keys", exact: true })
+      .getByRole("button", { name: "remove", exact: true })
+      .click()
     await expect
       .poll(async () => {
         const response = await sdk.provider.list()

@@ -283,6 +283,10 @@ export const researchWorkflows: ResearchWorkflow[] = [
   },
 ]
 
+export const researchSuggestions = researchWorkflows.filter((workflow) =>
+  ["analyze-data", "run-notebook", "survey-literature"].includes(workflow.id),
+)
+
 const groups: Array<{ id: ResearchWorkflow["group"]; title: string }> = [
   { id: "analyze", title: "Analyze" },
   { id: "compute", title: "Compute" },

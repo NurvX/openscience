@@ -1,12 +1,13 @@
+@import "@fontsource-variable/inter/wght.css";
 @import "@synsci/ui/styles/tailwind";
 @import "./styles/atlas.css";
 
 /*
   OpenScience typography.
 
-  The application shell uses the native sans stack for compact, high-legibility
-  controls. Computer Modern remains available as the editorial serif for papers,
-  reports, and long-form rendered research.
+  The application shell bundles Inter Variable for compact, consistent controls.
+  Computer Modern remains available as the editorial serif for papers, reports,
+  and long-form rendered research.
 */
 @layer base {
   h1,

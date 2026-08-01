@@ -13,6 +13,11 @@ const app = "openscience"
 const legacy = "synsc"
 const detectedLegacyConflicts: Array<{ legacy: string; current: string }> = []
 
+function override(key: string): string | undefined {
+  const value = process.env[key]?.trim()
+  return value ? path.resolve(value) : undefined
+}
+
 function migrateDir(base: string): string {
   const next = path.join(base, app)
   const old = path.join(base, legacy)
@@ -44,13 +49,15 @@ function migrateFile(dir: string, oldName: string, newName: string) {
 }
 
 const cache = migrateDir(xdgCache!)
-const config = migrateDir(xdgConfig!)
+const config = override("OPENSCIENCE_CONFIG_DIR") ?? migrateDir(xdgConfig!)
 const state = migrateDir(xdgState!)
 
 // The data directory can be relocated from settings ▸ Storage. When a pointer
 // file exists (config/data-location) we honour it; otherwise the XDG default.
 // Read synchronously at boot so every Global.Path.data consumer sees one value.
 function resolveDataDir(): string {
+  const explicit = override("OPENSCIENCE_DATA_DIR")
+  if (explicit) return explicit
   const fallback = migrateDir(xdgData!)
   try {
     const pointer = readFileSync(path.join(config, "data-location"), "utf8").trim()

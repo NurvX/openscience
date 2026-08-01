@@ -108,6 +108,39 @@ export namespace MCP {
     })
   export type Status = z.infer<typeof Status>
 
+  export const Inspection = z
+    .object({
+      status: Status,
+      auth: z.enum(["authenticated", "expired", "not_authenticated"]).optional(),
+      tools: z.array(
+        z.object({
+          name: z.string(),
+          description: z.string().optional(),
+        }),
+      ),
+      resources: z.array(
+        z.object({
+          name: z.string(),
+          uri: z.string(),
+          description: z.string().optional(),
+          mimeType: z.string().optional(),
+        }),
+      ),
+      prompts: z.array(
+        z.object({
+          name: z.string(),
+          description: z.string().optional(),
+        }),
+      ),
+      errors: z.object({
+        tools: z.string().optional(),
+        resources: z.string().optional(),
+        prompts: z.string().optional(),
+      }),
+    })
+    .meta({ ref: "MCPInspection" })
+  export type Inspection = z.infer<typeof Inspection>
+
   // Register notification handlers for MCP client
   function registerNotificationHandlers(client: MCPClient, serverName: string) {
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
@@ -174,7 +207,7 @@ export namespace MCP {
 
   const state = Instance.state(
     async () => {
-      const cfg = await Config.get()
+      const cfg = await Config.getExecution()
       const config = cfg.mcp ?? {}
       const clients: Record<string, MCPClient> = {}
       const status: Record<string, Status> = {}
@@ -280,6 +313,13 @@ export namespace MCP {
       }
     }
     if (!result.mcpClient) {
+      const existingClient = s.clients[name]
+      if (existingClient) {
+        await existingClient.close().catch((error) => {
+          log.error("Failed to close existing MCP client", { name, error })
+        })
+        delete s.clients[name]
+      }
       s.status[name] = result.status
       return {
         status: s.status,
@@ -301,6 +341,14 @@ export namespace MCP {
   }
 
   async function create(key: string, mcp: Config.Mcp) {
+    OpenScience.registerSecretValues(
+      mcp.type === "local"
+        ? Object.values(mcp.environment ?? {})
+        : [
+            ...Object.values(mcp.headers ?? {}),
+            ...(typeof mcp.oauth === "object" && mcp.oauth.clientSecret ? [mcp.oauth.clientSecret] : []),
+          ],
+    )
     if (mcp.enabled === false) {
       log.info("mcp server disabled", { key })
       return {
@@ -399,7 +447,7 @@ export namespace MCP {
           })
           status = {
             status: "failed" as const,
-            error: lastError.message,
+            error: OpenScience.redactSecrets(lastError.message),
           }
         }
       }
@@ -417,7 +465,7 @@ export namespace MCP {
         env,
       })
       transport.stderr?.on("data", (chunk: Buffer) => {
-        log.info(`mcp stderr: ${chunk.toString()}`, { key })
+        log.info(`mcp stderr: ${OpenScience.redactSecrets(chunk.toString())}`, { key })
       })
 
       const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
@@ -441,7 +489,7 @@ export namespace MCP {
         })
         status = {
           status: "failed" as const,
-          error: error instanceof Error ? error.message : String(error),
+          error: OpenScience.redactSecrets(error instanceof Error ? error.message : String(error)),
         }
       }
     }
@@ -492,7 +540,7 @@ export namespace MCP {
 
   export async function status() {
     const s = await state()
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     const config = cfg.mcp ?? {}
     const result: Record<string, Status> = {}
 
@@ -505,12 +553,75 @@ export namespace MCP {
     return result
   }
 
+  export async function inspect(name: string): Promise<Inspection> {
+    const cfg = await Config.getExecution()
+    const mcp = cfg.mcp?.[name]
+    if (!mcp || !isMcpConfigured(mcp)) throw new Error(`MCP server not found: ${name}`)
+
+    const s = await state()
+    const status = s.status[name] ?? ({ status: "disabled" } as const)
+    const auth = mcp.type === "remote" && mcp.oauth !== false ? await getAuthStatus(name) : undefined
+    const client = s.clients[name]
+    if (!client) {
+      return {
+        status,
+        auth,
+        tools: [],
+        resources: [],
+        prompts: [],
+        errors: {},
+      }
+    }
+
+    const timeout = mcp.timeout ?? cfg.experimental?.mcp_timeout ?? DEFAULT_TIMEOUT
+    const failure = (error: unknown) =>
+      OpenScience.redactSecrets(error instanceof Error ? error.message : String(error))
+    const [tools, resources, prompts] = await Promise.all([
+      withTimeout(client.listTools(), timeout)
+        .then((result) => ({
+          items: result.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+          error: undefined,
+        }))
+        .catch((error) => ({ items: [], error: failure(error) })),
+      withTimeout(client.listResources(), timeout)
+        .then((result) => ({
+          items: result.resources.map((resource) => ({
+            name: resource.name,
+            uri: resource.uri,
+            description: resource.description,
+            mimeType: resource.mimeType,
+          })),
+          error: undefined,
+        }))
+        .catch((error) => ({ items: [], error: failure(error) })),
+      withTimeout(client.listPrompts(), timeout)
+        .then((result) => ({
+          items: result.prompts.map((prompt) => ({ name: prompt.name, description: prompt.description })),
+          error: undefined,
+        }))
+        .catch((error) => ({ items: [], error: failure(error) })),
+    ])
+
+    return {
+      status,
+      auth,
+      tools: tools.items,
+      resources: resources.items,
+      prompts: prompts.items,
+      errors: {
+        tools: tools.error,
+        resources: resources.error,
+        prompts: prompts.error,
+      },
+    }
+  }
+
   export async function clients() {
     return state().then((state) => state.clients)
   }
 
   export async function connect(name: string) {
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     const config = cfg.mcp ?? {}
     const mcp = config[name]
     if (!mcp) {
@@ -577,7 +688,7 @@ export namespace MCP {
   export async function tools() {
     const result: Record<string, Tool> = {}
     const s = await state()
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     const config = cfg.mcp ?? {}
     const clientsSnapshot = await clients()
     const defaultTimeout = cfg.experimental?.mcp_timeout
@@ -715,7 +826,7 @@ export namespace MCP {
    * Returns the authorization URL that should be opened in a browser.
    */
   export async function startAuth(mcpName: string): Promise<{ authorizationUrl: string }> {
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     const mcpConfig = cfg.mcp?.[mcpName]
 
     if (!mcpConfig) {
@@ -875,7 +986,7 @@ export namespace MCP {
       await McpAuth.clearCodeVerifier(mcpName)
 
       // Now try to reconnect
-      const cfg = await Config.get()
+      const cfg = await Config.getExecution()
       const mcpConfig = cfg.mcp?.[mcpName]
 
       if (!mcpConfig) {
@@ -909,6 +1020,10 @@ export namespace MCP {
     McpOAuthCallback.cancelPending(mcpName)
     pendingOAuthTransports.delete(mcpName)
     await McpAuth.clearOAuthState(mcpName)
+    await disconnect(mcpName)
+    const cfg = await Config.getExecution()
+    const entry = cfg.mcp?.[mcpName]
+    if (entry && isMcpConfigured(entry)) await connect(mcpName)
     log.info("removed oauth credentials", { mcpName })
   }
 
@@ -916,7 +1031,7 @@ export namespace MCP {
    * Check if an MCP server supports OAuth (remote servers support OAuth by default unless explicitly disabled).
    */
   export async function supportsOAuth(mcpName: string): Promise<boolean> {
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     const mcpConfig = cfg.mcp?.[mcpName]
     if (!mcpConfig) return false
     if (!isMcpConfigured(mcpConfig)) return false

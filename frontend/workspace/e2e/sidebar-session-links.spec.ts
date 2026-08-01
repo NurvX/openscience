@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures"
-import { promptSelector } from "./utils"
+import { promptSelector, sessionTab } from "./utils"
 
 test("sidebar session rows navigate to the selected session", async ({ page, slug, sdk, gotoSession }) => {
   const stamp = Date.now()
@@ -22,7 +22,7 @@ test("sidebar session rows navigate to the selected session", async ({ page, slu
 
     await expect(page).toHaveURL(new RegExp(`/${slug}/session/${two.id}(?:\\?|#|$)`))
     await expect(page.locator(promptSelector)).toBeVisible()
-    await expect(page.getByRole("tab", { name: twoTitle, exact: true })).toHaveAttribute("aria-selected", "true")
+    await expect(sessionTab(page, twoTitle)).toHaveAttribute("aria-selected", "true")
   } finally {
     await sdk.session.delete({ sessionID: one.id }).catch(() => undefined)
     await sdk.session.delete({ sessionID: two.id }).catch(() => undefined)

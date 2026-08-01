@@ -2,7 +2,16 @@ import { expect, test } from "bun:test"
 import path from "path"
 import { SystemPrompt } from "../../src/session/system"
 import { Instance } from "../../src/project/instance"
+import { ProjectTrust } from "../../src/project/trust"
 import { tmpdir } from "../fixture/fixture"
+
+async function trust() {
+  const status = await ProjectTrust.status(Instance.project)
+  await ProjectTrust.update(Instance.project, {
+    trusted: true,
+    root: status.root,
+  })
+}
 
 async function writeSkill(dir: string, name: string, category: string) {
   await Bun.write(
@@ -29,6 +38,7 @@ test("availableSkills lists loaded skills instead of static prompt entries", asy
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      await trust()
       const section = await SystemPrompt.availableSkills([])
       expect(section).toContain("<available-skills>")
       expect(section).toContain("### biology")
@@ -50,6 +60,7 @@ test("availableSkills excludes permission-denied skills", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      await trust()
       const section = await SystemPrompt.availableSkills([
         {
           permission: "skill",

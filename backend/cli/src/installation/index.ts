@@ -10,6 +10,8 @@ import { Flag } from "../flag/flag"
 declare global {
   const OPENSCIENCE_VERSION: string
   const OPENSCIENCE_CHANNEL: string
+  const OPENSCIENCE_LIBC: string
+  const OPENSCIENCE_PLATFORM_PACKAGE: string
 }
 
 export namespace Installation {
@@ -198,6 +200,14 @@ export namespace Installation {
   export const VERSION = typeof OPENSCIENCE_VERSION === "string" ? OPENSCIENCE_VERSION : "local"
   export const CHANNEL = typeof OPENSCIENCE_CHANNEL === "string" ? OPENSCIENCE_CHANNEL : "local"
   export const USER_AGENT = `openscience/${CHANNEL}/${VERSION}/${Flag.OPENSCIENCE_CLIENT}`
+  export const PLATFORM_PACKAGE =
+    typeof OPENSCIENCE_PLATFORM_PACKAGE === "string"
+      ? OPENSCIENCE_PLATFORM_PACKAGE
+      : `@synsci/openscience-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}${
+          process.platform === "linux" && typeof OPENSCIENCE_LIBC === "string" && OPENSCIENCE_LIBC === "musl"
+            ? "-musl"
+            : ""
+        }`
 
   /** OData query for the latest published version of a Chocolatey package.
    *  The id must match what the CLI actually publishes to Chocolatey

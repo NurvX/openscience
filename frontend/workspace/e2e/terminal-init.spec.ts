@@ -1,9 +1,9 @@
 import { test, expect } from "./fixtures"
-import { terminalSelector } from "./utils"
+import { createSdk, terminalSelector, trustProject } from "./utils"
 
 test.describe.configure({ mode: "serial" })
 
-test("terminal executes output and can switch and close another tab", async ({ page, gotoSession, sdk }) => {
+test("terminal executes output and can switch and close another tab", async ({ page, openSession, sdk, directory }) => {
   const initial = new Set((await sdk.pty.list()).data?.map((pty) => pty.id) ?? [])
   const marker = "OPENSCIENCE_TERMINAL_E2E_4242"
   let output = ""
@@ -16,18 +16,15 @@ test("terminal executes output and can switch and close another tab", async ({ p
   })
 
   try {
-    await gotoSession()
+    await openSession()
+    await trustProject(createSdk(directory), directory)
 
-    await page.getByRole("button", { name: /^terminal$/i }).click()
-    const terminalTab = page.getByRole("tab", { name: /^terminal$/i })
-    await expect(terminalTab).toHaveAttribute("aria-selected", "true")
+    await page.getByRole("button", { name: "Open project terminal", exact: true }).click()
+    const surface = page.getByRole("region", { name: "Session terminal" })
+    await expect(surface).toBeVisible()
 
     const terminals = page.locator(terminalSelector)
-    if ((await terminals.count()) === 0) {
-      await page.getByRole("button", { name: "start terminal", exact: true }).click()
-    }
-
-    await expect(terminals.first()).toBeVisible()
+    await expect(terminals.first()).toBeVisible({ timeout: 15_000 })
     const input = terminals.first().locator("textarea")
     await expect(input).toHaveCount(1)
     await expect.poll(() => output.length, { timeout: 15_000 }).toBeGreaterThan(0)
@@ -48,7 +45,7 @@ test("terminal executes output and can switch and close another tab", async ({ p
 
     const before = await terminals.count()
 
-    await page.getByRole("button", { name: "new", exact: true }).click()
+    await page.getByRole("button", { name: "New terminal", exact: true }).click()
     await expect(terminals).toHaveCount(before + 1)
     await expect(terminals.nth(before).locator("textarea")).toHaveCount(1)
 
@@ -60,19 +57,25 @@ test("terminal executes output and can switch and close another tab", async ({ p
 
     const firstTerminal = page.locator(`#terminal-wrapper-${firstPty.id} ${terminalSelector}`)
     const secondTerminal = page.locator(`#terminal-wrapper-${secondPty.id} ${terminalSelector}`)
-    const firstTab = page.getByText(firstPty.title, { exact: true }).locator("..")
-    const secondTab = page.getByText(secondPty.title, { exact: true }).locator("..")
+    // Terminal tabs carry aria-controls pointing at their panel, which is a
+    // stable identity even when two shells share a title.
+    const tab = (id: string) => surface.locator(`[role="tab"][aria-controls="terminal-wrapper-${id}"]`)
+    const closeTab = (id: string) =>
+      surface
+        .locator(".terminal-surface__tab-shell")
+        .filter({ has: page.locator(`[aria-controls="terminal-wrapper-${id}"]`) })
+        .locator(".terminal-surface__close")
 
     await expect(firstTerminal).toBeHidden()
     await expect(secondTerminal).toBeVisible()
 
-    await firstTab.click()
+    await tab(firstPty.id).click()
     await expect(firstTerminal).toBeVisible()
     await expect(secondTerminal).toBeHidden()
 
-    await secondTab.click()
+    await tab(secondPty.id).click()
     await expect(secondTerminal).toBeVisible()
-    await secondTab.locator("span").last().click()
+    await closeTab(secondPty.id).click()
 
     await expect(terminals).toHaveCount(before)
     await expect(firstTerminal).toBeVisible()
@@ -85,18 +88,17 @@ test("terminal executes output and can switch and close another tab", async ({ p
   }
 })
 
-test("terminal panel can be collapsed and reopened", async ({ page, gotoSession }) => {
-  await gotoSession()
+test("terminal panel can be collapsed and reopened", async ({ page, openSession }) => {
+  await openSession()
 
-  await page.getByRole("button", { name: /^terminal$/i }).click()
-  const terminalTab = page.getByRole("tab", { name: /^terminal$/i })
-  await expect(terminalTab).toBeVisible()
-  await expect(terminalTab).toHaveAttribute("aria-selected", "true")
+  const open = page.getByRole("button", { name: "Open project terminal", exact: true })
+  await open.click()
+  const surface = page.getByRole("region", { name: "Session terminal" })
+  await expect(surface).toBeVisible()
 
-  await page.getByTitle("hide panel", { exact: true }).click()
-  await expect(terminalTab).toHaveCount(0)
+  await page.getByRole("button", { name: "Close context", exact: true }).click()
+  await expect(surface).toHaveCount(0)
 
-  await page.getByRole("button", { name: /^terminal$/i }).click()
-  await expect(terminalTab).toBeVisible()
-  await expect(terminalTab).toHaveAttribute("aria-selected", "true")
+  await open.click()
+  await expect(surface).toBeVisible()
 })

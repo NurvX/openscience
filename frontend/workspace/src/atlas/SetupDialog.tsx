@@ -5,7 +5,8 @@
 //
 //   • Atlas managed → open the dashboard sign-in in a new tab, paste the `thk_`
 //     key, POST /account/login-key, then resync so managed models light up.
-//   • Your own keys → the real Credentials add-key flow (auth.set + global.dispose).
+//   • ChatGPT / Codex → the same OAuth flow exposed in Models.
+//   • Your own keys → the real model-key flow (auth.set + global.dispose).
 //   • Not now → dismiss + persist a localStorage marker so we don't re-prompt.
 //
 // The one hosted checkout that leaves the app is "add funds"; everything else
@@ -20,6 +21,8 @@ import { usePlatform } from "@/context/platform"
 import { URLS } from "@/config/urls"
 import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import { settingsApi } from "@/components/settings/api"
+import { CodexConnection } from "@/components/settings/CodexConnection"
+import { MODEL_PROVIDERS, modelProvider } from "@/components/settings/model-providers"
 
 export const SETUP_DISMISS_KEY = "openscience.setup.dismissed"
 
@@ -37,18 +40,9 @@ export function openSetupDialog(dialog: ReturnType<typeof useDialog>, onDismiss?
   dialog.show(() => <SetupDialog onDismiss={onDismiss} />)
 }
 
-const BYOK_PROVIDERS: { id: string; label: string; placeholder: string }[] = [
-  { id: "anthropic", label: "Anthropic", placeholder: "sk-ant-…" },
-  { id: "openai", label: "OpenAI", placeholder: "sk-…" },
-  { id: "google", label: "Google", placeholder: "AIza…" },
-  { id: "openrouter", label: "OpenRouter", placeholder: "sk-or-…" },
-  { id: "xai", label: "xAI", placeholder: "xai-…" },
-  { id: "meta", label: "Meta", placeholder: "meta-…" },
-]
-
 const money = (n: number) => `$${(n < 0 ? 0 : n).toFixed(n >= 100 ? 0 : 2)}`
 
-type View = "choose" | "managed" | "byok" | "done"
+type View = "choose" | "managed" | "codex" | "byok" | "done"
 
 export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
   const dialog = useDialog()
@@ -60,7 +54,7 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
 
   const [view, setView] = createSignal<View>("choose")
   const [key, setKey] = createSignal("")
-  const [provider, setProvider] = createSignal(BYOK_PROVIDERS[0].id)
+  const [provider, setProvider] = createSignal<string>(MODEL_PROVIDERS[0].id)
   const [byokKey, setByokKey] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string>()
@@ -156,12 +150,20 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
             <ChoiceCard
               title="Atlas managed"
               hint="recommended"
-              body="Prepaid wallet, zero setup. Metered credits — no API keys needed."
+              body="Sign in to Atlas and use a prepaid wallet for metered model access."
               onClick={openManaged}
             />
             <ChoiceCard
+              title="ChatGPT / Codex"
+              body="Use supported OpenAI models through an existing ChatGPT Plus, Pro, or Business plan."
+              onClick={() => {
+                setError(undefined)
+                setView("codex")
+              }}
+            />
+            <ChoiceCard
               title="Your own keys"
-              body="Bring your own provider key. Stored on this machine, free and unmetered here."
+              body="Bring your own provider key. The provider bills you directly."
               onClick={() => {
                 setError(undefined)
                 setView("byok")
@@ -169,7 +171,7 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
             />
             <ChoiceCard
               title="Not now"
-              body="Explore first with the free demo models. Set up anytime."
+              body="Explore projects and files without a model. Set up chat anytime."
               muted
               onClick={dismiss}
             />
@@ -218,6 +220,20 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
           </div>
         </Show>
 
+        {/* ── ChatGPT / Codex OAuth ── */}
+        <Show when={view() === "codex"}>
+          <p style={intro()}>
+            Sign in through OpenAI to use supported Codex models from your ChatGPT plan. OAuth tokens stay in the
+            owner-only local auth file, not the system keychain.
+          </p>
+          <CodexConnection onError={setError} onConnected={() => dialog.close()} />
+          <div style={{ display: "flex", "justify-content": "flex-end" }}>
+            <Button variant="ghost" size="small" onClick={() => setView("choose")}>
+              back
+            </Button>
+          </div>
+        </Show>
+
         {/* ── Managed connected ── */}
         <Show when={view() === "done"}>
           <p style={intro()}>
@@ -236,11 +252,14 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
 
         {/* ── Bring your own key ── */}
         <Show when={view() === "byok"}>
-          <p style={intro()}>Add a provider key. It's stored on this machine and billed directly by the provider.</p>
+          <p style={intro()}>
+            Add a provider key. It is stored in the owner-only local auth file, not the system keychain, and billed
+            directly by the provider.
+          </p>
           <div style={{ display: "flex", "flex-direction": "column", gap: "6px" }}>
             <span style={label()}>Provider</span>
             <div style={{ display: "flex", "flex-wrap": "wrap", gap: "6px" }}>
-              <For each={BYOK_PROVIDERS}>
+              <For each={MODEL_PROVIDERS}>
                 {(p) => (
                   <button
                     type="button"
@@ -268,7 +287,7 @@ export function SetupDialog(props: { onDismiss?: () => void }): JSX.Element {
             <TextField
               type="password"
               hideLabel
-              placeholder={BYOK_PROVIDERS.find((p) => p.id === provider())?.placeholder ?? "sk-…"}
+              placeholder={modelProvider(provider()).placeholder}
               value={byokKey()}
               disabled={busy()}
               onChange={setByokKey}

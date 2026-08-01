@@ -17,6 +17,7 @@ import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
 import { OpenScience, InsufficientCreditsError } from "@/openscience"
 import { requiresWalletBalance, shouldReportUsage, resolveCredentialSource, llmBillingMode } from "./billing-gate"
+import { SessionTraceStore } from "./trace-store"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -181,8 +182,8 @@ export namespace SessionProcessor {
                 case "reasoning-end":
                   if (value.id in reasoningMap) {
                     const part = reasoningMap[value.id]
-                    part.text = part.text.trimEnd()
-
+                    // A provider signature authenticates the exact thinking bytes.
+                    // Trimming even one trailing byte makes the next turn invalid.
                     part.time = {
                       ...part.time,
                       end: Date.now(),
@@ -506,6 +507,13 @@ export namespace SessionProcessor {
               if (retry !== undefined && attempt < MAX_RETRY_ATTEMPTS) {
                 attempt++
                 const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
+                await SessionTraceStore.recordRetry({
+                  sessionID: input.sessionID,
+                  messageID: input.assistantMessage.id,
+                  attempt,
+                  message: retry,
+                  delayMs: delay,
+                })
                 SessionStatus.set(input.sessionID, {
                   type: "retry",
                   attempt,

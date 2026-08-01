@@ -18,6 +18,7 @@ import { NamedError } from "@synsci/util/error"
 import { LSP } from "../lsp"
 import { Format } from "../format"
 import { Instance } from "../project/instance"
+import { Project } from "../project/project"
 import { Vcs } from "../project/vcs"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill/skill"
@@ -43,6 +44,8 @@ import { HTTPException } from "hono/http-exception"
 import { errors } from "./error"
 import { QuestionRoutes } from "./routes/question"
 import { PermissionRoutes } from "./routes/permission"
+import { ReviewSettingsRoutes } from "./routes/settings/review"
+import { SearchRoutes } from "./routes/search"
 import { GlobalRoutes } from "./routes/global"
 import { AccountRoutes } from "./routes/account"
 import { SettingsSkillsRoutes } from "./routes/settings/skills"
@@ -51,13 +54,14 @@ import { NetworkSettingsRoutes } from "./routes/settings/network"
 import { CredentialsRoutes } from "./routes/settings/credentials"
 import { StorageRoutes } from "./routes/settings/storage"
 import { ComputeSettingsRoutes } from "./routes/settings/compute"
-import { RegistryPermissionsRoutes } from "./routes/settings/registry-permissions"
 import { SettingsPreferencesRoutes } from "./routes/settings/preferences"
 import { LocalModelsRoutes } from "./routes/settings/local"
 import { SandboxSettingsRoutes } from "./routes/settings/sandbox"
 import { BillingSettingsRoutes } from "./routes/settings/billing"
 import { WalletSettingsRoutes } from "./routes/settings/wallet"
 import { SettingsUsageRoutes } from "./routes/settings/usage"
+import { UpdatesSettingsRoutes } from "./routes/settings/updates"
+import { projectSelection } from "./project-selection"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -96,6 +100,16 @@ export namespace Server {
             let status: ContentfulStatusCode
             if (err instanceof Storage.NotFoundError) status = 404
             else if (err instanceof Provider.ModelNotFoundError) status = 400
+            else if (err.name === "SessionFilesystemDeniedError") status = 403
+            else if (err.name === "SessionFilesystemInvalidPathError") status = 400
+            else if (err.name === "SessionDirectoryMismatchError" || err.name === "SessionDirectoryImmutableError")
+              status = 409
+            else if (err.name === "ProjectUnknownError") status = 404
+            else if (err.name === "ProjectStaleError") status = 410
+            else if (err.name === "ProjectMismatchError") status = 409
+            else if (err.name === "ProjectTrustDeniedError") status = 403
+            else if (err.name === "ProjectTrustRootMismatchError") status = 409
+            else if (err.name === "ExecutionAuthorityDeniedError") status = 403
             else if (err.name.startsWith("Worktree")) status = 400
             else status = 500
             return c.json(err.toObject(), { status })
@@ -162,12 +176,13 @@ export namespace Server {
         .route("/settings/credentials", CredentialsRoutes())
         .route("/settings/storage", StorageRoutes())
         .route("/settings/compute", ComputeSettingsRoutes())
-        .route("/settings/permissions", RegistryPermissionsRoutes())
+        .route("/settings/review", ReviewSettingsRoutes())
         .route("/settings/preferences", SettingsPreferencesRoutes())
         .route("/settings/local", LocalModelsRoutes())
         .route("/settings/sandbox", SandboxSettingsRoutes())
         .route("/settings/billing", BillingSettingsRoutes())
         .route("/settings/wallet", WalletSettingsRoutes())
+        .route("/settings/updates", UpdatesSettingsRoutes())
         .put(
           "/auth/:providerID",
           describeRoute({
@@ -234,8 +249,8 @@ export namespace Server {
             return c.json(true)
           },
         )
-        // Folder-resolve endpoints are filesystem-global (no project Instance
-        // needed), so mount before the Instance.provide wrapper below.
+        // Folder picker discovery remains filesystem-global; path validation
+        // resolves project capabilities inside the route when one is supplied.
         .route("/api/resolve-folder", FolderResolveRoutes())
         // Atlas graph bridge — proxies /api/atlas/* to the Atlas REST API
         // using the user's stored thk_ key (see routes/atlas-bridge.ts).
@@ -243,16 +258,18 @@ export namespace Server {
         // Repository tab (status/commit/push/remote) — shells out to git.
         .route("/api/repo", RepoRoutes())
         .use(async (c, next) => {
-          let directory = c.req.query("directory") || c.req.header("x-openscience-directory") || process.cwd()
-          try {
-            directory = decodeURIComponent(directory)
-          } catch {
-            // fallback to original value
-          }
+          const selected = await projectSelection(c)
+          const directory = selected.directory ?? process.cwd()
           return Instance.provide({
             directory,
             init: InstanceBootstrap,
             async fn() {
+              if (selected.project && Instance.project.id !== selected.project.id) {
+                throw new Project.MismatchError({
+                  projectID: selected.project.id,
+                  directory: Instance.directory,
+                })
+              }
               return next()
             },
           })
@@ -276,6 +293,7 @@ export namespace Server {
         .route("/config", ConfigRoutes())
         .route("/experimental", ExperimentalRoutes())
         .route("/session", SessionRoutes())
+        .route("/search", SearchRoutes())
         .route("/permission", PermissionRoutes())
         .route("/question", QuestionRoutes())
         .route("/provider", ProviderRoutes())

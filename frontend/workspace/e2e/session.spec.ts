@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures"
-import { promptSelector } from "./utils"
+import { promptSelector, sessionTab } from "./utils"
 
 function isSessionResponse(response: import("@playwright/test").Response, method: string, sessionID?: string) {
   const path = new URL(response.url()).pathname.replace(/\/$/, "")
@@ -26,12 +26,12 @@ test("can open an existing session and type into the prompt", async ({ page, sdk
   }
 })
 
-test("session lifecycle works through the sidebar UI", async ({ page, slug, sdk, gotoSession }) => {
+test("session lifecycle works through the sidebar UI", async ({ page, slug, sdk, gotoSession, openSession }) => {
   const renamedTitle = `e2e ui lifecycle ${Date.now()}`
   let sessionID: string | undefined
 
   try {
-    await gotoSession()
+    await openSession()
 
     const newResearch = page.getByRole("button", { name: "New research", exact: true })
     const sidebar = page.getByRole("complementary").filter({ has: newResearch })
@@ -39,16 +39,14 @@ test("session lifecycle works through the sidebar UI", async ({ page, slug, sdk,
     await expect(sidebar).toBeVisible()
     const baselineCount = await rows.count()
 
-    const createResponsePromise = page.waitForResponse((response) => isSessionResponse(response, "POST"))
     await newResearch.click()
-    const createResponse = await createResponsePromise
-    expect(createResponse.ok()).toBe(true)
+    await expect(page).toHaveURL(new RegExp(`/${slug}/session/new(?:\\?|#|$)`))
+    await expect(rows).toHaveCount(baselineCount)
 
-    const created = (await createResponse.json()) as { id?: string; title?: string }
-    if (!created.id || !created.title) throw new Error("UI session create returned no id or title")
+    const created = await sdk.session.create().then((response) => response.data)
+    if (!created?.id || !created.title) throw new Error("Session create returned no id or title")
     sessionID = created.id
-
-    await expect(page).toHaveURL(new RegExp(`/${slug}/session/${sessionID}(?:\\?|#|$)`))
+    await gotoSession(sessionID)
     await expect(rows).toHaveCount(baselineCount + 1)
 
     const originalRow = rows.filter({ hasText: created.title })
@@ -67,7 +65,7 @@ test("session lifecycle works through the sidebar UI", async ({ page, slug, sdk,
     const renamedRow = rows.filter({ hasText: renamedTitle })
     await expect(renamedRow).toHaveCount(1)
     await expect(rows.filter({ hasText: created.title })).toHaveCount(0)
-    await expect(page.getByRole("tab", { name: renamedTitle, exact: true })).toHaveAttribute("aria-selected", "true")
+    await expect(sessionTab(page, renamedTitle)).toHaveAttribute("aria-selected", "true")
     await expect(page).toHaveURL(new RegExp(`/${slug}/session/${sessionID}(?:\\?|#|$)`))
 
     await renamedRow.hover()
@@ -80,7 +78,7 @@ test("session lifecycle works through the sidebar UI", async ({ page, slug, sdk,
 
     await expect(renamedRow).toHaveCount(0)
     await expect(rows).toHaveCount(baselineCount)
-    await expect(page.getByRole("tab", { name: renamedTitle, exact: true })).toHaveCount(0)
+    await expect(sessionTab(page, renamedTitle)).toHaveCount(0)
     if (baselineCount === 0) {
       await expect(page).toHaveURL(new RegExp(`/${slug}/session/new(?:\\?|#|$)`))
     } else {

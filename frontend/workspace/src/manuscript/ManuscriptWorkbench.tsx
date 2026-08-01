@@ -1,11 +1,10 @@
 import { For, Show, createMemo, createResource, createSignal, type JSX } from "solid-js"
 import { Markdown } from "@synsci/ui/markdown"
-import { usePlatform } from "@/context/platform"
+import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
-import { centerTabs } from "@/atlas/store/centerTabs"
 import { uiStore } from "@/atlas/store/ui"
 import { toast } from "@/atlas/Toast"
-import { IconBookOpen, IconCheckCircle, IconDownload, IconFile, IconSearch, IconSparkles } from "@/atlas/shared/Icon"
+import { IconBookOpen, IconCheckCircle, IconDownload, IconFile, IconSearch } from "@/atlas/shared/Icon"
 import { FONT_CODE, FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import type { ArtifactInfo } from "@/artifacts/model"
 import {
@@ -56,7 +55,7 @@ export function ManuscriptWorkbench(props: {
   onChange: (text: string) => void
 }): JSX.Element {
   const sdk = useSDK()
-  const platform = usePlatform()
+  const params = useParams()
   const [panel, setPanel] = createSignal<Panel>()
   const [citationQuery, setCitationQuery] = createSignal("")
   const [figureQuery, setFigureQuery] = createSignal("")
@@ -65,14 +64,15 @@ export function ManuscriptWorkbench(props: {
   const [editor, setEditor] = createSignal<HTMLTextAreaElement>()
   const [reviewKey, setReviewKey] = createSignal(0)
   const manuscript = createMemo(() => parseManuscript(props.text))
-  const request = () => platform.fetch ?? fetch
-  const url = (route: string, path?: string) =>
-    `${sdk.url.replace(/\/$/, "")}${route}?directory=${encodeURIComponent(props.directory)}${path ? `&path=${encodeURIComponent(path)}` : ""}`
+  const query = (path?: string) => ({
+    path,
+    sessionID: params.id && params.id !== "new" ? params.id : undefined,
+  })
 
   const [artifacts] = createResource(
     () => props.directory,
     async () => {
-      const response = await request()(url("/file/artifacts"))
+      const response = await sdk.request("/file/artifacts")
       if (!response.ok) throw new Error(`Artifact discovery failed (${response.status})`)
       const value: unknown = await response.json()
       if (!Array.isArray(value)) return []
@@ -86,7 +86,7 @@ export function ManuscriptWorkbench(props: {
       const rows = await Promise.all(
         manuscript().bibliographies.map(async (reference) => {
           const path = resolveReferencePath(props.path, reference)
-          const response = await request()(url("/file/content", path))
+          const response = await sdk.request("/file/content", undefined, query(path))
           if (!response.ok) return []
           const value: unknown = await response.json()
           const content = record(value)?.content
@@ -103,7 +103,7 @@ export function ManuscriptWorkbench(props: {
   const [capabilities] = createResource(
     () => props.directory,
     async () => {
-      const response = await request()(url("/file/publication/capabilities"))
+      const response = await sdk.request("/file/publication/capabilities")
       if (!response.ok) throw new Error(`Publication tools unavailable (${response.status})`)
       return (await response.json()) as PublicationCapabilities
     },
@@ -112,9 +112,9 @@ export function ManuscriptWorkbench(props: {
   const [review, reviewApi] = createResource(
     () => `${props.directory}:${props.path}:${reviewKey()}`,
     async () => {
-      const response = await request()(url("/file/reviews", props.path))
+      const response = await sdk.request("/file/reviews", undefined, query(props.path))
       if (response.status === 404) return
-      if (!response.ok) throw new Error(`Publication review unavailable (${response.status})`)
+      if (!response.ok) throw new Error(`Publication preflight unavailable (${response.status})`)
       return (await response.json()) as PublicationReview
     },
   )
@@ -143,7 +143,7 @@ export function ManuscriptWorkbench(props: {
   )
   const reviewed = createMemo(() => Boolean(review.latest?.finalized && !review.latest.stale && !props.dirty))
   const preview = createMemo(() =>
-    rewritePreviewImages(manuscript().body, props.path, (path) => url("/file/raw", path)),
+    rewritePreviewImages(manuscript().body, props.path, (path) => sdk.request.url("/file/raw", query(path))),
   )
 
   const toggle = (next: Panel) => setPanel((current) => (current === next ? undefined : next))
@@ -184,10 +184,9 @@ export function ManuscriptWorkbench(props: {
   }
   const openReview = () => {
     uiStore.setArtifactPaneTab("review")
-    uiStore.setRightPaneMode("artifact")
-    uiStore.setRightPaneOpen(true)
     setReviewKey((value) => value + 1)
     void reviewApi.refetch()
+    toast.info("Preflight ready in Details")
   }
   const publish = async (format: PublicationFormat, readiness: "draft" | "reviewed") => {
     if (props.dirty || props.saving) {
@@ -196,21 +195,23 @@ export function ManuscriptWorkbench(props: {
     }
     const report = review.latest
     if (readiness === "reviewed" && (!report?.finalized || report.stale)) {
-      toast.error("reviewed export locked", "Finalize a current publication review first.")
+      toast.error("preflight export locked", "Finalize the current publication preflight first.")
       return
     }
     const key = `${readiness}:${format}`
     setPosting(key)
-    const response = await request()(url("/file/publication"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        path: props.path,
-        format,
-        readiness,
-        ...(readiness === "reviewed" && report ? { review_id: report.id } : {}),
-      }),
-    }).catch(() => undefined)
+    const response = await sdk
+      .request("/file/publication", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: props.path,
+          format,
+          readiness,
+          ...(readiness === "reviewed" && report ? { review_id: report.id } : {}),
+        }),
+      })
+      .catch(() => undefined)
     setPosting(undefined)
     if (!response?.ok) {
       const detail = await response?.text().catch(() => "")
@@ -220,10 +221,10 @@ export function ManuscriptWorkbench(props: {
     const result = (await response.json()) as PublicationResult
     toast.success(`${format.toUpperCase()} ready`, result.path)
     if (!["docx", "pptx"].includes(result.format)) {
-      centerTabs.openFile(props.directory, result.path)
+      uiStore.openFile(props.directory, result.path)
       return
     }
-    const raw = await request()(url("/file/raw", result.path))
+    const raw = await sdk.request("/file/raw", undefined, query(result.path))
     if (!raw.ok) return
     const object = URL.createObjectURL(await raw.blob())
     const anchor = document.createElement("a")
@@ -346,7 +347,7 @@ export function ManuscriptWorkbench(props: {
                       onClick={() => addFigure(figure)}
                     >
                       <img
-                        src={url("/file/raw", figure.path)}
+                        src={sdk.request.url("/file/raw", query(figure.path))}
                         alt=""
                         style={{ width: "50px", height: "34px", "object-fit": "cover", "border-radius": "3px" }}
                       />
@@ -390,22 +391,22 @@ export function ManuscriptWorkbench(props: {
                   </For>
                 </ExportGroup>
                 <ExportGroup
-                  title={reviewed() ? "Reviewed bytes" : "Reviewed export locked"}
+                  title={reviewed() ? "Preflight-checked bytes" : "Preflight export locked"}
                   detail={
                     reviewed()
                       ? `Bound to ${review.latest!.finalized!.artifactHash.slice(0, 12)}.`
                       : props.dirty
-                        ? "Save the manuscript, then refresh its review."
+                        ? "Save the manuscript, then refresh its preflight."
                         : review.latest?.stale
-                          ? "The last review is stale. Run and finalize it again."
-                          : "Run and finalize the publication review first."
+                          ? "The last preflight is stale. Run and finalize it again."
+                          : "Run and finalize the publication preflight first."
                   }
                 >
                   <Show
                     when={reviewed()}
                     fallback={
                       <button type="button" style={reviewButton()} onClick={openReview}>
-                        open review
+                        open preflight
                       </button>
                     }
                   >
@@ -591,7 +592,7 @@ function ExportButton(props: {
   return (
     <button
       type="button"
-      aria-label={`Export ${props.readiness} ${label()}`}
+      aria-label={`Export ${props.readiness === "reviewed" ? "preflight-checked" : "draft"} ${label()}`}
       disabled={props.disabled}
       onClick={props.onClick}
       style={exportButton(props.disabled)}
@@ -623,9 +624,6 @@ function PaneLabel(props: { label: string; detail: string; active?: boolean }): 
       <span style={{ flex: 1, "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
         {props.detail}
       </span>
-      <Show when={props.label === "LIVE PREVIEW"}>
-        <IconSparkles size={10} style={{ color: "var(--color-text-faint)" }} />
-      </Show>
     </div>
   )
 }

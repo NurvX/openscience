@@ -25,4 +25,18 @@ describe("wrapper package manifest", () => {
       "@synsci/openscience-linux-x64": "1.2.3",
     })
   })
+
+  test("keeps postinstall verification advisory when lifecycle scripts are enabled", () => {
+    const manifest = createWrapperPackageManifest({
+      source: {
+        name: "@synsci/openscience",
+      },
+      version: "1.2.3",
+      binaries: {
+        "@synsci/openscience-darwin-arm64": "1.2.3",
+      },
+    })
+
+    expect(manifest.scripts.postinstall).toEndWith("|| exit 0")
+  })
 })

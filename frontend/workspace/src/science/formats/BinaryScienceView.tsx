@@ -1,5 +1,4 @@
 import { For, Match, Show, Switch, createResource, type JSX } from "solid-js"
-import { usePlatform } from "@/context/platform"
 import { useSDK } from "@/context/sdk"
 import { FONT_CODE, FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import {
@@ -18,16 +17,14 @@ import {
 export function BinaryScienceView(props: {
   path: string
   directory: string
+  sessionID?: string
   format: BinaryScienceFormat
 }): JSX.Element {
   const sdk = useSDK()
-  const platform = usePlatform()
   const [inspection, { refetch }] = createResource(
-    () => [props.directory, props.path] as const,
-    async ([directory, path]) => {
-      const request = platform.fetch ?? fetch
-      const url = `${sdk.url.replace(/\/$/, "")}/file/inspect?directory=${encodeURIComponent(directory)}&path=${encodeURIComponent(path)}`
-      const response = await request(url)
+    () => [props.directory, props.path, props.sessionID] as const,
+    async ([, path, sessionID]) => {
+      const response = await sdk.request("/file/inspect", undefined, { path, sessionID })
       if (!response.ok) throw new Error(`inspection failed (${response.status})`)
       return normalizeInspection(await response.json())
     },

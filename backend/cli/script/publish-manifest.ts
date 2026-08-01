@@ -22,7 +22,10 @@ export function createWrapperPackageManifest(options: WrapperPackageManifestOpti
       // Best-effort: clears a stale global @synsci/cli whose `openscience`
       // bin link would make npm refuse the install (EEXIST); never fails.
       preinstall: "node ./preinstall.mjs || exit 0",
-      postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
+      // Advisory only. The Node wrapper resolves and validates the native
+      // package at launch, so blocked or failed lifecycle scripts must not
+      // turn an otherwise usable package into a failed install.
+      postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs || exit 0",
     },
     version: options.version,
     // npm provenance refuses packages whose repository.url doesn't match

@@ -31,6 +31,8 @@ import { Global } from "@/global"
 import { Env } from "@/env"
 import { OpenScience } from "@/openscience"
 import { lazy } from "@/util/lazy"
+import { JsonStore } from "@/util/jsonstore"
+import { SecretFile } from "@/util/secret-file"
 
 type FieldType = "password" | "text" | "textarea"
 
@@ -125,19 +127,14 @@ const StoreEntry = z.object({
   updated_at: z.string(),
 })
 type StoreEntry = z.infer<typeof StoreEntry>
-type Store = Record<string, StoreEntry>
+const Store = z.record(z.string(), StoreEntry)
+type Store = z.infer<typeof Store>
 
 const storePath = path.join(Global.Path.data, "credentials.json")
 const keyPath = path.join(Global.Path.data, "credentials.key")
 
 async function machineKey(): Promise<Buffer> {
-  const existing = await Bun.file(keyPath)
-    .arrayBuffer()
-    .catch(() => undefined)
-  if (existing && existing.byteLength === 32) return Buffer.from(existing)
-  const key = crypto.randomBytes(32)
-  await Bun.write(keyPath, key, { mode: 0o600 })
-  return key
+  return SecretFile.key(keyPath)
 }
 
 async function encrypt(plain: string): Promise<string> {
@@ -162,19 +159,25 @@ async function decrypt(payload: string): Promise<string> {
   return Buffer.concat([decipher.update(enc), decipher.final()]).toString("utf8")
 }
 
-async function readStore(): Promise<Store> {
-  const data = await Bun.file(storePath)
-    .json()
-    .catch(() => ({}) as Record<string, unknown>)
-  return Object.entries(data).reduce((acc, [id, value]) => {
-    const parsed = StoreEntry.safeParse(value)
-    if (parsed.success) acc[id] = parsed.data
-    return acc
-  }, {} as Store)
+function parseStore(data: Record<string, unknown>): Store {
+  const parsed = Store.safeParse(data)
+  return parsed.success ? parsed.data : {}
 }
 
-async function writeStore(store: Store) {
-  await Bun.write(storePath, JSON.stringify(store, null, 2), { mode: 0o600 })
+async function readStore(): Promise<Store> {
+  return parseStore(await JsonStore.read(storePath))
+}
+
+async function updateStore(fn: (store: Store) => void | Promise<void>): Promise<Store> {
+  const result: { value?: Store } = {}
+  await JsonStore.update(storePath, async (data) => {
+    const store = Store.parse(data)
+    await fn(store)
+    result.value = store
+    return store
+  })
+  if (!result.value) throw new Error("Credential update completed without a store")
+  return result.value
 }
 
 function specFor(id: string): ServiceSpec | undefined {
@@ -441,22 +444,22 @@ export const CredentialsRoutes = lazy(() =>
       async (c) => {
         const id = c.req.valid("param").id
         const body = c.req.valid("json")
-        const store = await readStore()
         const spec = specFor(id)
-        const current = store[id] ?? { fields: {}, updated_at: new Date().toISOString() }
-        const fields = { ...current.fields }
-        for (const [name, value] of Object.entries(body.fields)) {
-          const trimmed = value.trim()
-          if (!trimmed) continue
-          if (spec && !spec.fields.some((f) => f.name === name)) continue
-          fields[name] = await encrypt(trimmed)
-        }
-        store[id] = {
-          label: body.label ?? current.label,
-          fields,
-          updated_at: new Date().toISOString(),
-        }
-        await writeStore(store)
+        const store = await updateStore(async (current) => {
+          const entry = current[id] ?? { fields: {}, updated_at: new Date().toISOString() }
+          const fields = { ...entry.fields }
+          for (const [name, value] of Object.entries(body.fields)) {
+            const trimmed = value.trim()
+            if (!trimmed) continue
+            if (spec && !spec.fields.some((f) => f.name === name)) continue
+            fields[name] = await encrypt(trimmed)
+          }
+          current[id] = {
+            label: body.label ?? entry.label,
+            fields,
+            updated_at: new Date().toISOString(),
+          }
+        })
         await applyCredentialEnv() // apply the new secret to the running process
         return c.json({ services: view(store) })
       },
@@ -476,9 +479,9 @@ export const CredentialsRoutes = lazy(() =>
       }),
       validator("param", z.object({ id: z.string() })),
       async (c) => {
-        const store = await readStore()
-        delete store[c.req.valid("param").id]
-        await writeStore(store)
+        const store = await updateStore((current) => {
+          delete current[c.req.valid("param").id]
+        })
         await applyCredentialEnv() // re-sync process env after removal
         return c.json({ services: view(store) })
       },

@@ -19,7 +19,7 @@ import { Binary } from "@synsci/util/binary"
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, ParentProps, Show, Switch } from "solid-js"
 import { DiffChanges } from "./diff-changes"
 import { Message, Part } from "./message-part"
-import { stripRedactedReasoning } from "./tool-display"
+import { artifactActions, stripRedactedReasoning, writtenFiles } from "./tool-display"
 import { Markdown } from "./markdown"
 import { Accordion } from "./accordion"
 import { StickyAccordionHeader } from "./sticky-accordion-header"
@@ -370,6 +370,23 @@ export function SessionTurn(
     return s
   })
 
+  // Files this turn wrote (completed write/edit/multiedit/apply_patch parts).
+  // Feeds the end-of-response "Save as artifact…" affordance on the last
+  // completed turn, which promotes a scratch file into a durable versioned
+  // artifact through the data context's saveArtifact callback.
+  const emptyWritten: string[] = []
+  const written = createMemo(
+    () => {
+      const collected: PartType[] = []
+      for (const m of assistantMessages()) {
+        for (const part of data.store.part[m.id] ?? emptyParts) collected.push(part)
+      }
+      return writtenFiles(collected)
+    },
+    emptyWritten,
+    { equals: same },
+  )
+
   const response = createMemo(() => lastTextPart()?.text)
   const responsePartId = createMemo(() => lastTextPart()?.id)
   const messageDiffs = createMemo(() => message()?.summary?.diffs ?? emptyDiffs)
@@ -446,6 +463,7 @@ export function SessionTurn(
     retrySeconds: 0,
     diffsOpen: [] as string[],
     diffLimit: diffInit,
+    artifacts: {} as Record<string, { state: "saving" | "saved" | "error"; version?: number; error?: string }>,
     status: rawStatus(),
     duration: duration(),
   })
@@ -456,10 +474,25 @@ export function SessionTurn(
       () => {
         setStore("diffsOpen", [])
         setStore("diffLimit", diffInit)
+        setStore("artifacts", {})
       },
       { defer: true },
     ),
   )
+
+  const saveArtifact = (path: string) => {
+    const save = data.saveArtifact
+    if (!save || store.artifacts[path]?.state === "saving") return
+    setStore("artifacts", path, { state: "saving" })
+    void save(path).then(
+      (result) => setStore("artifacts", path, { state: "saved", version: result.version }),
+      (error: unknown) =>
+        setStore("artifacts", path, {
+          state: "error",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    )
+  }
 
   createEffect(() => {
     const r = retry()
@@ -768,6 +801,36 @@ export function SessionTurn(
                             })}
                           </Button>
                         </Show>
+                      </div>
+                    </Show>
+                    {/* Explicit save: offer the written files as durable versioned artifacts */}
+                    <Show when={isLastUserMessage() && !working() && !!data.saveArtifact && written().length > 0}>
+                      <div data-slot="session-turn-artifact-save">
+                        <For each={artifactActions(written())}>
+                          {(action) => {
+                            const state = () => store.artifacts[action.path]
+                            const label = () => {
+                              if (state()?.state === "saving")
+                                return `Saving ${action.path.split("/").pop() ?? action.path}…`
+                              if (state()?.state === "saved") return `Saved as artifact · v${state()?.version ?? 1}`
+                              if (state()?.state === "error") return "Save failed · retry"
+                              return action.label
+                            }
+                            return (
+                              <Button
+                                data-slot="session-turn-artifact-action"
+                                data-state={state()?.state}
+                                variant="ghost"
+                                size="small"
+                                title={state()?.error ?? action.path}
+                                disabled={state()?.state === "saving"}
+                                onClick={() => saveArtifact(action.path)}
+                              >
+                                {label()}
+                              </Button>
+                            )
+                          }}
+                        </For>
                       </div>
                     </Show>
                     <Show when={error() && !props.stepsExpanded}>

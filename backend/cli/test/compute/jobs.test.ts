@@ -1,8 +1,28 @@
 import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
-import { ComputeJobs } from "../../src/compute/jobs"
-import { tmpdir } from "../fixture/fixture"
+import { ComputeJobs, ComputeJobsCorruptError } from "../../src/compute/jobs"
+import { Instance } from "../../src/project/instance"
+import { Session } from "../../src/session"
+import { OpenScience } from "../../src/openscience"
+import { Sandbox } from "../../src/sandbox/sandbox"
+import { ExecutionAuthority } from "../../src/project/execution"
+import { tmpdir, trustProject } from "../fixture/fixture"
+
+type StartOptions = NonNullable<Parameters<typeof ComputeJobs.start>[1]>
+
+async function start(input: ComputeJobs.Input, options: StartOptions) {
+  if (!options.workspace) throw new Error("Compute test start requires an explicit workspace")
+  return Instance.provide({
+    directory: options.workspace,
+    fn: async () => {
+      await trustProject()
+      const session = await Session.create({})
+      return ComputeJobs.start({ ...input, sessionID: session.id }, options)
+    },
+  })
+}
 
 describe("ComputeJobs command adapters", () => {
   const host = {
@@ -68,73 +88,184 @@ describe("ComputeJobs command adapters", () => {
   })
 })
 
+describe("ComputeJobs persistence", () => {
+  for (const [label, bytes] of [
+    ["truncated JSON", '[{"id":"historic"'],
+    ["structurally invalid job", '[{"id":"historic","status":"running"}]'],
+  ] as const) {
+    test(`fails closed on ${label} without changing its bytes`, async () => {
+      await using tmp = await tmpdir()
+      const root = path.join(tmp.path, "state")
+      const filepath = path.join(root, "jobs.json")
+      await fs.mkdir(root)
+      await fs.writeFile(filepath, bytes, { mode: 0o600 })
+
+      await expect(ComputeJobs.list({ root, workspace: tmp.path })).rejects.toBeInstanceOf(ComputeJobsCorruptError)
+      expect(await Bun.file(filepath).text()).toBe(bytes)
+      expect(await Bun.file(`${filepath}.corrupt-${process.pid}`).exists()).toBe(false)
+    })
+  }
+
+  test("refuses clear, cancel, and start mutations while preserving corrupt history", async () => {
+    await using tmp = await tmpdir()
+    const bytes = '[{"id":"historic"'
+    const launched = path.join(tmp.path, "launched.txt")
+    const cases = [
+      {
+        name: "clear",
+        run: (root: string) => ComputeJobs.clear({ root, workspace: tmp.path }),
+      },
+      {
+        name: "cancel",
+        run: (root: string) => ComputeJobs.cancel("historic", { root, workspace: tmp.path }),
+      },
+      {
+        name: "start",
+        run: (root: string) =>
+          start(
+            {
+              name: "must not replace history",
+              command: `printf launched > ${ComputeJobs.quote(launched)}`,
+              target: { kind: "local" },
+            },
+            { root, workspace: tmp.path },
+          ),
+      },
+    ]
+
+    for (const item of cases) {
+      const root = path.join(tmp.path, item.name)
+      const filepath = path.join(root, "jobs.json")
+      const backup = `${filepath}.corrupt-${process.pid}`
+      await fs.mkdir(root)
+      await fs.writeFile(filepath, bytes, { mode: 0o600 })
+
+      await expect(item.run(root)).rejects.toThrow(/Refusing to overwrite/)
+      expect(await Bun.file(filepath).text()).toBe(bytes)
+      expect(await Bun.file(backup).text()).toBe(bytes)
+      expect((await fs.stat(backup)).mode & 0o777).toBe(0o600)
+    }
+    expect(await Bun.file(launched).exists()).toBe(false)
+  })
+
+  test("ignores an interrupted sibling temp file and publishes a complete replacement", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const filepath = path.join(root, "jobs.json")
+    const partial = `${filepath}.${process.pid}.interrupted.tmp`
+    const fragment = '[{"id":"interrupted"'
+    await fs.mkdir(root)
+    await fs.writeFile(filepath, "[]", { mode: 0o600 })
+    await fs.writeFile(partial, fragment, { mode: 0o600 })
+
+    const job = await start(
+      {
+        name: "atomic persistence",
+        command: "true",
+        target: { kind: "local" },
+      },
+      { root, workspace: tmp.path },
+    )
+    const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+    const persisted = ComputeJobs.Job.array().parse(JSON.parse(await Bun.file(filepath).text()))
+    const temps = (await fs.readdir(root)).filter((file) => file.startsWith("jobs.json.") && file.endsWith(".tmp"))
+
+    expect(finished.status).toBe("succeeded")
+    expect(persisted).toHaveLength(1)
+    expect(persisted[0]?.id).toBe(job.id)
+    expect(await Bun.file(partial).text()).toBe(fragment)
+    expect(temps).toEqual([path.basename(partial)])
+  })
+})
+
 describe("ComputeJobs local lifecycle", () => {
-  test("a missing working directory fails durably without crashing the server process", async () => {
+  test("rejects a missing working directory before recording a job", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
     const cwd = path.join(tmp.path, "missing")
-    const cli = path.join(import.meta.dir, "../..")
-    const script = `
-      import { ComputeJobs } from "./src/compute/jobs"
-      const job = await ComputeJobs.start(
+    await expect(
+      start(
         {
           name: "missing cwd",
           command: "printf unreachable",
-          cwd: ${JSON.stringify(cwd)},
+          cwd,
           target: { kind: "local" },
         },
-        { root: ${JSON.stringify(root)} },
-      )
-      const result = await ComputeJobs.wait(job.id, { root: ${JSON.stringify(root)}, timeout: 5_000 })
-      console.log(JSON.stringify(result))
-    `
-    const proc = Bun.spawn([process.execPath, "-e", script], {
-      cwd: cli,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const [code, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ])
-
-    expect(code, stderr).toBe(0)
-    const job = ComputeJobs.Job.parse(JSON.parse(stdout.trim()))
-    expect(job.status).toBe("failed")
-    expect(job.exit_code).toBeNull()
-    expect(job.error).toMatch(/ENOENT|no such file or directory/i)
+        { root, workspace: tmp.path },
+      ),
+    ).rejects.toThrow("must be inside the session workspace")
+    expect(await ComputeJobs.list({ root, workspace: tmp.path })).toEqual([])
   })
 
   test("runs a real local job, persists status, and streams its log", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
-    const job = await ComputeJobs.start(
+    const job = await start(
       {
         name: "deterministic smoke",
         command: "printf 'alpha\\nbeta\\n'",
         cwd: tmp.path,
         target: { kind: "local" },
       },
-      { root },
+      { root, workspace: tmp.path },
     )
 
-    const finished = await ComputeJobs.wait(job.id, { root, timeout: 5_000 })
+    const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+    expect(job.provenance).toMatchObject({
+      format: "openscience.provenance.v1",
+      kind: "local_compute",
+      identity: {
+        project_id: { status: "available", value: job.authority?.projectID },
+        session_id: { status: "available", value: job.session_id },
+        run_id: { status: "available", value: job.id },
+      },
+      input: {
+        code: { status: "available", value: "printf 'alpha\\nbeta\\n'" },
+        cwd: { status: "available", value: tmp.path },
+        code_state: { status: "unavailable", reason: "not_captured" },
+      },
+      outputs: { status: "queued", items: [] },
+      timestamps: {
+        created_at: { status: "available" },
+        started_at: { status: "unavailable", reason: "not_captured" },
+        completed_at: { status: "unavailable", reason: "not_captured" },
+      },
+      handoff: {
+        atlas_compute_id: { status: "unavailable", reason: "not_implemented" },
+        atlas_run_id: { status: "unavailable", reason: "not_published" },
+      },
+    })
     expect(finished.status).toBe("succeeded")
     expect(finished.exit_code).toBe(0)
-    expect(await ComputeJobs.log(job.id, { root })).toContain("alpha\nbeta")
+    expect(await ComputeJobs.log(job.id, { root, workspace: tmp.path })).toContain("alpha\nbeta")
     expect(finished.reproducibility).toMatchObject({
       platform: process.platform,
       arch: process.arch,
       command: "printf 'alpha\\nbeta\\n'",
     })
+    expect(finished.provenance).toMatchObject({
+      outputs: { status: "succeeded", items: [] },
+      environment: {
+        host: {
+          status: "available",
+          value: { platform: process.platform, arch: process.arch },
+        },
+        kernel: { status: "unavailable", reason: "not_applicable" },
+      },
+      timestamps: {
+        started_at: { status: "available" },
+        completed_at: { status: "available" },
+      },
+    })
+    expect((await fs.stat(path.join(root, "jobs.json"))).mode & 0o777).toBe(0o600)
+    expect((await fs.readdir(root)).filter((file) => file.endsWith(".tmp"))).toEqual([])
   })
 
   test("captures output artifacts, checksums, lockfiles, and checkpoints", async () => {
     await using tmp = await tmpdir({ git: true })
     const root = path.join(tmp.path, "state")
     await Bun.write(path.join(tmp.path, "requirements.txt"), "numpy==2.2.0\n")
-    const job = await ComputeJobs.start(
+    const job = await start(
       {
         name: "artifact capture",
         command:
@@ -145,10 +276,10 @@ describe("ComputeJobs local lifecycle", () => {
         checkpoint: "checkpoints/latest.ckpt",
         resources: { cpus: 2, memory_gb: 4 },
       },
-      { root },
+      { root, workspace: tmp.path },
     )
 
-    const finished = await ComputeJobs.wait(job.id, { root, timeout: 5_000 })
+    const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
     expect(finished.artifacts).toHaveLength(1)
     expect(finished.artifacts?.[0]).toMatchObject({
       path: "outputs/results.csv",
@@ -166,24 +297,161 @@ describe("ComputeJobs local lifecycle", () => {
         sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       }),
     )
+    expect(finished.provenance?.outputs.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "artifact",
+          path: { status: "available", value: "outputs/results.csv" },
+          sha256: finished.artifacts?.[0]?.sha256,
+          version_id: { status: "unavailable", reason: "not_versioned" },
+          version: { status: "unavailable", reason: "not_versioned" },
+        }),
+        expect.objectContaining({
+          kind: "checkpoint",
+          path: { status: "available", value: "checkpoints/latest.ckpt" },
+          sha256: finished.checkpoint?.sha256,
+          version_id: { status: "unavailable", reason: "not_versioned" },
+          version: { status: "unavailable", reason: "not_versioned" },
+        }),
+      ]),
+    )
+  })
+
+  test("captures the code state before a local job mutates the workspace", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const root = path.join(tmp.path, "state")
+    const job = await start(
+      {
+        name: "pre-run snapshot",
+        command: "printf generated > result.txt",
+        cwd: tmp.path,
+        target: { kind: "local" },
+        artifacts: ["result.txt"],
+      },
+      { root, workspace: tmp.path },
+    )
+
+    expect(job.reproducibility?.git?.dirty).toBe(false)
+    expect(job.provenance?.input.code_state).toMatchObject({
+      status: "available",
+      value: {
+        commit: { status: "available", value: expect.stringMatching(/^[a-f0-9]{40}$/) },
+        dirty: { status: "available", value: false },
+      },
+    })
+    const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+    expect(finished.reproducibility?.git?.dirty).toBe(false)
+    expect(finished.provenance?.outputs.items[0]).toMatchObject({
+      path: { status: "available", value: "result.txt" },
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(await Bun.file(path.join(tmp.path, "result.txt")).exists()).toBe(true)
+  })
+
+  test("redacts command and env-like job fields before durable persistence", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const secret = `compute-persistence-${crypto.randomUUID()}`
+    OpenScience.registerSecretValues([secret])
+    const job = await start(
+      {
+        name: "secret persistence",
+        command: `printf complete >/dev/null # ${secret}`,
+        cwd: tmp.path,
+        target: { kind: "local" },
+        modules: [`CUSTOM_TOKEN=${secret}`],
+      },
+      { root, workspace: tmp.path },
+    )
+
+    const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+    const persisted = await Bun.file(path.join(root, "jobs.json")).text()
+    expect(finished.status).toBe("succeeded")
+    expect(finished.command).toContain("[REDACTED]")
+    expect(finished.modules).toEqual(["CUSTOM_TOKEN=[REDACTED]"])
+    expect(persisted).not.toContain(secret)
+    expect(persisted).toContain("[REDACTED]")
   })
 
   test("cancels a running local process tree", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
-    const job = await ComputeJobs.start(
+    const job = await start(
       {
         name: "cancel smoke",
         command: "sleep 30",
         cwd: tmp.path,
         target: { kind: "local" },
       },
-      { root },
+      { root, workspace: tmp.path },
     )
 
-    await ComputeJobs.cancel(job.id, { root })
-    const cancelled = await ComputeJobs.wait(job.id, { root, timeout: 5_000 })
+    await ComputeJobs.cancel(job.id, { root, workspace: tmp.path })
+    const cancelled = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
     expect(cancelled.status).toBe("cancelled")
+  })
+
+  test("cancels active jobs by owning session without touching sibling sessions", async () => {
+    if (!Sandbox.available()) return
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const first = await Session.create({})
+        const second = await Session.create({})
+        const [one, two] = await Promise.all([
+          ComputeJobs.start(
+            {
+              sessionID: first.id,
+              name: "first session",
+              command: "sleep 30",
+              target: { kind: "local" },
+            },
+            { root, workspace: tmp.path },
+          ),
+          ComputeJobs.start(
+            {
+              sessionID: second.id,
+              name: "second session",
+              command: "sleep 30",
+              target: { kind: "local" },
+            },
+            { root, workspace: tmp.path },
+          ),
+        ])
+        for (const _ of Array.from({ length: 100 })) {
+          const current = await ComputeJobs.get(one.id, { root, workspace: tmp.path })
+          if (current?.status === "running") break
+          await Bun.sleep(20)
+        }
+
+        expect(await ComputeJobs.cancelSession(first.id)).toBe(1)
+        expect((await ComputeJobs.wait(one.id, { root, workspace: tmp.path, timeout: 5_000 })).status).toBe("cancelled")
+        expect((await ComputeJobs.get(two.id, { root, workspace: tmp.path }))?.status).toBe("running")
+        await ComputeJobs.cancel(two.id, { root, workspace: tmp.path })
+      },
+    })
+  })
+
+  test("does not relabel a completed job when cancellation arrives late", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const job = await start(
+      {
+        name: "late cancel",
+        command: "true",
+        cwd: tmp.path,
+        target: { kind: "local" },
+      },
+      { root, workspace: tmp.path },
+    )
+
+    const completed = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+    expect(completed.status).toBe("succeeded")
+    const unchanged = await ComputeJobs.cancel(job.id, { root, workspace: tmp.path })
+    expect(unchanged.status).toBe("succeeded")
   })
 
   test("recovers a completed detached job from its durable exit marker", async () => {
@@ -209,9 +477,133 @@ describe("ComputeJobs local lifecycle", () => {
     )
     await Bun.write(path.join(root, "jobs", `${id}.exit`), "0")
 
-    const job = (await ComputeJobs.list({ root })).find((item) => item.id === id)
+    const job = (await ComputeJobs.list({ root, workspace: root })).find((item) => item.id === id)
     expect(job?.status).toBe("succeeded")
     expect(job?.exit_code).toBe(0)
+    expect(job?.provenance).toMatchObject({
+      format: "openscience.provenance.v1",
+      identity: {
+        run_id: { status: "available", value: id },
+      },
+      outputs: { status: "succeeded" },
+      timestamps: {
+        completed_at: { status: "available" },
+      },
+    })
     await fs.rm(root, { recursive: true, force: true })
+  })
+})
+
+describe("ComputeJobs project boundaries", () => {
+  test("isolates state and every job operation by canonical workspace", async () => {
+    await using tmp = await tmpdir()
+    const data = path.join(tmp.path, "data")
+    const first = path.join(tmp.path, "first")
+    const second = path.join(tmp.path, "second")
+    await Promise.all([fs.mkdir(first), fs.mkdir(second)])
+    const job = await start(
+      {
+        name: "isolated",
+        command: "printf project-one",
+        target: { kind: "local" },
+      },
+      { data, workspace: first },
+    )
+    await ComputeJobs.wait(job.id, { data, workspace: first, timeout: 5_000 })
+
+    expect(await ComputeJobs.list({ data, workspace: second })).toEqual([])
+    expect(await ComputeJobs.get(job.id, { data, workspace: second })).toBeUndefined()
+    await expect(ComputeJobs.log(job.id, { data, workspace: second })).rejects.toThrow("was not found")
+    await expect(ComputeJobs.cancel(job.id, { data, workspace: second })).rejects.toThrow("was not found")
+    expect(await ComputeJobs.clear({ data, workspace: second })).toBe(0)
+
+    expect(await ComputeJobs.log(job.id, { data, workspace: first })).toContain("project-one")
+    expect(await ComputeJobs.clear({ data, workspace: first })).toBe(1)
+  })
+
+  test("quarantines legacy global records instead of guessing a project owner", async () => {
+    await using tmp = await tmpdir()
+    const data = path.join(tmp.path, "data")
+    const workspace = path.join(tmp.path, "project")
+    const legacy = path.join(data, "compute")
+    await fs.mkdir(workspace)
+    const job = await start(
+      {
+        name: "legacy",
+        command: "printf legacy",
+        target: { kind: "local" },
+      },
+      { root: legacy, workspace },
+    )
+    await ComputeJobs.wait(job.id, { root: legacy, workspace, timeout: 5_000 })
+
+    expect(await ComputeJobs.list({ data, workspace })).toEqual([])
+    expect(await Bun.file(path.join(legacy, "jobs.json")).exists()).toBe(true)
+  })
+
+  test("rejects cwd and output paths that escape through traversal or symlinks", async () => {
+    await using tmp = await tmpdir()
+    const data = path.join(tmp.path, "data")
+    const workspace = path.join(tmp.path, "project")
+    const outside = path.join(tmp.path, "outside")
+    await Promise.all([fs.mkdir(workspace), fs.mkdir(outside)])
+    await Bun.write(path.join(outside, "checkpoint.bin"), "secret")
+    await fs.symlink(outside, path.join(workspace, "linked"))
+    await fs.symlink(path.join(outside, "checkpoint.bin"), path.join(workspace, "checkpoint.bin"))
+
+    const input = {
+      name: "escape",
+      command: "true",
+      target: { kind: "local" as const },
+    }
+    await expect(start({ ...input, cwd: outside }, { data, workspace })).rejects.toThrow(
+      "must be inside the session workspace",
+    )
+    await expect(start({ ...input, cwd: "linked" }, { data, workspace })).rejects.toThrow(
+      "must be inside the session workspace",
+    )
+    await expect(start({ ...input, artifacts: ["linked/*.csv"] }, { data, workspace })).rejects.toThrow(
+      "escapes the project working directory through a symlink",
+    )
+    await expect(start({ ...input, checkpoint: "checkpoint.bin" }, { data, workspace })).rejects.toThrow(
+      "escapes the project working directory through a symlink",
+    )
+    expect(await ComputeJobs.list({ data, workspace })).toEqual([])
+  })
+
+  test("enforces the configured sandbox or fails closed when no backend is available", async () => {
+    await using tmp = await tmpdir()
+    const data = path.join(tmp.path, "data")
+    const workspace = path.join(tmp.path, "project")
+    const inside = path.join(workspace, "inside.txt")
+    const outside = path.join(os.homedir(), `.openscience-compute-escape-${process.pid}-${crypto.randomUUID()}`)
+    await fs.mkdir(workspace)
+    await fs.rm(outside, { force: true })
+    const run = () =>
+      start(
+        {
+          name: "sandbox",
+          command: `if printf escape > ${ComputeJobs.quote(outside)}; then exit 97; fi; printf safe > ${ComputeJobs.quote(inside)}`,
+          target: { kind: "local" },
+        },
+        { data, workspace },
+      )
+
+    try {
+      if (!Sandbox.available()) {
+        await expect(run()).rejects.toBeInstanceOf(ExecutionAuthority.DeniedError)
+        expect(await ComputeJobs.list({ data, workspace })).toEqual([])
+        return
+      }
+
+      const job = await run()
+      expect(job.sandbox).toMatchObject({ requested: true, enforced: true, backend: Sandbox.backend() })
+      const finished = await ComputeJobs.wait(job.id, { data, workspace, timeout: 5_000 })
+      expect(finished.status).toBe("succeeded")
+      expect(await Bun.file(inside).text()).toBe("safe")
+      expect(await Bun.file(outside).exists()).toBe(false)
+    } finally {
+      await fs.rm(outside, { force: true })
+    }
   })
 })

@@ -38,7 +38,10 @@ test.describe("mobile workspace", () => {
     await expect(sidebar).toHaveAttribute("data-mobile-open", "true")
     await expect(sidebar.getByRole("button", { name: "New research" })).toBeVisible()
 
-    await page.getByRole("button", { name: "close sessions" }).click()
+    // The backdrop button spans the full viewport behind the drawer, so a
+    // centered click lands on the drawer that covers it. Dispatch the click on
+    // the backdrop element directly to exercise its close handler.
+    await page.getByRole("button", { name: "close sessions" }).dispatchEvent("click")
     await expect(sidebar).toHaveAttribute("data-mobile-open", "false")
   })
 })

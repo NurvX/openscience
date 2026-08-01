@@ -49,12 +49,25 @@ const syncedSecretValues = new Map<string, string>()
 // vars the user set in their own shell. Cached synchronously so redactSecrets()
 // (a hot path in bash output streaming) can mask them without an async read.
 const byokSecretValues = new Set<string>()
+const TOKEN_SECRET_PATTERNS = [
+  /\b(?:thk_|sk-|sk_|gsk_|hf_|nvapi-|ghp_|gho_|ghu_|ghs_|github_pat_|xox[baprs]-)[A-Za-z0-9._-]{8,}\b/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+]
+const QUOTED_SECRET =
+  /(\b(?:[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|authorization)\b\s*[:=]\s*)(["'])(.*?)\2/gi
+const BARE_SECRET =
+  /(\b(?:[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|authorization)\b\s*[:=]\s*)((?!Bearer\b)[^\s"'[,;}\]]{4,})/gi
+const BEARER_SECRET = /(\bBearer\s+)[A-Za-z0-9._~+/-]{4,}=*/gi
+const SECRET_FIELD =
+  /(^|[_-])(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|credential|authorization)($|[_-])|^(apiKey|accessToken|refreshToken|authToken|clientSecret|secretKey)$/i
 
 function isManagedAtlasKey(value: string): boolean {
   return value.startsWith("thk_")
 }
 
 function getSyncedConfigDir(): string {
+  const config = process.env.OPENSCIENCE_CONFIG_DIR?.trim()
+  if (config) return path.resolve(config)
   // Use XDG config dir (user-writable) for synced config from dashboard
   // This avoids needing root/admin permissions unlike /Library/Application Support
   const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config")
@@ -82,20 +95,28 @@ function getSyncedConfigDir(): string {
   }
 })()
 
-/** Shared provider API keys that must not leak to subprocesses */
-const SHARED_PROVIDER_KEYS = new Set([
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GOOGLE_GENERATIVE_AI_API_KEY",
-  "GEMINI_API_KEY",
-  "META_MODEL_API_KEY",
-  "META_MODEL_BASE_URL",
-  "XAI_API_KEY",
-])
-
 /** Env vars that are safe to pass to subprocesses */
 const SAFE_ENV_PREFIXES = ["PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_", "TMPDIR", "XDG_", "EDITOR", "VISUAL"]
+const KERNEL_RUNTIME_KEYS = new Set([
+  "TMP",
+  "TEMP",
+  "PYTHONPATH",
+  "PYTHONHOME",
+  "VIRTUAL_ENV",
+  "CONDA_PREFIX",
+  "CONDA_DEFAULT_ENV",
+  "R_HOME",
+  "R_LIBS",
+  "R_LIBS_USER",
+  "LD_LIBRARY_PATH",
+  "DYLD_LIBRARY_PATH",
+  "SYSTEMROOT",
+  "WINDIR",
+  "PATHEXT",
+  "COMSPEC",
+])
 const SAFE_SYNCED_KEYS = new Set([
+  ...BYOK_LLM_ENV_KEYS,
   // ML services
   "TINKER_API_KEY",
   "TINKER_BASE_URL",
@@ -114,11 +135,6 @@ const SAFE_SYNCED_KEYS = new Set([
   "LANGCHAIN_API_KEY",
   "LANGSMITH_TRACING",
   "PINECONE_API_KEY",
-  // LLM providers (BYOK; safe to pass through to user-owned routes)
-  "TOGETHER_API_KEY",
-  "GROQ_API_KEY",
-  "FIREWORKS_API_KEY",
-  "OPENROUTER_API_KEY",
   // Misc CLI runtime markers
   "OPENSCIENCE_RUNTIME",
 ])
@@ -191,7 +207,7 @@ function describeReason(provider: string, reason: SyncedServiceReason | undefine
     case "no_credits":
       return `${provider}: Credits are empty - top up at https://app.syntheticsciences.ai/billing.`
     case "ineligible_plan":
-      return `${provider}: BYOK requires an active paid plan (starter $20, pro $50, or max $200).`
+      return `${provider}: refresh Atlas and reconnect the key — BYOK is available on every plan.`
     case "proxy_disabled":
       return `${provider}: Atlas managed mode is disabled on this deployment — BYOK only.`
     case "managed_key_unconfigured":
@@ -797,10 +813,9 @@ export namespace OpenScience {
           return null
         }
         if (res.status === 402) {
-          // No active Atlas subscription. Don't clear the session
-          // (the auth itself is fine) — surface the message so the
-          // user knows to subscribe.
-          log.warn("no active Atlas plan - visit app.syntheticsciences.ai/billing")
+          // Legacy Atlas deployments can report wallet eligibility here. Keep
+          // the valid session: local and dashboard-saved BYOK remain free.
+          log.warn("Atlas wallet unavailable - BYOK remains available on every plan")
           return null
         }
         log.warn("sync failed", { status: res.status })
@@ -825,12 +840,9 @@ export namespace OpenScience {
         }
       }
 
-      // OpenScience honours only the narrow OpenRouter managed route, plus
-      // compute / ML-service credentials from Atlas sync; every other
-      // model provider is BYOK-local-only. Drop the rest before they are applied or
-      // persisted — and the unset pass below removes any a previous sync wrote,
-      // so this doubles as the migration for existing installs. See
-      // synced-env-policy.ts.
+      // Keep user-owned provider keys and the narrow OpenRouter managed route.
+      // The policy rejects direct-provider proxy tokens and untrusted provider
+      // base URLs before anything is applied or persisted.
       for (const [key, value] of [...fresh.entries()]) {
         if (!isSyncedEnvAllowed(key, value)) fresh.delete(key)
       }
@@ -995,7 +1007,32 @@ export namespace OpenScience {
       if (value.length < 4) continue
       result = result.replaceAll(value, "[REDACTED]")
     }
+    for (const pattern of TOKEN_SECRET_PATTERNS) result = result.replace(pattern, "[REDACTED]")
+    result = result.replace(BEARER_SECRET, "$1[REDACTED]")
+    result = result.replace(QUOTED_SECRET, "$1$2[REDACTED]$2")
+    result = result.replace(BARE_SECRET, "$1[REDACTED]")
     return result
+  }
+
+  /** Redact a JSON-shaped value, including plain values stored under credential-
+   *  shaped keys, using the currently seeded secret cache. */
+  export function redactSensitive<T>(value: T): T {
+    const visit = (item: unknown, key?: string): unknown => {
+      if (typeof item === "string") return key && SECRET_FIELD.test(key) ? "[REDACTED]" : redactSecrets(item)
+      if (Array.isArray(item)) return item.map((entry) => visit(entry))
+      if (!item || typeof item !== "object") return item
+      return Object.fromEntries(
+        Object.entries(item as Record<string, unknown>).map(([name, entry]) => [name, visit(entry, name)]),
+      )
+    }
+    return visit(value) as T
+  }
+
+  /** Refresh known BYOK values, then redact a JSON-shaped value. Persistence
+   *  boundaries should use this entry point before serializing. */
+  export async function scrubSecrets<T>(value: T): Promise<T> {
+    await refreshByokSecrets()
+    return redactSensitive(value)
   }
 
   /** Whether a value is a managed Atlas proxy token (thk_*). Managed calls are
@@ -1016,13 +1053,12 @@ export namespace OpenScience {
     return false
   }
 
-  /** Filter env vars for subprocesses — exclude shared provider keys */
+  /** Filter env vars for subprocesses — exclude managed Atlas proxy tokens. */
   export function filterEnvForSubprocess(env: NodeJS.ProcessEnv): Record<string, string> {
     const result: Record<string, string> = {}
     for (const [key, value] of Object.entries(env)) {
       if (!value) continue
       if (isManagedAtlasKey(value)) continue
-      if (SHARED_PROVIDER_KEYS.has(key)) continue
       // Entries ending in `_` (LC_, XDG_) are true prefixes; the rest are exact
       // names. Treating all as prefixes let HOME match HOMEBREW_GITHUB_API_TOKEN,
       // USER match USERPROFILE, etc. — over-broad passthrough.
@@ -1035,19 +1071,115 @@ export namespace OpenScience {
     return result
   }
 
+  /** Minimal environment for arbitrary notebook/R code. Kernels need language
+   * runtime discovery and locale/temp configuration, not the user's shell
+   * credentials. Provider, Atlas, cloud, and ad-hoc secret vars stay on the
+   * OpenScience host and can only enter a kernel through an explicit start env. */
+  export function filterEnvForKernel(env: NodeJS.ProcessEnv): Record<string, string> {
+    const result: Record<string, string> = {}
+    for (const [key, value] of Object.entries(env)) {
+      if (!value) continue
+      const runtime =
+        SAFE_ENV_PREFIXES.some((prefix) => (prefix.endsWith("_") ? key.startsWith(prefix) : key === prefix)) ||
+        KERNEL_RUNTIME_KEYS.has(key)
+      if (runtime) result[key] = value
+    }
+    return result
+  }
+
+  export function kernelEnv(env: NodeJS.ProcessEnv = process.env) {
+    return filterEnvForKernel(env)
+  }
+
+  /** Host credential files that an OS-sandboxed kernel must not read. Atlas
+   * access is intentionally provided by the native host broker instead. */
+  export function kernelSensitivePaths() {
+    return [
+      filepath,
+      path.join(Global.Path.data, "auth.json"),
+      path.join(Global.Path.data, "credentials.json"),
+      path.join(Global.Path.data, "mcp-auth.json"),
+      path.join(getSyncedConfigDir(), "synced-env.json"),
+      process.env.ATLAS_CLI_CONFIG_PATH || path.join(os.homedir(), ".config", "atlas-cli", "config.json"),
+    ]
+  }
+
   /** Provider IDs (as stored in auth.json) whose user-owned BYOK keys are safe
    *  to expose to skill subprocesses, mapped to the env var(s) the scripts
    *  read. These are keys the user explicitly added with `openscience login` —
    *  unlike the shared managed keys, which stay stripped. */
-  const BYOK_SUBPROCESS_PROVIDERS: Record<string, { key: string; baseUrl?: string; publicBaseUrl?: string }> = {
+  const BYOK_SUBPROCESS_PROVIDERS: Record<string, { keys: string[]; baseUrl?: string; publicBaseUrl?: string }> = {
+    openai: {
+      keys: ["OPENAI_API_KEY"],
+      baseUrl: "OPENAI_BASE_URL",
+      publicBaseUrl: "https://api.openai.com/v1",
+    },
+    anthropic: {
+      keys: ["ANTHROPIC_API_KEY"],
+      baseUrl: "ANTHROPIC_BASE_URL",
+      publicBaseUrl: "https://api.anthropic.com/v1",
+    },
+    google: {
+      keys: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"],
+      baseUrl: "GOOGLE_GENERATIVE_AI_BASE_URL",
+      publicBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    },
+    xai: {
+      keys: ["XAI_API_KEY"],
+      baseUrl: "XAI_BASE_URL",
+      publicBaseUrl: "https://api.x.ai/v1",
+    },
+    meta: { keys: ["META_MODEL_API_KEY"] },
     openrouter: {
-      key: "OPENROUTER_API_KEY",
+      keys: ["OPENROUTER_API_KEY"],
       baseUrl: "OPENROUTER_BASE_URL",
       publicBaseUrl: "https://openrouter.ai/api/v1",
     },
-    together: { key: "TOGETHER_API_KEY" },
-    groq: { key: "GROQ_API_KEY" },
-    fireworks: { key: "FIREWORKS_API_KEY" },
+    togetherai: {
+      keys: ["TOGETHER_API_KEY"],
+      baseUrl: "TOGETHER_BASE_URL",
+      publicBaseUrl: "https://api.together.xyz/v1",
+    },
+    together: {
+      keys: ["TOGETHER_API_KEY"],
+      baseUrl: "TOGETHER_BASE_URL",
+      publicBaseUrl: "https://api.together.xyz/v1",
+    },
+    groq: {
+      keys: ["GROQ_API_KEY"],
+      baseUrl: "GROQ_BASE_URL",
+      publicBaseUrl: "https://api.groq.com/openai/v1",
+    },
+    "fireworks-ai": {
+      keys: ["FIREWORKS_API_KEY"],
+      baseUrl: "FIREWORKS_BASE_URL",
+      publicBaseUrl: "https://api.fireworks.ai/inference/v1",
+    },
+    fireworks: {
+      keys: ["FIREWORKS_API_KEY"],
+      baseUrl: "FIREWORKS_BASE_URL",
+      publicBaseUrl: "https://api.fireworks.ai/inference/v1",
+    },
+    mistral: {
+      keys: ["MISTRAL_API_KEY"],
+      baseUrl: "MISTRAL_BASE_URL",
+      publicBaseUrl: "https://api.mistral.ai/v1",
+    },
+    deepseek: {
+      keys: ["DEEPSEEK_API_KEY"],
+      baseUrl: "DEEPSEEK_BASE_URL",
+      publicBaseUrl: "https://api.deepseek.com",
+    },
+    cerebras: {
+      keys: ["CEREBRAS_API_KEY"],
+      baseUrl: "CEREBRAS_BASE_URL",
+      publicBaseUrl: "https://api.cerebras.ai/v1",
+    },
+    perplexity: {
+      keys: ["PERPLEXITY_API_KEY"],
+      baseUrl: "PERPLEXITY_BASE_URL",
+      publicBaseUrl: "https://api.perplexity.ai",
+    },
   }
 
   /** Merge user-owned (BYOK) provider keys from auth.json into a subprocess env.
@@ -1063,8 +1195,8 @@ export namespace OpenScience {
       if (isManagedAtlasKey(info.key)) continue
       const spec = BYOK_SUBPROCESS_PROVIDERS[providerID]
       if (!spec) continue
-      if (result[spec.key]) continue
-      result[spec.key] = info.key
+      if (spec.keys.some((key) => result[key])) continue
+      for (const key of spec.keys) result[key] = info.key
       if (spec.baseUrl && spec.publicBaseUrl) result[spec.baseUrl] = spec.publicBaseUrl
     }
     return result

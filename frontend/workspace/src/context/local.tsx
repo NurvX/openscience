@@ -3,7 +3,6 @@ import { batch, createMemo } from "solid-js"
 import { createSimpleContext } from "@synsci/ui/context"
 import { useSDK } from "./sdk"
 import { useSync } from "./sync"
-import { base64Encode } from "@synsci/util/encode"
 import { useProviders } from "@/hooks/use-providers"
 import { useModels } from "@/context/models"
 import { foldedRouteMode, routableModelKey } from "@/context/model-catalog"
@@ -54,7 +53,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const ALL_CYCLABLE = ["research", "biology", "physics", "ml"] as const
 
     const agent = (() => {
-      const list = createMemo(() => sync.data.agent.filter((x) => x.mode !== "subagent" && !x.hidden))
+      // Planning is adaptive in the research agent, so the legacy read-only
+      // plan agent is not exposed as a picker entry.
+      const list = createMemo(() =>
+        sync.data.agent.filter((x) => x.mode !== "subagent" && !x.hidden && x.name !== "plan"),
+      )
       const all = createMemo(() => sync.data.agent.filter((x) => x.mode !== "subagent"))
       const [store, setStore] = createStore<{
         current?: string
@@ -232,6 +235,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           .filter(Boolean),
       )
 
+      const pinned = createMemo(() =>
+        models.pinned
+          .list()
+          .map((item) => models.find(resolveModel(item) ?? item))
+          .filter(Boolean),
+      )
+
       const cycle = (direction: 1 | -1) => {
         const recentList = recent()
         const currentModel = current()
@@ -259,6 +269,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         ready: models.ready,
         current,
         recent,
+        pinned,
         list: models.list,
         cycle,
         set(model: ModelKey | undefined, options?: { recent?: boolean }) {
@@ -276,6 +287,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         },
         setVisibility(model: ModelKey, visible: boolean) {
           models.setVisibility(model, visible)
+        },
+        pin: {
+          has(model: ModelKey) {
+            return models.pinned.has(resolveModel(model) ?? model)
+          },
+          toggle(model: ModelKey) {
+            const selected = resolveModel(model) ?? model
+            models.setVisibility(selected, true)
+            return models.pinned.toggle(selected)
+          },
         },
         variant: {
           current() {
@@ -345,7 +366,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     })()
 
     const result = {
-      slug: createMemo(() => base64Encode(sdk.directory)),
+      slug: createMemo(() => sdk.scope),
       model,
       agent,
       research,

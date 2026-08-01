@@ -26,8 +26,10 @@ export const URLS = {
   githubIntegration: "https://app.syntheticsciences.ai/settings/integrations",
   /** Notification favicon. */
   favicon: `${SITE}/favicon-96x96-v3.png`,
-  /** Changelog feed consumed by the highlights context. */
-  changelog: `${SITE}/changelog.json`,
+  /** Same-origin changelog feed consumed by the highlights context. */
+  changelog: "/settings/updates/releases",
+  /** Canonical public release history. */
+  releases: "https://github.com/synthetic-sciences/openscience/releases",
   /** Theme authoring docs. */
   docsThemes: `${SITE}/docs/themes/`,
 } as const

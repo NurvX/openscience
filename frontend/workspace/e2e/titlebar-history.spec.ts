@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures"
-import { promptSelector } from "./utils"
+import { promptSelector, sessionTab } from "./utils"
 
 test("browser back/forward navigates between sessions", async ({ page, slug, sdk, gotoSession }) => {
   await page.setViewportSize({ width: 1400, height: 800 })
@@ -24,19 +24,19 @@ test("browser back/forward navigates between sessions", async ({ page, slug, sdk
 
     await expect(page).toHaveURL(new RegExp(`/${slug}/session/${two.id}(?:\\?|#|$)`))
     await expect(page.locator(promptSelector)).toBeVisible()
-    await expect(page.getByRole("tab", { name: twoTitle, exact: true })).toHaveAttribute("aria-selected", "true")
+    await expect(sessionTab(page, twoTitle)).toHaveAttribute("aria-selected", "true")
 
     await page.goBack()
 
     await expect(page).toHaveURL(new RegExp(`/${slug}/session/${one.id}(?:\\?|#|$)`))
     await expect(page.locator(promptSelector)).toBeVisible()
-    await expect(page.getByRole("tab", { name: oneTitle, exact: true })).toHaveAttribute("aria-selected", "true")
+    await expect(sessionTab(page, oneTitle)).toHaveAttribute("aria-selected", "true")
 
     await page.goForward()
 
     await expect(page).toHaveURL(new RegExp(`/${slug}/session/${two.id}(?:\\?|#|$)`))
     await expect(page.locator(promptSelector)).toBeVisible()
-    await expect(page.getByRole("tab", { name: twoTitle, exact: true })).toHaveAttribute("aria-selected", "true")
+    await expect(sessionTab(page, twoTitle)).toHaveAttribute("aria-selected", "true")
   } finally {
     await sdk.session.delete({ sessionID: one.id }).catch(() => undefined)
     await sdk.session.delete({ sessionID: two.id }).catch(() => undefined)

@@ -96,6 +96,65 @@ function DiagnosticsDisplay(props: { diagnostics: Diagnostic[] }): JSX.Element {
   )
 }
 
+type PermissionReply = "once" | "session" | "project" | "always" | "reject"
+
+/** The approval card under a tool awaiting permission. States exactly what is
+ *  being granted (access level and target) when the request carries scoped
+ *  metadata; "Allow for…" swaps the row to the three standing scopes so every
+ *  option stays a plain button. */
+function PermissionActions(props: { respond: (response: PermissionReply) => void; metadata?: Record<string, any> }) {
+  const i18n = useI18n()
+  const [scopes, setScopes] = createSignal(false)
+  const summary = () => {
+    const filesystem = props.metadata?.filesystem
+    if (filesystem?.path) {
+      const key = filesystem.access === "write" ? "ui.permission.grantWrite" : "ui.permission.grantRead"
+      return i18n.t(key, { path: filesystem.path })
+    }
+    const network = props.metadata?.network
+    if (network?.host) return i18n.t("ui.permission.allowHost", { host: network.host })
+    return undefined
+  }
+  return (
+    <div data-component="permission-prompt">
+      <Show when={summary()}>
+        <div data-slot="permission-summary">{summary()}</div>
+      </Show>
+      <div data-slot="permission-actions">
+        <Show
+          when={scopes()}
+          fallback={
+            <>
+              <Button variant="ghost" size="small" onClick={() => props.respond("reject")}>
+                {i18n.t("ui.permission.deny")}
+              </Button>
+              <Button variant="secondary" size="small" onClick={() => setScopes(true)}>
+                {i18n.t("ui.permission.allow")}
+              </Button>
+              <Button variant="primary" size="small" onClick={() => props.respond("once")}>
+                {i18n.t("ui.permission.allowOnce")}
+              </Button>
+            </>
+          }
+        >
+          <Button variant="ghost" size="small" onClick={() => setScopes(false)}>
+            {i18n.t("ui.common.cancel")}
+          </Button>
+          <Button variant="secondary" size="small" onClick={() => props.respond("session")}>
+            {i18n.t("ui.permission.allowSession")}
+          </Button>
+          <Button variant="secondary" size="small" onClick={() => props.respond("project")}>
+            {i18n.t("ui.permission.allowProject")}
+          </Button>
+          <Button variant="secondary" size="small" onClick={() => props.respond("always")}>
+            {i18n.t("ui.permission.allowAlways")}
+          </Button>
+        </Show>
+      </div>
+    </div>
+  )
+}
+
 export interface MessageProps {
   message: MessageType
   parts: PartType[]
@@ -577,7 +636,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     if (permission() || questionRequest()) setForceOpen(true)
   })
 
-  const respond = (response: "once" | "always" | "reject") => {
+  const respond = (response: PermissionReply) => {
     const perm = permission()
     if (!perm || !data.respondToPermission) return
     data.respondToPermission({
@@ -649,19 +708,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
         </Match>
       </Switch>
       <Show when={showPermission() && permission()}>
-        <div data-component="permission-prompt">
-          <div data-slot="permission-actions">
-            <Button variant="ghost" size="small" onClick={() => respond("reject")}>
-              {i18n.t("ui.permission.deny")}
-            </Button>
-            <Button variant="secondary" size="small" onClick={() => respond("always")}>
-              {i18n.t("ui.permission.allowAlways")}
-            </Button>
-            <Button variant="primary" size="small" onClick={() => respond("once")}>
-              {i18n.t("ui.permission.allowOnce")}
-            </Button>
-          </div>
-        </div>
+        <PermissionActions respond={respond} metadata={permission()?.metadata} />
       </Show>
       <Show when={showQuestion() && questionRequest()}>{(request) => <QuestionPrompt request={request()} />}</Show>
     </div>
@@ -952,7 +999,7 @@ ToolRegistry.register({
       return undefined
     })
 
-    const respond = (response: "once" | "always" | "reject") => {
+    const respond = (response: PermissionReply) => {
       const perm = childPermission()
       if (!perm || !data.respondToPermission) return
       data.respondToPermission({
@@ -1013,19 +1060,7 @@ ToolRegistry.register({
               >
                 {renderChildToolPart()}
               </Show>
-              <div data-component="permission-prompt">
-                <div data-slot="permission-actions">
-                  <Button variant="ghost" size="small" onClick={() => respond("reject")}>
-                    {i18n.t("ui.permission.deny")}
-                  </Button>
-                  <Button variant="secondary" size="small" onClick={() => respond("always")}>
-                    {i18n.t("ui.permission.allowAlways")}
-                  </Button>
-                  <Button variant="primary" size="small" onClick={() => respond("once")}>
-                    {i18n.t("ui.permission.allowOnce")}
-                  </Button>
-                </div>
-              </div>
+              <PermissionActions respond={respond} metadata={childPermission()?.metadata} />
             </>
           </Match>
           <Match when={childQuestion()}>
@@ -1098,12 +1133,6 @@ ToolRegistry.register({
   name: "bash",
   render(props) {
     const i18n = useI18n()
-    const openInShellTab = (e: MouseEvent) => {
-      e.stopPropagation()
-      document.dispatchEvent(
-        new CustomEvent("open-shell-tab", { detail: { partId: props.partID, command: props.input.command } }),
-      )
-    }
     return (
       <BasicTool
         {...props}
@@ -1111,11 +1140,6 @@ ToolRegistry.register({
         trigger={{
           title: i18n.t("ui.tool.shell"),
           subtitle: props.input.description,
-          action: (
-            <Tooltip value="Open in Shell tab">
-              <IconButton icon="square-arrow-top-right" variant="ghost" class="h-5 w-5" onClick={openInShellTab} />
-            </Tooltip>
-          ),
         }}
       >
         <Show when={props.input.command || props.metadata.command || props.output || props.metadata.output}>

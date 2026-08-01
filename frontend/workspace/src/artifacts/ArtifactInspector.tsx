@@ -1,10 +1,11 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, type JSX } from "solid-js"
-import { usePlatform } from "@/context/platform"
+import { useParams } from "@solidjs/router"
+import { useDialog } from "@synsci/ui/context/dialog"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
-import { centerTabs } from "@/atlas/store/centerTabs"
 import { uiStore } from "@/atlas/store/ui"
 import { toast } from "@/atlas/Toast"
+import { promptDialog } from "@/atlas/dialogs"
 import {
   IconBookOpen,
   IconBraces,
@@ -20,14 +21,19 @@ import {
 import { FONT_CODE, FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import type { ArtifactContext } from "./context"
 import {
+  filterReviewerFindings,
   inspectorTabs,
   normalizeInspectorData,
   normalizePublicationReview,
+  normalizeReviewerFindings,
   type InspectorData,
   type InspectorState,
   type InspectorTab,
+  type LineageMessage,
+  type LineageRun,
   type PublicationReviewFinding,
   type PublicationReviewState,
+  type ReviewerFinding,
 } from "./inspector"
 
 const labels: Record<InspectorTab, string> = {
@@ -39,6 +45,13 @@ const labels: Record<InspectorTab, string> = {
   review: "Review",
   history: "History",
 }
+
+const BODY_FONT_SIZE = "16px"
+const META_FONT_SIZE = "14px"
+const SECTION_TITLE_SIZE = "20px"
+const CONTROL_HEIGHT = "44px"
+const CONTROL_RADIUS = "14px"
+const GROUP_RADIUS = "18px"
 
 interface AnnotationMessage {
   id: string
@@ -95,29 +108,38 @@ function annotations(value: unknown): Annotation[] {
 
 export function ArtifactInspector(props: { context: ArtifactContext; onClose?: () => void }): JSX.Element {
   const sdk = useSDK()
-  const platform = usePlatform()
   const prompt = usePrompt()
+  const params = useParams()
+  const dialog = useDialog()
   const [tab, setTab] = createSignal<InspectorTab>("details")
-  const request = () => platform.fetch ?? fetch
-  const url = (route: string, path?: string) =>
-    `${sdk.url.replace(/\/$/, "")}${route}?directory=${encodeURIComponent(props.context.directory)}${path ? `&path=${encodeURIComponent(path)}` : ""}`
+  const query = (path?: string) => ({
+    path,
+    sessionID: params.id && params.id !== "new" ? params.id : undefined,
+  })
 
   const [records, api] = createResource(
-    () => ({ id: props.context.id, path: props.context.path, directory: props.context.directory }),
+    () => ({
+      id: props.context.id,
+      path: props.context.path,
+      directory: props.context.directory,
+      sessionID: params.id && params.id !== "new" ? params.id : undefined,
+    }),
     async (current) => {
       const read = async (route: string, path?: string): Promise<unknown> => {
-        const response = await request()(url(route, path)).catch(() => undefined)
+        const response = await sdk.request(route, undefined, query(path)).catch(() => undefined)
         if (!response?.ok) return
         return response.json().catch(() => undefined)
       }
-      const [file, provenance, audit, notes, review] = await Promise.all([
+      const [file, provenance, audit, notes, review, lineage, reviews] = await Promise.all([
         read("/file/content", current.path),
         read("/file/provenance", current.path),
         read("/file/reproducibility"),
         read("/file/annotations", current.path),
         read("/file/reviews", current.path),
+        read("/file/lineage", current.path),
+        read("/provenance/reviews"),
       ])
-      return { id: current.id, file, provenance, audit, notes, review }
+      return { id: current.id, file, provenance, audit, notes, review, lineage, reviews }
     },
   )
   const model = createMemo<InspectorData>(() => {
@@ -126,6 +148,8 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
     return normalizeInspectorData(props.context, input)
   })
   const review = createMemo(() => normalizePublicationReview(props.context.format, records()?.review))
+  const session = () => (params.id && params.id !== "new" ? params.id : undefined)
+  const findings = createMemo(() => filterReviewerFindings(normalizeReviewerFindings(records()?.reviews), session()))
 
   createEffect(() => {
     props.context.id
@@ -145,11 +169,10 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
   }
   const attach = () => {
     prompt.context.add({ type: "file", path: props.context.path })
-    centerTabs.showChat()
     toast.success("added to context", props.context.name)
   }
   const download = async () => {
-    const response = await request()(url("/file/raw", props.context.path)).catch(() => undefined)
+    const response = await sdk.request("/file/raw", undefined, query(props.context.path)).catch(() => undefined)
     if (!response?.ok) {
       toast.error("download failed", response ? `${response.status}` : "request failed")
       return
@@ -162,11 +185,17 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
     URL.revokeObjectURL(object)
   }
   const mutateAnnotation = async (route: string, method: "POST" | "PATCH", body: Record<string, unknown>) => {
-    const response = await request()(url(route), {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).catch(() => undefined)
+    const response = await sdk
+      .request(
+        route,
+        {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        query(),
+      )
+      .catch(() => undefined)
     if (!response?.ok) {
       toast.error("annotation failed", response ? `${response.status}` : "request failed")
       return false
@@ -190,22 +219,62 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
   const updateAnnotation = (id: string, body: Record<string, unknown>) =>
     mutateAnnotation(`/file/annotations/${id}`, "PATCH", body)
   const mutateReview = async (route: string, method: "POST" | "PATCH", body: Record<string, unknown>) => {
-    const response = await request()(url(route), {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).catch(() => undefined)
+    const response = await sdk
+      .request(
+        route,
+        {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        query(),
+      )
+      .catch(() => undefined)
     if (!response?.ok) {
       const payload = (await response?.json().catch(() => undefined)) as { error?: unknown } | undefined
       const detail =
         typeof payload?.error === "string" ? payload.error : response ? `${response.status}` : "request failed"
-      toast.error("publication review failed", detail)
+      toast.error("publication preflight failed", detail)
       return false
     }
     await api.refetch()
     return true
   }
   const actor = () => model().provenance?.commit?.author ?? "Local user"
+  // Reviewer findings live in the provenance graph. Marking one addressed is an
+  // append-only resolution; it stays unconfirmed until a later reviewer pass
+  // records a supporting finding on the same target.
+  const addressFinding = async (finding: ReviewerFinding) => {
+    const reason = await promptDialog(dialog, {
+      title: "Mark finding addressed",
+      message:
+        "Describe the fix in one line. The record stays 'addressed' — only a later reviewer pass can confirm it.",
+      placeholder: "What change addresses this finding?",
+      confirmLabel: "record fix",
+    })
+    const note = reason?.trim()
+    if (!note) return
+    const response = await sdk
+      .request(
+        `/provenance/reviews/${finding.id}/resolve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor: actor(), reason: note }),
+        },
+        query(),
+      )
+      .catch(() => undefined)
+    if (!response?.ok) {
+      const payload = (await response?.json().catch(() => undefined)) as { error?: unknown } | undefined
+      const detail =
+        typeof payload?.error === "string" ? payload.error : response ? `${response.status}` : "request failed"
+      toast.error("could not record the fix", detail)
+      return
+    }
+    toast.success("finding marked addressed", note)
+    await api.refetch()
+  }
   const runReview = () =>
     mutateReview("/file/reviews", "POST", {
       path: props.context.path,
@@ -250,27 +319,30 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
         display: "flex",
         "flex-direction": "column",
         background: "var(--color-bg)",
+        "font-family": FONT_SANS,
+        "font-size": BODY_FONT_SIZE,
       }}
     >
       <header
         style={{
           display: "flex",
           "align-items": "center",
-          gap: "10px",
-          padding: "12px 14px",
+          gap: "12px",
+          padding: "18px 20px",
           "border-bottom": "1px solid var(--color-border)",
           "flex-shrink": 0,
         }}
       >
         <span style={{ display: "inline-flex", color: "var(--color-text-muted)" }}>
-          <IconFile size={15} strokeWidth={1.5} />
+          <IconFile size={20} strokeWidth={1.5} />
         </span>
-        <div style={{ flex: 1, "min-width": 0, display: "grid", gap: "2px" }}>
+        <div style={{ flex: 1, "min-width": 0, display: "grid", gap: "4px" }}>
           <strong
             title={props.context.path}
             style={{
               "font-family": FONT_SANS,
-              "font-size": "13px",
+              "font-size": "18px",
+              "line-height": 1.3,
               color: "var(--color-text)",
               overflow: "hidden",
               "text-overflow": "ellipsis",
@@ -279,7 +351,7 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
           >
             {props.context.name}
           </strong>
-          <span style={{ "font-family": FONT_MONO, "font-size": "10px", color: "var(--color-text-faint)" }}>
+          <span style={{ "font-family": FONT_MONO, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}>
             {props.context.kind} · {props.context.format.toUpperCase()}
           </span>
         </div>
@@ -293,15 +365,22 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
         </Show>
       </header>
 
-      <div style={{ display: "grid", "grid-template-columns": "repeat(3, 1fr)", gap: "6px", padding: "10px 12px" }}>
+      <div
+        style={{
+          display: "grid",
+          "grid-template-columns": "repeat(auto-fit, minmax(108px, 1fr))",
+          gap: "10px",
+          padding: "16px 20px",
+        }}
+      >
         <button type="button" style={actionButton(true)} onClick={attach}>
-          <IconFlask size={12} /> ask
+          <IconFlask size={16} /> ask
         </button>
         <button type="button" style={actionButton()} onClick={() => void copy()}>
-          <IconCopy size={12} /> path
+          <IconCopy size={16} /> path
         </button>
         <button type="button" style={actionButton()} onClick={() => void download()}>
-          <IconDownload size={12} /> download
+          <IconDownload size={16} /> download
         </button>
       </div>
 
@@ -311,8 +390,8 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
         class="atlas-scroll"
         style={{
           display: "flex",
-          gap: "4px",
-          padding: "0 12px 10px",
+          gap: "6px",
+          padding: "0 20px 14px",
           overflow: "auto hidden",
           "border-bottom": "1px solid var(--color-border)",
           "flex-shrink": 0,
@@ -333,7 +412,7 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
             >
               {labels[item]}
               <Show when={!model().tabs[item].available}>
-                <span aria-hidden="true" style={{ color: "var(--color-text-faint)", "font-size": "9px" }}>
+                <span aria-hidden="true" style={{ color: "var(--color-text-faint)", "font-size": META_FONT_SIZE }}>
                   ○
                 </span>
               </Show>
@@ -347,7 +426,14 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
         role="tabpanel"
         aria-labelledby={`artifact-inspector-tab-${tab()}`}
         class="atlas-scroll"
-        style={{ flex: 1, "min-height": 0, overflow: "auto", padding: "14px", "box-sizing": "border-box" }}
+        style={{
+          flex: 1,
+          "min-height": 0,
+          overflow: "auto",
+          padding: "22px",
+          "box-sizing": "border-box",
+          "font-size": BODY_FONT_SIZE,
+        }}
       >
         <Show when={!records.loading} fallback={<Loading />}>
           <Switch>
@@ -365,8 +451,8 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
                       "max-height": "460px",
                       overflow: "auto",
                       "font-family": FONT_CODE,
-                      "font-size": "11px",
-                      "line-height": 1.6,
+                      "font-size": BODY_FONT_SIZE,
+                      "line-height": 1.7,
                       color: "var(--color-text-muted)",
                       "white-space": "pre",
                     }}
@@ -377,10 +463,10 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
               </Show>
             </Match>
             <Match when={tab() === "run"}>
-              <Empty state={model().tabs.run} icon="run" />
+              <Runs data={model()} />
             </Match>
             <Match when={tab() === "messages"}>
-              <Empty state={model().tabs.messages} icon="messages" />
+              <Messages data={model()} session={params.id && params.id !== "new" ? params.id : undefined} />
             </Match>
             <Match when={tab() === "environment"}>
               <Environment data={model()} />
@@ -388,10 +474,13 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
             <Match when={tab() === "review"}>
               <Review
                 state={review()}
+                findings={findings()}
+                scoped={Boolean(session())}
                 annotations={annotations(records()?.notes)}
                 onRun={runReview}
                 onFinding={resolveFinding}
                 onFinalize={finalizeReview}
+                onAddress={addressFinding}
                 onAdd={addAnnotation}
                 onUpdate={updateAnnotation}
               />
@@ -408,10 +497,13 @@ export function ArtifactInspector(props: { context: ArtifactContext; onClose?: (
 
 function Review(props: {
   state: PublicationReviewState
+  findings: ReviewerFinding[]
+  scoped: boolean
   annotations: Annotation[]
   onRun(): Promise<boolean>
   onFinding(report: string, finding: string, status: "resolved" | "overridden", reason: string): Promise<boolean>
   onFinalize(report: string): Promise<boolean>
+  onAddress(finding: ReviewerFinding): Promise<void>
   onAdd(body: string): Promise<boolean>
   onUpdate(id: string, body: Record<string, unknown>): Promise<boolean>
 }): JSX.Element {
@@ -440,22 +532,30 @@ function Review(props: {
     if (ok) setBody("")
   }
   return (
-    <div style={{ display: "grid", gap: "12px" }}>
+    <div style={{ display: "grid", gap: "18px" }}>
       <section
         data-component="publication-review"
         data-review-state={props.state.kind}
         style={{
           ...card(),
-          "border-left": `3px solid ${reviewColor(props.state.kind)}`,
-          gap: "10px",
+          "border-left": `4px solid ${reviewColor(props.state.kind)}`,
+          gap: "18px",
         }}
       >
-        <div style={{ display: "flex", "align-items": "flex-start", "justify-content": "space-between", gap: "10px" }}>
-          <div style={{ display: "grid", gap: "3px" }}>
+        <div
+          style={{
+            display: "flex",
+            "align-items": "flex-start",
+            "justify-content": "space-between",
+            gap: "16px",
+            "flex-wrap": "wrap",
+          }}
+        >
+          <div style={{ display: "grid", gap: "6px", flex: "1 1 220px" }}>
             <span
               style={{
                 "font-family": FONT_MONO,
-                "font-size": "9px",
+                "font-size": META_FONT_SIZE,
                 "text-transform": "uppercase",
                 "letter-spacing": "0.08em",
                 color: reviewColor(props.state.kind),
@@ -463,7 +563,7 @@ function Review(props: {
             >
               {props.state.kind.replace("-", " ")}
             </span>
-            <strong style={{ "font-family": FONT_SANS, "font-size": "13px", color: "var(--color-text)" }}>
+            <strong style={{ "font-family": FONT_SANS, "font-size": SECTION_TITLE_SIZE, color: "var(--color-text)" }}>
               {props.state.title}
             </strong>
             <p style={copyStyle()}>{props.state.detail}</p>
@@ -485,8 +585,8 @@ function Review(props: {
               <div
                 style={{
                   display: "grid",
-                  "grid-template-columns": "repeat(4, minmax(0, 1fr))",
-                  gap: "6px",
+                  "grid-template-columns": "repeat(auto-fit, minmax(110px, 1fr))",
+                  gap: "10px",
                 }}
               >
                 <ReviewMetric label="blocking" value={report().summary.blocking} tone="blocking" />
@@ -499,12 +599,15 @@ function Review(props: {
                   display: "flex",
                   "align-items": "center",
                   "justify-content": "space-between",
-                  gap: "8px",
+                  gap: "12px",
                   "flex-wrap": "wrap",
                 }}
               >
-                <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
-                  v{report().version} · sha256 {report().artifactHash.slice(0, 12)}
+                <span
+                  data-label="review-version"
+                  style={{ "font-family": FONT_MONO, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}
+                >
+                  Preflight version {report().version} · Evidence hash sha256 {report().artifactHash.slice(0, 12)}
                 </span>
                 <Show
                   when={report().finalized}
@@ -531,12 +634,14 @@ function Review(props: {
                       }}
                       onClick={() => void finalize()}
                     >
-                      Finalize reviewed bytes
+                      Finalize preflight-checked bytes
                     </button>
                   }
                 >
                   {(value) => (
-                    <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-success)" }}>
+                    <span
+                      style={{ "font-family": FONT_MONO, "font-size": META_FONT_SIZE, color: "var(--color-success)" }}
+                    >
                       Finalized by {value().actor} · {new Date(value().at).toLocaleString()}
                     </span>
                   )}
@@ -548,7 +653,7 @@ function Review(props: {
                   <p style={copyStyle()}>No deterministic findings were recorded for these manuscript bytes.</p>
                 }
               >
-                <div style={{ display: "grid", gap: "8px" }}>
+                <div style={{ display: "grid", gap: "14px" }}>
                   <For each={report().findings}>
                     {(finding) => (
                       <ReviewFindingCard report={report().id} finding={finding} onFinding={props.onFinding} />
@@ -560,13 +665,33 @@ function Review(props: {
           )}
         </Show>
       </section>
+      <section data-component="reviewer-findings" style={card()}>
+        <div style={{ display: "grid", gap: "6px" }}>
+          <Heading icon="review">Reviewer findings</Heading>
+          <p style={copyStyle()}>
+            {props.scoped
+              ? "Findings the independent reviewer recorded in this session. They are project-wide provenance records, not filtered to this artifact."
+              : "All reviewer findings recorded in this project's provenance graph."}
+          </p>
+        </div>
+        <Show
+          when={props.findings.length}
+          fallback={<p style={copyStyle()}>No reviewer findings are recorded. Run a review from the session menu.</p>}
+        >
+          <div style={{ display: "grid", gap: "14px" }}>
+            <For each={props.findings}>
+              {(finding) => <ReviewerFindingCard finding={finding} onAddress={props.onAddress} />}
+            </For>
+          </div>
+        </Show>
+      </section>
       <section style={card()}>
-        <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", gap: "8px" }}>
+        <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", gap: "12px" }}>
           <Heading icon="review">Manual review threads</Heading>
           <span
             style={{
               "font-family": FONT_MONO,
-              "font-size": "10px",
+              "font-size": META_FONT_SIZE,
               color: open() ? "var(--color-warning)" : "var(--color-text-faint)",
             }}
           >
@@ -583,15 +708,15 @@ function Review(props: {
             width: "100%",
             resize: "vertical",
             "box-sizing": "border-box",
-            padding: "9px 10px",
+            padding: "14px 16px",
             border: "1px solid var(--color-border)",
-            "border-radius": "6px",
+            "border-radius": CONTROL_RADIUS,
             outline: "none",
             background: "var(--color-bg)",
             color: "var(--color-text)",
             "font-family": FONT_SANS,
-            "font-size": "11px",
-            "line-height": 1.5,
+            "font-size": BODY_FONT_SIZE,
+            "line-height": 1.6,
           }}
         />
         <button
@@ -607,7 +732,7 @@ function Review(props: {
         when={props.annotations.length}
         fallback={
           <div style={{ ...card(), "justify-items": "start" }}>
-            <strong style={{ "font-family": FONT_SANS, "font-size": "12px", color: "var(--color-text)" }}>
+            <strong style={{ "font-family": FONT_SANS, "font-size": "18px", color: "var(--color-text)" }}>
               No annotations yet
             </strong>
             <p style={copyStyle()}>Add the first review note. Threads persist with this project and file.</p>
@@ -628,18 +753,17 @@ function ReviewMetric(props: {
   return (
     <div
       style={{
-        padding: "7px 8px",
+        padding: "14px 12px",
         display: "grid",
-        gap: "2px",
-        border: "1px solid var(--color-border)",
-        "border-radius": "5px",
-        background: "var(--color-surface)",
+        gap: "4px",
+        "border-radius": CONTROL_RADIUS,
+        background: "var(--color-bg)",
       }}
     >
       <strong
         style={{
           "font-family": FONT_MONO,
-          "font-size": "13px",
+          "font-size": SECTION_TITLE_SIZE,
           color: props.tone ? findingColor(props.tone) : "var(--color-text)",
         }}
       >
@@ -648,7 +772,7 @@ function ReviewMetric(props: {
       <span
         style={{
           "font-family": FONT_MONO,
-          "font-size": "8px",
+          "font-size": "13px",
           "text-transform": "uppercase",
           color: "var(--color-text-faint)",
         }}
@@ -683,38 +807,58 @@ function ReviewFindingCard(props: {
       data-component="publication-finding"
       data-finding-id={props.finding.id}
       style={{
-        padding: "10px",
+        padding: "18px",
         display: "grid",
-        gap: "7px",
-        border: "1px solid var(--color-border)",
-        "border-left": `3px solid ${findingColor(props.finding.severity)}`,
-        "border-radius": "5px",
-        background: "var(--color-bg)",
+        gap: "12px",
+        "border-left": `4px solid ${findingColor(props.finding.severity)}`,
+        "border-radius": "16px",
+        background: "var(--color-bg-subtle)",
       }}
     >
-      <div style={{ display: "flex", "align-items": "center", gap: "6px", "flex-wrap": "wrap" }}>
+      <div style={{ display: "flex", "align-items": "center", gap: "8px", "flex-wrap": "wrap" }}>
         <span style={findingBadge(props.finding.severity)}>{props.finding.severity}</span>
         <span style={findingBadge()}>{props.finding.check}</span>
         <span style={{ ...findingBadge(), "margin-left": "auto" }}>{props.finding.status}</span>
       </div>
-      <strong style={{ "font-family": FONT_SANS, "font-size": "11px", color: "var(--color-text)" }}>
+      <strong
+        style={{ "font-family": FONT_SANS, "font-size": "18px", "line-height": 1.35, color: "var(--color-text)" }}
+      >
         {props.finding.title}
       </strong>
       <p style={copyStyle()}>{props.finding.detail}</p>
-      <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+      <span style={{ "font-family": FONT_MONO, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}>
         {props.finding.location.path}
         {props.finding.location.line ? `:${props.finding.location.line}` : ""}
       </span>
       <Show when={props.finding.evidence.length}>
-        <ul style={{ margin: 0, padding: "0 0 0 16px", display: "grid", gap: "3px" }}>
-          <For each={props.finding.evidence}>
-            {(evidence) => (
-              <li style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-muted)" }}>
-                {evidence}
-              </li>
-            )}
-          </For>
-        </ul>
+        <div data-section="finding-evidence" style={{ display: "grid", gap: "8px" }}>
+          <span
+            style={{
+              "font-family": FONT_SANS,
+              "font-size": META_FONT_SIZE,
+              "font-weight": 650,
+              color: "var(--color-text)",
+            }}
+          >
+            Evidence
+          </span>
+          <ul style={{ margin: 0, padding: "0 0 0 20px", display: "grid", gap: "6px" }}>
+            <For each={props.finding.evidence}>
+              {(evidence) => (
+                <li
+                  style={{
+                    "font-family": FONT_MONO,
+                    "font-size": META_FONT_SIZE,
+                    "line-height": 1.55,
+                    color: "var(--color-text-muted)",
+                  }}
+                >
+                  {evidence}
+                </li>
+              )}
+            </For>
+          </ul>
+        </div>
       </Show>
       <Show when={props.finding.resolution}>
         {(resolution) => (
@@ -724,7 +868,7 @@ function ReviewFindingCard(props: {
         )}
       </Show>
       <Show when={props.finding.status === "open"}>
-        <div style={{ display: "flex", gap: "6px" }}>
+        <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
           <button type="button" disabled={busy()} style={quietButton()} onClick={() => setMode("resolved")}>
             Resolve
           </button>
@@ -734,7 +878,7 @@ function ReviewFindingCard(props: {
         </div>
         <Show when={mode()}>
           {(status) => (
-            <div style={{ display: "grid", gap: "6px" }}>
+            <div style={{ display: "grid", gap: "10px" }}>
               <textarea
                 aria-label={`${status() === "resolved" ? "Resolution" : "Override"} reason for ${props.finding.title}`}
                 value={reason()}
@@ -749,18 +893,18 @@ function ReviewFindingCard(props: {
                   width: "100%",
                   resize: "vertical",
                   "box-sizing": "border-box",
-                  padding: "8px",
+                  padding: "14px 16px",
                   border: "1px solid var(--color-border)",
-                  "border-radius": "5px",
+                  "border-radius": CONTROL_RADIUS,
                   outline: "none",
                   background: "var(--color-bg)",
                   color: "var(--color-text)",
                   "font-family": FONT_SANS,
-                  "font-size": "10px",
-                  "line-height": 1.5,
+                  "font-size": BODY_FONT_SIZE,
+                  "line-height": 1.6,
                 }}
               />
-              <div style={{ display: "flex", gap: "6px" }}>
+              <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
                 <button
                   type="button"
                   disabled={!reason().trim() || busy()}
@@ -776,6 +920,100 @@ function ReviewFindingCard(props: {
             </div>
           )}
         </Show>
+      </Show>
+    </article>
+  )
+}
+
+function ReviewerFindingCard(props: {
+  finding: ReviewerFinding
+  onAddress(finding: ReviewerFinding): Promise<void>
+}): JSX.Element {
+  const [busy, setBusy] = createSignal(false)
+  const address = async () => {
+    if (busy()) return
+    setBusy(true)
+    await props.onAddress(props.finding)
+    setBusy(false)
+  }
+  return (
+    <article
+      data-component="reviewer-finding"
+      data-finding-id={props.finding.id}
+      data-finding-status={props.finding.status}
+      style={{
+        padding: "18px",
+        display: "grid",
+        gap: "12px",
+        "border-left": `4px solid ${findingColor(props.finding.severity)}`,
+        "border-radius": "16px",
+        background: "var(--color-bg-subtle)",
+      }}
+    >
+      <div style={{ display: "flex", "align-items": "center", gap: "8px", "flex-wrap": "wrap" }}>
+        <span style={findingBadge(props.finding.severity)}>{props.finding.severity}</span>
+        <span style={findingBadge()}>{props.finding.verdict}</span>
+        <Show when={props.finding.status}>
+          {(status) => (
+            <span data-chip="finding-status" style={{ ...reviewerStatusBadge(status()), "margin-left": "auto" }}>
+              {status()}
+            </span>
+          )}
+        </Show>
+      </div>
+      <blockquote
+        style={{
+          margin: 0,
+          padding: "0 0 0 14px",
+          "border-left": "3px solid var(--color-border)",
+          "font-family": FONT_SANS,
+          "font-size": "18px",
+          "line-height": 1.45,
+          color: "var(--color-text)",
+        }}
+      >
+        “{props.finding.claim}”
+      </blockquote>
+      <p style={copyStyle()}>{props.finding.issue}</p>
+      <pre
+        data-section="reviewer-evidence"
+        class="atlas-scroll"
+        style={{
+          margin: 0,
+          "max-height": "200px",
+          overflow: "auto",
+          padding: "14px 16px",
+          "border-radius": CONTROL_RADIUS,
+          background: "var(--color-bg)",
+          "font-family": FONT_MONO,
+          "font-size": META_FONT_SIZE,
+          "line-height": 1.6,
+          color: "var(--color-text-muted)",
+          "white-space": "pre-wrap",
+          "overflow-wrap": "anywhere",
+        }}
+      >
+        {props.finding.evidence}
+      </pre>
+      <span style={{ "font-family": FONT_MONO, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}>
+        {props.finding.reviewer} · {new Date(props.finding.recordedAt).toLocaleString()}
+      </span>
+      <Show when={props.finding.resolution}>
+        {(resolution) => (
+          <p style={{ ...copyStyle(), color: "var(--color-text-muted)" }}>
+            Fix recorded by {resolution().actor}: {resolution().reason}
+          </p>
+        )}
+      </Show>
+      <Show when={props.finding.verdict === "refutes" && props.finding.status === "open"}>
+        <button
+          type="button"
+          disabled={busy()}
+          style={{ ...actionButton(), "justify-self": "start", opacity: busy() ? 0.45 : 1 }}
+          onClick={() => void address()}
+        >
+          {busy() ? "Recording…" : "Mark addressed"}
+        </button>
       </Show>
     </article>
   )
@@ -807,16 +1045,16 @@ function AnnotationThread(props: {
   }
   return (
     <article data-component="artifact-annotation" data-status={props.annotation.status} style={card()}>
-      <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+      <div style={{ display: "flex", "align-items": "center", gap: "10px", "flex-wrap": "wrap" }}>
         <span
           style={{
-            padding: "3px 6px",
+            padding: "6px 10px",
             "border-radius": "999px",
             background:
               props.annotation.status === "open" ? "var(--color-warning-subtle)" : "var(--color-success-subtle)",
             color: props.annotation.status === "open" ? "var(--color-warning)" : "var(--color-success)",
             "font-family": FONT_SANS,
-            "font-size": "9px",
+            "font-size": "13px",
             "font-weight": 650,
             "text-transform": "capitalize",
           }}
@@ -826,19 +1064,17 @@ function AnnotationThread(props: {
         <span
           title={anchor()}
           style={{
-            flex: 1,
-            overflow: "hidden",
-            "text-overflow": "ellipsis",
-            "white-space": "nowrap",
+            flex: "1 1 160px",
             "font-family": FONT_MONO,
-            "font-size": "9px",
+            "font-size": META_FONT_SIZE,
+            "line-height": 1.5,
             color: "var(--color-text-faint)",
           }}
         >
           {anchor()}
         </span>
-        <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
-          v{props.annotation.version}
+        <span style={{ "font-family": FONT_MONO, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}>
+          Annotation version {props.annotation.version}
         </span>
         <button
           type="button"
@@ -862,7 +1098,14 @@ function AnnotationThread(props: {
       </div>
       <For each={props.annotation.messages}>
         {(message, index) => (
-          <div style={{ display: "grid", gap: "4px", padding: "8px 0", "border-top": "1px solid var(--color-border)" }}>
+          <div
+            style={{
+              display: "grid",
+              gap: "8px",
+              padding: "16px 0",
+              "border-top": "1px solid var(--color-border)",
+            }}
+          >
             <Show
               when={index() === 0 && editing()}
               fallback={<p style={{ ...copyStyle(), color: "var(--color-text)" }}>{message.body}</p>}
@@ -876,18 +1119,18 @@ function AnnotationThread(props: {
                   width: "100%",
                   resize: "vertical",
                   "box-sizing": "border-box",
-                  padding: "8px",
+                  padding: "14px 16px",
                   border: "1px solid var(--color-border)",
-                  "border-radius": "5px",
+                  "border-radius": CONTROL_RADIUS,
                   outline: "none",
                   background: "var(--color-bg)",
                   color: "var(--color-text)",
                   "font-family": FONT_SANS,
-                  "font-size": "10px",
-                  "line-height": 1.5,
+                  "font-size": BODY_FONT_SIZE,
+                  "line-height": 1.6,
                 }}
               />
-              <div style={{ display: "flex", gap: "6px" }}>
+              <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
                 <button
                   type="button"
                   disabled={!edit().trim() || busy()}
@@ -901,7 +1144,7 @@ function AnnotationThread(props: {
                 </button>
               </div>
             </Show>
-            <span style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
+            <span style={{ "font-family": FONT_MONO, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}>
               {message.author} · {new Date(message.createdAt).toLocaleString()}
             </span>
           </div>
@@ -911,24 +1154,34 @@ function AnnotationThread(props: {
         <summary
           style={{
             cursor: "pointer",
+            "min-height": CONTROL_HEIGHT,
+            display: "flex",
+            "align-items": "center",
             "font-family": FONT_SANS,
-            "font-size": "10px",
+            "font-size": BODY_FONT_SIZE,
             color: "var(--color-text-muted)",
           }}
         >
           History · {props.annotation.revisions.length} revisions
         </summary>
-        <ol style={{ margin: "8px 0 0", padding: "0 0 0 20px", display: "grid", gap: "5px" }}>
+        <ol style={{ margin: "12px 0 0", padding: "0 0 0 22px", display: "grid", gap: "8px" }}>
           <For each={props.annotation.revisions}>
             {(item) => (
-              <li style={{ "font-family": FONT_MONO, "font-size": "9px", color: "var(--color-text-faint)" }}>
-                v{item.version} · {item.event} · {item.actor} · {new Date(item.at).toLocaleString()}
+              <li
+                style={{
+                  "font-family": FONT_MONO,
+                  "font-size": META_FONT_SIZE,
+                  "line-height": 1.5,
+                  color: "var(--color-text-faint)",
+                }}
+              >
+                Version {item.version} · {item.event} · {item.actor} · {new Date(item.at).toLocaleString()}
               </li>
             )}
           </For>
         </ol>
       </details>
-      <div style={{ display: "flex", gap: "6px" }}>
+      <div style={{ display: "flex", gap: "8px" }}>
         <input
           aria-label={`Reply to ${props.annotation.id}`}
           value={reply()}
@@ -942,14 +1195,16 @@ function AnnotationThread(props: {
           style={{
             flex: 1,
             "min-width": 0,
-            padding: "7px 8px",
+            "min-height": CONTROL_HEIGHT,
+            "box-sizing": "border-box",
+            padding: "0 14px",
             border: "1px solid var(--color-border)",
-            "border-radius": "5px",
+            "border-radius": CONTROL_RADIUS,
             outline: "none",
             background: "var(--color-bg)",
             color: "var(--color-text)",
             "font-family": FONT_SANS,
-            "font-size": "10px",
+            "font-size": BODY_FONT_SIZE,
           }}
         />
         <button
@@ -967,7 +1222,7 @@ function AnnotationThread(props: {
 
 function Details(props: { data: InspectorData }): JSX.Element {
   return (
-    <div style={{ display: "grid", gap: "12px" }}>
+    <div style={{ display: "grid", gap: "18px" }}>
       <section style={card()}>
         <Heading icon="details">File</Heading>
         <Fact label="name" value={props.data.context.name} />
@@ -991,17 +1246,16 @@ function Details(props: { data: InspectorData }): JSX.Element {
             </section>
             <section style={card()}>
               <Heading icon="details">Available operations</Heading>
-              <div style={{ display: "flex", gap: "5px", "flex-wrap": "wrap" }}>
+              <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
                 <For each={inspection().capabilities}>
                   {(item) => (
                     <span
                       style={{
-                        padding: "4px 6px",
-                        "border-radius": "5px",
-                        border: "1px solid var(--color-border)",
+                        padding: "8px 12px",
+                        "border-radius": "999px",
                         background: "var(--color-bg)",
                         "font-family": FONT_SANS,
-                        "font-size": "10px",
+                        "font-size": META_FONT_SIZE,
                         color: "var(--color-text-muted)",
                       }}
                     >
@@ -1040,11 +1294,119 @@ function Environment(props: { data: InspectorData }): JSX.Element {
       when={props.data.tabs.environment.available}
       fallback={<Empty state={props.data.tabs.environment} icon="environment" />}
     >
-      <div style={{ display: "grid", gap: "12px" }}>
+      <div style={{ display: "grid", gap: "18px" }}>
         <List title="Environment specifications" items={props.data.environments} />
         <List title="Dependency locks" items={props.data.lockfiles} />
       </div>
     </Show>
+  )
+}
+
+function Runs(props: { data: InspectorData }): JSX.Element {
+  return (
+    <Show when={props.data.runs.length} fallback={<Empty state={props.data.tabs.run} icon="run" />}>
+      <div style={{ display: "grid", gap: "18px" }}>
+        <For each={props.data.runs}>{(run) => <RunCard run={run} />}</For>
+      </div>
+    </Show>
+  )
+}
+
+function RunCard(props: { run: LineageRun }): JSX.Element {
+  const kernel = () => [props.run.kernel?.language, props.run.kernel?.name].filter(Boolean).join(" · ")
+  const code = () => props.run.code ?? props.run.command
+  return (
+    <section data-component="artifact-run" data-run-id={props.run.id} style={card()}>
+      <div style={{ display: "flex", "align-items": "center", gap: "10px", "flex-wrap": "wrap" }}>
+        <Heading icon="run">{props.run.tool}</Heading>
+        <Show when={props.run.status}>
+          {(status) => (
+            <span data-run-status={status()} style={{ ...runBadge(status()), "margin-left": "auto" }}>
+              {status()}
+            </span>
+          )}
+        </Show>
+      </div>
+      <Fact label="label" value={props.run.label} />
+      <Show when={kernel()}>{(value) => <Fact label="kernel" value={value()} mono />}</Show>
+      <Show when={props.run.startedAt}>
+        {(value) => <Fact label="started" value={new Date(value()).toLocaleString()} />}
+      </Show>
+      <Show when={props.run.completedAt}>
+        {(value) => <Fact label="completed" value={new Date(value()).toLocaleString()} />}
+      </Show>
+      <Fact label="recorded" value={new Date(props.run.recordedAt).toLocaleString()} />
+      <Show when={props.run.cwd}>{(value) => <Fact label="cwd" value={value()} mono />}</Show>
+      <Show when={code()}>
+        {(value) => (
+          <pre
+            class="atlas-scroll"
+            style={{
+              margin: 0,
+              "max-height": "320px",
+              overflow: "auto",
+              padding: "16px",
+              "border-radius": CONTROL_RADIUS,
+              background: "var(--color-bg)",
+              "font-family": FONT_CODE,
+              "font-size": META_FONT_SIZE,
+              "line-height": 1.65,
+              color: "var(--color-text-muted)",
+              "white-space": "pre",
+            }}
+          >
+            {value()}
+          </pre>
+        )}
+      </Show>
+    </section>
+  )
+}
+
+function Messages(props: { data: InspectorData; session?: string }): JSX.Element {
+  return (
+    <Show when={props.data.messages.length} fallback={<Empty state={props.data.tabs.messages} icon="messages" />}>
+      <div style={{ display: "grid", gap: "14px" }}>
+        <For each={props.data.messages}>{(message) => <MessageRow message={message} session={props.session} />}</For>
+      </div>
+    </Show>
+  )
+}
+
+function MessageRow(props: { message: LineageMessage; session?: string }): JSX.Element {
+  const current = () => props.session !== undefined && props.message.sessionID === props.session
+  const show = () => {
+    const node = document.querySelector(`[data-message-id="${props.message.messageID}"]`)
+    node?.scrollIntoView({ behavior: "smooth", block: "center" })
+  }
+  return (
+    <section data-component="artifact-message" data-message={props.message.messageID} style={card()}>
+      <div style={{ display: "grid", gap: "4px", padding: "2px 0" }}>
+        <span style={{ "font-family": FONT_SANS, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}>
+          message
+        </span>
+        <span
+          title={props.message.messageID}
+          style={{
+            "font-family": FONT_CODE,
+            "font-size": BODY_FONT_SIZE,
+            "line-height": 1.55,
+            color: "var(--color-text)",
+            overflow: "hidden",
+            "text-overflow": "ellipsis",
+            "white-space": "nowrap",
+          }}
+        >
+          {props.message.messageID}
+        </span>
+      </div>
+      <Fact label="session" value={props.message.sessionID} mono />
+      <Show when={current()}>
+        <button type="button" style={{ ...actionButton(), "justify-self": "start" }} onClick={show}>
+          <IconMessageSquare size={16} /> Show in conversation
+        </button>
+      </Show>
+    </section>
   )
 }
 
@@ -1076,7 +1438,14 @@ function List(props: { title: string; items: string[] }): JSX.Element {
         <ul style={{ margin: 0, padding: "0 0 0 18px", display: "grid", gap: "6px" }}>
           <For each={props.items}>
             {(item) => (
-              <li style={{ "font-family": FONT_CODE, "font-size": "11px", color: "var(--color-text-muted)" }}>
+              <li
+                style={{
+                  "font-family": FONT_CODE,
+                  "font-size": BODY_FONT_SIZE,
+                  "line-height": 1.6,
+                  color: "var(--color-text-muted)",
+                }}
+              >
                 {item}
               </li>
             )}
@@ -1097,10 +1466,9 @@ function Empty(props: {
       style={{
         display: "grid",
         "justify-items": "start",
-        gap: "10px",
-        padding: "18px",
-        border: "1px solid var(--color-border)",
-        "border-radius": "8px",
+        gap: "14px",
+        padding: "24px",
+        "border-radius": GROUP_RADIUS,
         background: "var(--color-bg-subtle)",
       }}
     >
@@ -1112,9 +1480,9 @@ function Empty(props: {
 
 function Loading(): JSX.Element {
   return (
-    <div data-component="artifact-inspector-loading" style={{ display: "grid", gap: "10px" }}>
+    <div data-component="artifact-inspector-loading" style={{ display: "grid", gap: "16px" }}>
       <For each={[1, 2, 3]}>
-        {() => <div style={{ height: "58px", "border-radius": "7px", background: "var(--color-bg-subtle)" }} />}
+        {() => <div style={{ height: "92px", "border-radius": GROUP_RADIUS, background: "var(--color-bg-subtle)" }} />}
       </For>
     </div>
   )
@@ -1140,14 +1508,15 @@ function Heading(props: {
         margin: 0,
         display: "flex",
         "align-items": "center",
-        gap: "7px",
+        gap: "10px",
         "font-family": FONT_SANS,
-        "font-size": "12px",
+        "font-size": SECTION_TITLE_SIZE,
+        "line-height": 1.3,
         "font-weight": 650,
         color: "var(--color-text)",
       }}
     >
-      <Icon size={13} strokeWidth={1.5} />
+      <Icon size={18} strokeWidth={1.5} />
       {props.children}
     </h3>
   )
@@ -1155,22 +1524,18 @@ function Heading(props: {
 
 function Fact(props: { label: string; value: string; mono?: boolean }): JSX.Element {
   return (
-    <div
-      style={{ display: "grid", "grid-template-columns": "78px minmax(0, 1fr)", gap: "10px", "align-items": "start" }}
-    >
-      <span style={{ "font-family": FONT_SANS, "font-size": "11px", color: "var(--color-text-faint)" }}>
+    <div style={{ display: "grid", gap: "4px", "align-items": "start", padding: "2px 0 8px" }}>
+      <span style={{ "font-family": FONT_SANS, "font-size": META_FONT_SIZE, color: "var(--color-text-faint)" }}>
         {props.label}
       </span>
       <span
         title={props.value}
         style={{
           "font-family": props.mono ? FONT_CODE : FONT_SANS,
-          "font-size": "11px",
-          "line-height": 1.45,
+          "font-size": BODY_FONT_SIZE,
+          "line-height": 1.55,
           color: "var(--color-text-muted)",
-          overflow: "hidden",
-          "text-overflow": "ellipsis",
-          "white-space": "nowrap",
+          "overflow-wrap": "anywhere",
         }}
       >
         {props.value}
@@ -1182,11 +1547,10 @@ function Fact(props: { label: string; value: string; mono?: boolean }): JSX.Elem
 function card(): JSX.CSSProperties {
   return {
     display: "grid",
-    gap: "9px",
-    padding: "13px",
-    border: "1px solid var(--color-border)",
-    "border-radius": "8px",
-    background: "var(--color-bg-subtle)",
+    gap: "16px",
+    padding: "20px",
+    "border-radius": GROUP_RADIUS,
+    background: "color-mix(in srgb, var(--color-bg-subtle) 82%, var(--color-bg))",
   }
 }
 
@@ -1194,8 +1558,8 @@ function copyStyle(): JSX.CSSProperties {
   return {
     margin: 0,
     "font-family": FONT_SANS,
-    "font-size": "11px",
-    "line-height": 1.55,
+    "font-size": BODY_FONT_SIZE,
+    "line-height": 1.65,
     color: "var(--color-text-muted)",
   }
 }
@@ -1203,18 +1567,20 @@ function copyStyle(): JSX.CSSProperties {
 function actionButton(primary = false): JSX.CSSProperties {
   return {
     all: "unset",
+    "box-sizing": "border-box",
     cursor: "pointer",
+    "min-height": CONTROL_HEIGHT,
     display: "inline-flex",
     "align-items": "center",
     "justify-content": "center",
-    gap: "6px",
-    padding: "7px 8px",
-    "border-radius": "6px",
+    gap: "8px",
+    padding: "0 14px",
+    "border-radius": CONTROL_RADIUS,
     border: primary ? "1px solid var(--color-text)" : "1px solid var(--color-border)",
     background: primary ? "var(--color-text)" : "var(--color-bg-subtle)",
     color: primary ? "var(--color-bg)" : "var(--color-text-muted)",
     "font-family": FONT_SANS,
-    "font-size": "11px",
+    "font-size": "15px",
     "font-weight": primary ? 650 : 500,
   }
 }
@@ -1222,16 +1588,18 @@ function actionButton(primary = false): JSX.CSSProperties {
 function tabButton(active: boolean): JSX.CSSProperties {
   return {
     all: "unset",
+    "box-sizing": "border-box",
     cursor: "pointer",
+    "min-height": CONTROL_HEIGHT,
     display: "inline-flex",
     "align-items": "center",
-    gap: "5px",
-    padding: "6px 8px",
-    "border-radius": "5px",
+    gap: "7px",
+    padding: "0 14px",
+    "border-radius": CONTROL_RADIUS,
     background: active ? "var(--color-accent-subtle)" : "transparent",
     color: active ? "var(--color-text)" : "var(--color-text-muted)",
     "font-family": FONT_SANS,
-    "font-size": "11px",
+    "font-size": "15px",
     "font-weight": active ? 650 : 500,
     "white-space": "nowrap",
   }
@@ -1240,13 +1608,14 @@ function tabButton(active: boolean): JSX.CSSProperties {
 function iconButton(): JSX.CSSProperties {
   return {
     all: "unset",
+    "box-sizing": "border-box",
     cursor: "pointer",
-    width: "28px",
-    height: "28px",
+    width: CONTROL_HEIGHT,
+    height: CONTROL_HEIGHT,
     display: "inline-flex",
     "align-items": "center",
     "justify-content": "center",
-    "border-radius": "5px",
+    "border-radius": CONTROL_RADIUS,
     color: "var(--color-text-muted)",
   }
 }
@@ -1254,11 +1623,16 @@ function iconButton(): JSX.CSSProperties {
 function quietButton(): JSX.CSSProperties {
   return {
     all: "unset",
+    "box-sizing": "border-box",
     cursor: "pointer",
-    padding: "5px 8px",
-    "border-radius": "5px",
+    "min-height": CONTROL_HEIGHT,
+    display: "inline-flex",
+    "align-items": "center",
+    "justify-content": "center",
+    padding: "0 14px",
+    "border-radius": CONTROL_RADIUS,
     "font-family": FONT_SANS,
-    "font-size": "11px",
+    "font-size": "15px",
     color: "var(--color-text-muted)",
   }
 }
@@ -1277,15 +1651,51 @@ function findingColor(severity: PublicationReviewFinding["severity"]): string {
   return "var(--color-text-faint)"
 }
 
+function runBadge(status: "ok" | "error"): JSX.CSSProperties {
+  return {
+    padding: "5px 10px",
+    "border-radius": "999px",
+    background:
+      status === "error"
+        ? "var(--color-error-subtle, var(--color-bg))"
+        : "var(--color-success-subtle, var(--color-bg))",
+    color: status === "error" ? "var(--color-danger, var(--color-error))" : "var(--color-success)",
+    "font-family": FONT_MONO,
+    "font-size": "13px",
+    "font-weight": 650,
+    "text-transform": "uppercase",
+    "letter-spacing": "0.04em",
+  }
+}
+
+function reviewerStatusBadge(status: NonNullable<ReviewerFinding["status"]>): JSX.CSSProperties {
+  const color =
+    status === "open"
+      ? "var(--color-warning)"
+      : status === "confirmed"
+        ? "var(--color-success)"
+        : "var(--color-text-muted)"
+  return {
+    padding: "5px 10px",
+    "border-radius": "999px",
+    background: "var(--color-bg)",
+    color,
+    "font-family": FONT_MONO,
+    "font-size": "13px",
+    "font-weight": 650,
+    "text-transform": "uppercase",
+    "letter-spacing": "0.04em",
+  }
+}
+
 function findingBadge(severity?: PublicationReviewFinding["severity"]): JSX.CSSProperties {
   return {
-    padding: "3px 6px",
+    padding: "5px 8px",
     "border-radius": "999px",
-    border: "1px solid var(--color-border)",
-    background: "var(--color-bg-subtle)",
+    background: "var(--color-bg)",
     color: severity ? findingColor(severity) : "var(--color-text-muted)",
     "font-family": FONT_MONO,
-    "font-size": "8px",
+    "font-size": "13px",
     "font-weight": severity ? 650 : 500,
     "text-transform": "uppercase",
     "letter-spacing": "0.04em",

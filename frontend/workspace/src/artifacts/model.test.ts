@@ -35,6 +35,9 @@ describe("artifact gallery model", () => {
 
   test("offers scientific actions tailored to each artifact kind", () => {
     expect(artifactActions(rows[2]!).map((action) => action.id)).toEqual(["inspect-quality", "visualize", "analyze"])
+    // Reviewing is a direct route action, never a chat prompt — the notebook
+    // catalog must not reintroduce a "spawn the reviewer" prefill.
+    expect(artifactActions(rows[0]!).map((action) => action.id)).toEqual(["run-notebook", "export-notebook"])
     expect(
       artifactActions({
         name: "protein.pdb",

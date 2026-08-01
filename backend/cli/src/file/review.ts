@@ -2,6 +2,7 @@ import path from "node:path"
 import { ulid } from "ulid"
 import z from "zod"
 import { Instance } from "../project/instance"
+import { ProjectLegacy } from "../project/legacy"
 import { Provenance } from "../science/provenance/store"
 import { Storage } from "../storage/storage"
 import { ArtifactFile } from "./artifacts"
@@ -115,11 +116,19 @@ export namespace PublicationReview {
   const prefix = () => ["publication_review", Instance.project.id]
   const key = (id: string) => [...prefix(), id]
 
+  async function migrate() {
+    await ProjectLegacy.adopt("publication_review", Instance.project.id, (value, projectID) => ({
+      ...Report.parse(value),
+      projectID,
+    }))
+  }
+
   export async function run(input: RunInput): Promise<Report> {
+    await migrate()
     const parsed = RunInput.parse(input)
     const source = await target(parsed.path)
     if (![".md", ".markdown"].includes(path.extname(source.absolute).toLowerCase())) {
-      throw new Error("Publication review currently requires a Markdown manuscript")
+      throw new Error("Publication preflight currently requires a Markdown manuscript")
     }
     if (!(await Bun.file(source.absolute).exists())) {
       throw new Error(`Publication manuscript not found: ${parsed.path}`)
@@ -127,7 +136,10 @@ export namespace PublicationReview {
     const [text, artifactHash, graph, provenance, audit] = await Promise.all([
       Bun.file(source.absolute).text(),
       digest(source.absolute),
-      Provenance.project(Instance.worktree),
+      Provenance.project({
+        projectID: Instance.project.id,
+        directory: Instance.directory,
+      }),
       ArtifactFile.provenance(Instance.worktree, source.relative),
       ArtifactFile.audit(Instance.worktree),
     ])
@@ -171,6 +183,7 @@ export namespace PublicationReview {
   }
 
   export async function history(filepath: string): Promise<Report[]> {
+    await migrate()
     const source = await target(filepath)
     const keys = await Storage.list(prefix())
     const reports = await Promise.all(
@@ -182,14 +195,16 @@ export namespace PublicationReview {
   }
 
   export async function get(id: string): Promise<Report> {
+    await migrate()
     return Report.parse(await Storage.read<unknown>(key(id)))
   }
 
   export async function resolve(id: string, findingID: string, input: ResolveInput): Promise<Report> {
+    await migrate()
     const parsed = ResolveInput.parse(input)
     return Report.parse(
       await Storage.update<Report>(key(id), (report) => {
-        if (report.finalized) throw new Error("A finalized publication review cannot be changed")
+        if (report.finalized) throw new Error("A finalized publication preflight cannot be changed")
         const finding = report.findings.find((item) => item.id === findingID)
         if (!finding) throw new Error(`Review finding ${findingID} was not found`)
         const now = Date.now()
@@ -247,11 +262,11 @@ export namespace PublicationReview {
   export async function assertReady(filepath: string, id: string, artifactHash?: string): Promise<Report> {
     const report = await get(id)
     const source = await target(filepath)
-    if (report.path !== source.relative) throw new Error("The publication review belongs to a different manuscript")
+    if (report.path !== source.relative) throw new Error("The publication preflight belongs to a different manuscript")
     await assertCurrent(report, artifactHash)
-    if (!report.finalized) throw new Error("The publication review has not been finalized")
+    if (!report.finalized) throw new Error("The publication preflight has not been finalized")
     if (report.findings.some((finding) => finding.severity === "blocking" && finding.status === "open")) {
-      throw new Error("The publication review still has open blocking findings")
+      throw new Error("The publication preflight still has open blocking findings")
     }
     return report
   }
@@ -447,7 +462,7 @@ export namespace PublicationReview {
           check: "provenance",
           severity: "blocking",
           title: "Manuscript differs from its recorded Git snapshot",
-          detail: "Commit the reviewed manuscript bytes before marking the publication ready.",
+          detail: "Commit the preflight-checked manuscript bytes before marking the publication ready.",
           evidence: [`Git status: ${provenance.status}`, `Latest commit: ${provenance.commit.sha}`],
           location: { path: source.relative },
         }),
@@ -519,7 +534,7 @@ export namespace PublicationReview {
   async function target(value: string) {
     const absolute = path.resolve(Instance.directory, value)
     if (!(await Instance.containsCanonicalPath(absolute))) {
-      throw new Error(`Publication review target is outside the project: ${value}`)
+      throw new Error(`Publication preflight target is outside the project: ${value}`)
     }
     return {
       absolute,
@@ -530,11 +545,11 @@ export namespace PublicationReview {
   async function assertCurrent(report: Report, artifactHash?: string) {
     const absolute = path.resolve(Instance.worktree, report.path)
     if (!(await Instance.containsCanonicalPath(absolute))) {
-      throw new Error("The reviewed manuscript is outside the current project")
+      throw new Error("The preflight-checked manuscript is outside the current project")
     }
-    if (!(await Bun.file(absolute).exists())) throw new Error("The reviewed manuscript no longer exists")
+    if (!(await Bun.file(absolute).exists())) throw new Error("The preflight-checked manuscript no longer exists")
     if ((artifactHash ?? (await digest(absolute))) !== report.artifactHash) {
-      throw new Error("The manuscript changed after this publication review was generated")
+      throw new Error("The manuscript changed after this publication preflight was generated")
     }
   }
 

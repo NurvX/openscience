@@ -1,6 +1,6 @@
 import { type JSX, Show, For, onMount, onCleanup } from "solid-js"
 import { Portal } from "solid-js/web"
-import { FONT_MONO, FONT_SANS, FONT_SERIF } from "@/styles/tokens"
+import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import { IconX } from "@/atlas/shared/Icon"
 import { AgentIcon } from "@/atlas/shared/AgentIcon"
 
@@ -63,10 +63,10 @@ export function HelpOverlay(props: HelpOverlayProps): JSX.Element {
               "border-bottom": "1px solid var(--color-border)",
             }}
           >
-            <AgentIcon size={20} strokeWidth={1.5} animated={true} />
+            <AgentIcon size={20} strokeWidth={1.5} />
             <span
               style={{
-                "font-family": FONT_SERIF,
+                "font-family": FONT_SANS,
                 "font-size": "22px",
                 "letter-spacing": "-0.01em",
                 color: "var(--color-text)",
@@ -76,6 +76,8 @@ export function HelpOverlay(props: HelpOverlayProps): JSX.Element {
             </span>
             <span style={{ flex: 1 }} />
             <button
+              type="button"
+              aria-label="Close keyboard shortcuts"
               onClick={props.onClose}
               style={{
                 all: "unset",

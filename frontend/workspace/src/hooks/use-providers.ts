@@ -1,7 +1,6 @@
 import { useGlobalSync } from "@/context/global-sync"
-import { decode64 } from "@/utils/base64"
-import { useParams } from "@solidjs/router"
 import { createMemo } from "solid-js"
+import { currentDirectory, currentProjectID } from "@/utils/base64"
 
 // Provider-agnostic ordering: lead with the mainstream BYOK/OAuth providers.
 // `synsci` (the managed Atlas provider) stays selectable but is not forced to the front — the
@@ -23,14 +22,11 @@ export const popularProviders = [
 
 export function useProviders() {
   const globalSync = useGlobalSync()
-  const params = useParams()
-  const currentDirectory = createMemo(() => decode64(params.dir) ?? "")
   const providers = createMemo(() => {
-    if (currentDirectory()) {
-      const [projectStore] = globalSync.child(currentDirectory())
-      return projectStore.provider
-    }
-    return globalSync.data.provider
+    const directory = currentDirectory()
+    if (!directory) return globalSync.data.provider
+    const [projectStore] = globalSync.child(directory, { projectID: currentProjectID() })
+    return projectStore.provider
   })
   const connected = createMemo(() => providers().all.filter((p) => providers().connected.includes(p.id)))
   const paid = createMemo(() =>

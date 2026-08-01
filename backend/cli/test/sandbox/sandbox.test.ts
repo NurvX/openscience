@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import fs from "fs"
 import os from "os"
+import path from "path"
 import { Sandbox } from "../../src/sandbox/sandbox"
 
 const shell = "/bin/sh"
@@ -34,6 +36,15 @@ describe("Sandbox.seatbeltProfile", () => {
     const profile = Sandbox.seatbeltProfile({ writable: ['/weird/pa"th'], network: true })
     expect(profile).toContain('/weird/pa\\"th')
   })
+
+  test("denies reads of host credential files", () => {
+    const profile = Sandbox.seatbeltProfile({
+      writable: ["/work/project"],
+      unreadable: ["/home/user/.config/atlas-cli/config.json"],
+      network: true,
+    })
+    expect(profile).toContain('(deny file-read* (literal "/home/user/.config/atlas-cli/config.json"))')
+  })
 })
 
 describe("Sandbox.bubblewrapArgs", () => {
@@ -65,6 +76,33 @@ describe("Sandbox.bubblewrapArgs", () => {
 
   test("unshares the PID namespace so /proc escape vectors are closed", () => {
     expect(Sandbox.bubblewrapArgs({ writable: ["/w"], network: true })).toContain("--unshare-pid")
+  })
+
+  test("masks host credential files with an empty device", () => {
+    const file = path.join(os.tmpdir(), `openscience-sandbox-secret-${process.pid}`)
+    fs.writeFileSync(file, "secret")
+    try {
+      const args = Sandbox.bubblewrapArgs({
+        writable: ["/work/project"],
+        unreadable: [file],
+        network: true,
+      })
+      const mask = args.findIndex((value, index) => value === "--ro-bind-try" && args[index + 1] === "/dev/null")
+      expect(args.slice(mask, mask + 3)).toEqual(["--ro-bind-try", "/dev/null", file])
+    } finally {
+      fs.rmSync(file, { force: true })
+    }
+  })
+
+  test("does not ask bubblewrap to create a missing credential mask under the read-only root", () => {
+    const file = path.join(os.tmpdir(), `openscience-sandbox-missing-${process.pid}`)
+    fs.rmSync(file, { force: true })
+    const args = Sandbox.bubblewrapArgs({
+      writable: ["/work/project"],
+      unreadable: [file],
+      network: true,
+    })
+    expect(args).not.toContain(file)
   })
 })
 

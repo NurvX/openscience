@@ -20,7 +20,7 @@ process.env.__SYNSCI_LAUNCHER_PID = String(process.pid)
 import { execFileSync, execSync, spawn } from "node:child_process"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
 import { npmDistTag, opensciencePackageSpec } from "../lib/channel.mjs"
@@ -197,8 +197,10 @@ function hasDeprecatedCli() {
 }
 
 function isConnected() {
+  const explicit = process.env.OPENSCIENCE_DATA_DIR?.trim()
   const xdgData = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")
-  const sessionPath = join(xdgData, "openscience", "openscience-session.json")
+  const data = explicit ? resolve(explicit) : join(xdgData, "openscience")
+  const sessionPath = join(data, "openscience-session.json")
   if (!existsSync(sessionPath)) return false
   try {
     const data = JSON.parse(readFileSync(sessionPath, "utf-8"))

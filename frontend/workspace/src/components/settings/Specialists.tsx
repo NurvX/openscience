@@ -1,9 +1,12 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js"
 import { IconButton } from "@synsci/ui/icon-button"
+import { Switch } from "@synsci/ui/switch"
 import { showToast } from "@synsci/ui/toast"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
+import { usePlatform } from "@/context/platform"
 import type { Agent, Config } from "@synsci/sdk/v2/client"
+import { settingsApi } from "./api"
 import {
   PanelScroll,
   PanelHeader,
@@ -21,24 +24,54 @@ import {
   Avatar,
   Chip,
 } from "./_shared"
+import { isVisibleSpecialist } from "./specialist-catalog"
 
-// System agents that are implementation details, not user-facing specialists.
-const SYSTEM_AGENTS = new Set(["title", "compaction"])
+const LABELS: Record<string, string> = {
+  research: "Research",
+  ml: "ML",
+  biology: "Bio",
+  physics: "Physics",
+  write: "Scientific writing",
+  docs: "Docs",
+  task: "General",
+  explore: "Explore",
+  "literature-review": "Literature review",
+  critique: "Scientific critique",
+  "physics-critique": "Physics critique",
+  reviewer: "Research reviewer",
+}
 type Mode = "primary" | "subagent" | "all"
 
 export default function Specialists() {
   const sdk = useGlobalSDK()
   const globalSDK = useGlobalSDK()
   const sync = useGlobalSync()
+  const platform = usePlatform()
+
+  // Reviewer preference — GET/PUT /settings/review (backend/cli/src/settings/
+  // review.ts). Manual review stays always available from the session header;
+  // this only opts into an automatic pass after a durable artifact save.
+  const fetchFn = platform.fetch ?? fetch
+  const reviewApi = (init?: RequestInit) => settingsApi<{ auto: boolean }>(sdk.url, fetchFn, "/settings/review", init)
+  const [reviewPrefs, reviewCtl] = createResource(() => reviewApi())
+  const [reviewSaving, setReviewSaving] = createSignal(false)
+  async function toggleAutoReview(auto: boolean) {
+    setReviewSaving(true)
+    try {
+      reviewCtl.mutate(await reviewApi({ method: "PUT", body: JSON.stringify({ auto }) }))
+    } catch (err) {
+      showToast({ variant: "error", title: "Could not update reviewer preference", description: message(err) })
+    } finally {
+      setReviewSaving(false)
+    }
+  }
 
   const [agents, agentsCtl] = createResource(async () => {
     const res = await sdk.client.app.agents()
-    // Show only user-facing specialists: the default harness + domain modes. Internal
-    // subagents and hidden model-backends are excluded; custom agents are always shown so
-    // they remain manageable here.
-    return ((res.data ?? []) as Agent[]).filter(
-      (a) => !SYSTEM_AGENTS.has(a.name) && (!a.native || (a.mode !== "subagent" && !a.hidden)),
-    )
+    // This screen is the catalog, so show every real non-hidden specialist,
+    // including built-in subagents. Planning remains adaptive in Research and
+    // the title/compaction implementation agents stay out of product UI.
+    return ((res.data ?? []) as Agent[]).filter(isVisibleSpecialist)
   })
 
   const [search, setSearch] = createSignal("")
@@ -107,7 +140,7 @@ export default function Specialists() {
     <PanelScroll>
       <PanelHeader
         title="Specialists"
-        description="The specialist modes you can switch between while you work. Built-in specialists ship with OpenScience; custom ones are defined in your config."
+        description="Primary agents can lead a session. Subagents are delegated focused work by a primary agent. Every non-hidden built-in specialist appears here."
         toolbar={
           <Show when={!creating()}>
             <Toolbar>
@@ -135,6 +168,28 @@ export default function Specialists() {
         </Show>
 
         <Show when={!creating()}>
+          <div class="flex flex-col gap-2">
+            <SectionLabel label="Reviewer" />
+            <Card>
+              <Row>
+                <div class="min-w-0 flex-1">
+                  <span class="text-14-medium text-text-strong">Automatically review significant results</span>
+                  <p class="text-12-regular text-text-weak mt-0.5">
+                    Runs the reviewer after a result is saved as a durable artifact.
+                  </p>
+                </div>
+                <Switch
+                  hideLabel
+                  checked={reviewPrefs()?.auto ?? false}
+                  disabled={reviewSaving() || reviewPrefs.loading}
+                  onChange={(auto) => void toggleAutoReview(auto)}
+                >
+                  Automatically review significant results
+                </Switch>
+              </Row>
+            </Card>
+          </div>
+
           <Show
             when={!agents.loading}
             fallback={<div class="py-12 text-center text-13-regular text-text-weak">Loading specialists…</div>}
@@ -179,14 +234,15 @@ export default function Specialists() {
 }
 
 function AgentRow(props: { agent: Agent; onDelete?: () => void; busy: boolean }) {
+  const label = () => LABELS[props.agent.name] ?? props.agent.name
   const modeLabel = () =>
     props.agent.mode === "subagent" ? "subagent" : props.agent.mode === "all" ? "primary · subagent" : "primary"
   return (
     <Row>
-      <Avatar monogram={props.agent.name.slice(0, 1)} tint={props.agent.color ?? undefined} />
+      <Avatar monogram={label().slice(0, 1)} tint={props.agent.color ?? undefined} />
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class="text-14-medium text-text-strong truncate">{props.agent.name}</span>
+          <span class="text-14-medium text-text-strong truncate">{label()}</span>
           <Chip>{modeLabel()}</Chip>
         </div>
         <Show when={props.agent.description}>

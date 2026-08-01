@@ -3,58 +3,28 @@ import { OpenScience } from "../../openscience"
 import { UI } from "../ui"
 import { cmd } from "./cmd"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
-import open from "open"
 import { openUrl } from "../../util/open-url"
 import { needsOnboarding, runOnboarding, isConfigured } from "../onboard"
-import fs from "fs/promises"
-import os from "os"
-import path from "path"
-
-// macOS TCC probe: try to read ~/Desktop, which is one of the canonical
-// dirs blocked unless the running binary has Full Disk Access. An empty
-// Desktop dir is rare enough that we treat 0-entries OR EACCES/EPERM as
-// "FDA missing" — both are actionable signals on the user's end.
-async function probeMacFda(): Promise<{ blocked: boolean; reason?: string }> {
-  if (process.platform !== "darwin") return { blocked: false }
-  const desktop = path.join(os.homedir(), "Desktop")
-  try {
-    const entries = await fs.readdir(desktop)
-    if (entries.length > 0) return { blocked: false }
-    return { blocked: true, reason: "openscience returned 0 entries for ~/Desktop (TCC likely blocking)" }
-  } catch (err: any) {
-    if (err?.code === "EACCES" || err?.code === "EPERM") {
-      return { blocked: true, reason: err.message }
-    }
-    // ENOENT, etc. — Desktop doesn't exist on this machine; nothing to warn about.
-    return { blocked: false }
-  }
-}
-
-const FDA_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+import { probeProtectedFolderAccess } from "../../file/protected-folder-access"
 
 async function announceFdaIfNeeded() {
-  const result = await probeMacFda()
+  const result = await probeProtectedFolderAccess()
   if (!result.blocked) return
-  const binary = process.execPath || "openscience"
   UI.empty()
-  UI.println(UI.Style.TEXT_WARNING_BOLD + "  ⚠  Full Disk Access required", UI.Style.TEXT_NORMAL)
+  UI.println(UI.Style.TEXT_WARNING_BOLD + "  ⚠  Project folder access is blocked", UI.Style.TEXT_NORMAL)
   UI.empty()
   UI.println(
     UI.Style.TEXT_NORMAL,
     "  macOS is blocking OpenScience from listing ~/Desktop, ~/Documents and ~/Downloads.",
   )
-  UI.println(UI.Style.TEXT_NORMAL, "  Without Full Disk Access the folder picker and file tree will be empty.")
+  UI.println(UI.Style.TEXT_NORMAL, "  Grant access to the terminal or app that launches OpenScience.")
   UI.empty()
   UI.println(UI.Style.TEXT_INFO_BOLD + "  Grant access:", UI.Style.TEXT_NORMAL)
-  UI.println(UI.Style.TEXT_NORMAL, "    1. The Privacy & Security pane just opened — find “Full Disk Access”")
-  UI.println(UI.Style.TEXT_NORMAL, "    2. Click +, hit ⌘⇧G, paste the path below, click Open")
-  UI.println(UI.Style.TEXT_NORMAL, "    3. Toggle the openscience entry on")
-  UI.println(UI.Style.TEXT_NORMAL, "    4. Quit (Ctrl+C) and relaunch `openscience web`")
+  UI.println(UI.Style.TEXT_NORMAL, "    1. Open System Settings → Privacy & Security → Full Disk Access")
+  UI.println(UI.Style.TEXT_NORMAL, "    2. Enable the terminal or desktop app you used to launch OpenScience")
+  UI.println(UI.Style.TEXT_NORMAL, "    3. If you launch the binary directly, run `which openscience` to locate it")
+  UI.println(UI.Style.TEXT_NORMAL, "    4. Quit (Ctrl+C), grant access, then relaunch `openscience web`")
   UI.empty()
-  UI.println(UI.Style.TEXT_INFO_BOLD + "  Path to add:", UI.Style.TEXT_NORMAL, "  " + binary)
-  UI.empty()
-  // Open System Settings pre-positioned on the FDA pane.
-  open(FDA_SETTINGS_URL).catch(() => {})
 }
 
 export const WebCommand = cmd({
@@ -153,9 +123,8 @@ export const WebCommand = cmd({
 
     openUrl(base)
 
-    // macOS-only: warn the user (and pop System Settings) if Full Disk
-    // Access is missing — without it the folder picker and file tree silently
-    // return empty for ~/Desktop, ~/Documents, ~/Downloads.
+    // macOS-only: warn when the host explicitly denies protected-folder
+    // access. System Settings opens only after a deliberate UI action.
     await announceFdaIfNeeded()
 
     // Wait for a termination signal. Without an explicit handler Bun keeps

@@ -1,10 +1,12 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, type JSX } from "solid-js"
 import { Dynamic } from "solid-js/web"
+import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
-import { usePlatform } from "@/context/platform"
-import { settingsApi } from "@/components/settings/api"
 import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import { toast } from "@/atlas/Toast"
+import { DispatchPreview, dispatchReady } from "@/atlas/DispatchPreview"
+import { createComputeJobsAPI, type Artifact, type Job, type Resources, type Status } from "@/atlas/ComputeJobsAPI"
+import { useExecutionAuthority } from "@/atlas/use-execution-authority"
 import {
   IconActivity,
   IconAlertCircle,
@@ -19,97 +21,22 @@ import {
   IconTrash,
 } from "@/atlas/shared/Icon"
 
-type Status = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted"
-type Target = { kind: "local" } | { kind: "ssh"; host_id: string }
-
-interface Host {
-  id: string
-  label: string
-  host: string
-  scheduler: "none" | "slurm" | "pbs"
-  workdir?: string
-}
-
-interface Settings {
-  ssh_hosts: Host[]
-}
-
-interface Artifact {
-  path: string
-  size: number
-  sha256: string
-  modified_at: string
-}
-
-interface Resources {
-  cpus?: number
-  gpus?: number
-  memory_gb?: number
-  time_minutes?: number
-  partition?: string
-}
-
-interface Reproducibility {
-  captured_at: string
-  command: string
-  cwd: string
-  platform: string
-  arch: string
-  bun: string
-  node: string
-  python?: string
-  git?: {
-    branch?: string
-    commit?: string
-    dirty: boolean
-  }
-  lockfiles: Artifact[]
-  resources?: Resources
-}
-
-interface Job {
-  id: string
-  name: string
-  command: string
-  cwd?: string
-  target: Target
-  target_label: string
-  scheduler: "none" | "slurm" | "pbs"
-  status: Status
-  created_at: string
-  started_at?: string
-  completed_at?: string
-  exit_code?: number | null
-  error?: string
-  resources?: Resources
-  modules?: string[]
-  container?: string
-  artifact_patterns?: string[]
-  artifacts?: Artifact[]
-  checkpoint_path?: string
-  checkpoint?: Artifact
-  reproducibility?: Reproducibility
-  capture_error?: string
-}
-
 const terminal = new Set<Status>(["succeeded", "failed", "cancelled", "interrupted"])
 
 export function ComputeJobs(): JSX.Element {
   const sdk = useSDK()
-  const platform = usePlatform()
-  const fetchFn = platform.fetch ?? fetch
-  const call = <T,>(path: string, init?: RequestInit) =>
-    settingsApi<T>(sdk.url, fetchFn, `/settings/compute${path}`, init)
+  const params = useParams()
+  const api = createComputeJobsAPI(sdk.request)
 
-  const [jobs, jobsApi] = createResource(() => call<Job[]>("/jobs"))
-  const [settings] = createResource(() => call<Settings>(""))
+  const [jobs, jobsApi] = createResource(api.list)
   const [selected, setSelected] = createSignal<string>()
   const [creating, setCreating] = createSignal(false)
+  const [reviewed, setReviewed] = createSignal(false)
   const [busy, setBusy] = createSignal(false)
   const [name, setName] = createSignal("")
   const [command, setCommand] = createSignal("")
   const [cwd, setCwd] = createSignal("")
-  const [target, setTarget] = createSignal("local")
+  const authority = useExecutionAuthority("local_job")
   const [advanced, setAdvanced] = createSignal(false)
   const [cpus, setCpus] = createSignal("")
   const [gpus, setGpus] = createSignal("")
@@ -122,10 +49,7 @@ export function ComputeJobs(): JSX.Element {
   const [checkpoint, setCheckpoint] = createSignal("")
   const current = createMemo(() => jobs()?.find((job) => job.id === selected()))
   const active = createMemo(() => jobs()?.filter((job) => !terminal.has(job.status)).length ?? 0)
-  const [output, outputApi] = createResource(
-    selected,
-    async (id) => (await call<{ log: string }>(`/jobs/${id}/log`)).log,
-  )
+  const [output, outputApi] = createResource(selected, async (id) => (await api.log(id)).log)
 
   createEffect(() => {
     const list = jobs()
@@ -146,7 +70,6 @@ export function ComputeJobs(): JSX.Element {
     setName("")
     setCommand("")
     setCwd("")
-    setTarget("local")
     setAdvanced(false)
     setCpus("")
     setGpus("")
@@ -157,38 +80,62 @@ export function ComputeJobs(): JSX.Element {
     setContainer("")
     setArtifacts("")
     setCheckpoint("")
+    setReviewed(false)
     setCreating(false)
   }
 
-  const start = async () => {
-    if (!name().trim() || !command().trim()) return
-    setBusy(true)
-    const value = target()
-    const resources = {
+  const resources = () => {
+    const value = {
       cpus: number(cpus()),
       gpus: number(gpus()),
       memory_gb: number(memory()),
       time_minutes: number(time()),
       partition: partition().trim() || undefined,
     }
-    const hasResources = Object.values(resources).some((item) => item !== undefined)
-    const next = await call<Job>("/jobs", {
-      method: "POST",
-      body: JSON.stringify({
+    return Object.values(value).some((item) => item !== undefined) ? value : undefined
+  }
+
+  const staged = () => {
+    return {
+      command: command().trim(),
+      cwd: cwd().trim() || "Session workspace",
+      resources: resources(),
+      modules: listValue(modules()),
+      container: container().trim() || undefined,
+    }
+  }
+
+  const ready = () => dispatchReady({ name: name(), command: command(), reviewed: reviewed(), busy: busy() })
+
+  const start = async () => {
+    if (!ready()) return
+    const sessionID = params.id
+    if (!sessionID || sessionID === "new") {
+      toast.error("job did not start", "Save the session before starting a research job.")
+      return
+    }
+    if (!authority.allowed()) {
+      toast.error("job did not start", authority.message() ?? "This session cannot dispatch a research job.")
+      return
+    }
+    setBusy(true)
+    const next = await api
+      .start({
+        sessionID,
         name: name().trim(),
         command: command().trim(),
-        cwd: cwd().trim() || (value === "local" ? sdk.directory : undefined),
-        target: value === "local" ? { kind: "local" } : { kind: "ssh", host_id: value.slice(4) },
-        resources: hasResources ? resources : undefined,
+        cwd: cwd().trim() || undefined,
+        target: { kind: "local" },
+        resources: resources(),
         modules: listValue(modules()),
         container: container().trim() || undefined,
         artifacts: listValue(artifacts()),
         checkpoint: checkpoint().trim() || undefined,
-      }),
-    }).catch((error) => {
-      toast.error("job did not start", error instanceof Error ? error.message : String(error))
-      return undefined
-    })
+      })
+      .catch((error) => {
+        toast.error("job did not start", error instanceof Error ? error.message : String(error))
+        return undefined
+      })
     setBusy(false)
     if (!next) return
     jobsApi.mutate((list) => [next, ...(list ?? []).filter((job) => job.id !== next.id)])
@@ -199,7 +146,7 @@ export function ComputeJobs(): JSX.Element {
 
   const cancel = async (job: Job) => {
     setBusy(true)
-    const next = await call<Job>(`/jobs/${job.id}/cancel`, { method: "POST" }).catch((error) => {
+    const next = await api.cancel(job.id).catch((error) => {
       toast.error("job did not cancel", error instanceof Error ? error.message : String(error))
       return undefined
     })
@@ -210,10 +157,16 @@ export function ComputeJobs(): JSX.Element {
   }
 
   const rerun = (job: Job) => {
+    if (job.target.kind !== "local") {
+      toast.error(
+        "remote rerun unavailable",
+        "SSH dispatch stays disabled until staging, reattachment, cancellation, logs, and outputs pass real-host validation.",
+      )
+      return
+    }
     setName(job.name)
     setCommand(job.command)
-    setCwd(job.cwd ?? "")
-    setTarget(job.target.kind === "local" ? "local" : `ssh:${job.target.host_id}`)
+    setCwd("")
     setCpus(job.resources?.cpus?.toString() ?? "")
     setGpus(job.resources?.gpus?.toString() ?? "")
     setMemory(job.resources?.memory_gb?.toString() ?? "")
@@ -226,6 +179,7 @@ export function ComputeJobs(): JSX.Element {
     setAdvanced(
       !!(job.resources || job.modules?.length || job.container || job.artifact_patterns?.length || job.checkpoint_path),
     )
+    setReviewed(false)
     setCreating(true)
   }
 
@@ -240,31 +194,42 @@ export function ComputeJobs(): JSX.Element {
 
   const clear = async () => {
     setBusy(true)
-    await call<{ cleared: number }>("/jobs/completed", { method: "DELETE" }).catch((error) =>
-      toast.error("jobs were not cleared", error instanceof Error ? error.message : String(error)),
-    )
+    await api
+      .clear()
+      .catch((error) => toast.error("jobs were not cleared", error instanceof Error ? error.message : String(error)))
     setBusy(false)
     await jobsApi.refetch()
   }
 
   return (
-    <div style={shell}>
+    <div class="compute-jobs" style={shell}>
       <div style={header}>
-        <div style={{ display: "flex", "align-items": "center", gap: "8px", "min-width": 0 }}>
+        <div style={{ display: "flex", "align-items": "center", gap: "9px", "min-width": 0 }}>
           <span style={mark}>
-            <IconCpu size={13} strokeWidth={1.5} />
+            <IconCpu size={15} strokeWidth={1.5} />
           </span>
-          <div style={{ display: "flex", "flex-direction": "column", "min-width": 0 }}>
-            <span style={title}>compute jobs</span>
-            <span style={subtitle}>{active() ? `${active()} active` : "local · SSH · schedulers"}</span>
+          <div style={{ display: "flex", "flex-direction": "column", gap: "2px", "min-width": 0 }}>
+            <span style={title}>Research jobs</span>
+            <span style={subtitle}>
+              {active() ? `${active()} active in this project` : "Runs stay with this project"}
+            </span>
           </div>
         </div>
-        <div style={{ display: "flex", gap: "4px" }}>
-          <Action title="refresh jobs" onClick={() => void jobsApi.refetch()}>
-            <IconRefresh size={12} />
+        <div style={{ display: "flex", gap: "6px" }}>
+          <Action title="Refresh jobs" onClick={() => void jobsApi.refetch()}>
+            <IconRefresh size={15} />
           </Action>
-          <Action title="new job" active={creating()} onClick={() => setCreating((value) => !value)}>
-            <IconPlus size={13} />
+          <Action
+            title={
+              params.id && params.id !== "new"
+                ? (authority.message() ?? "New job")
+                : "Save the session before starting a job"
+            }
+            active={creating()}
+            disabled={!params.id || params.id === "new" || !authority.allowed()}
+            onClick={() => setCreating((value) => !value)}
+          >
+            <IconPlus size={16} />
           </Action>
         </div>
       </div>
@@ -275,9 +240,17 @@ export function ComputeJobs(): JSX.Element {
             Compute jobs are unavailable. {jobs.error instanceof Error ? jobs.error.message : String(jobs.error)}
           </span>
           <button type="button" style={secondaryButton} onClick={() => void jobsApi.refetch()}>
-            retry
+            Retry
           </button>
         </div>
+      </Show>
+
+      <Show when={authority.message()}>
+        {(message) => (
+          <div role={authority.decision.error ? "alert" : "status"} style={authorityBox}>
+            {message()}
+          </div>
+        )}
       </Show>
 
       <Show when={creating()}>
@@ -288,54 +261,55 @@ export function ComputeJobs(): JSX.Element {
             void start()
           }}
         >
-          <input
-            aria-label="Job name"
-            style={input}
-            value={name()}
-            placeholder="Experiment name"
-            onInput={(event) => setName(event.currentTarget.value)}
-          />
-          <div style={{ display: "grid", "grid-template-columns": "minmax(0, 1fr) minmax(0, 1fr)", gap: "6px" }}>
-            <select
-              aria-label="Compute target"
-              style={input}
-              value={target()}
-              onChange={(event) => setTarget(event.currentTarget.value)}
-            >
-              <option value="local">This computer</option>
-              <For each={settings()?.ssh_hosts}>
-                {(host) => (
-                  <option value={`ssh:${host.id}`}>
-                    {host.label}
-                    {host.scheduler === "none" ? "" : ` · ${host.scheduler}`}
-                  </option>
-                )}
-              </For>
-            </select>
-            <input
-              aria-label="Working directory"
-              style={input}
-              value={cwd()}
-              placeholder="Working directory"
-              onInput={(event) => setCwd(event.currentTarget.value)}
-            />
+          <div style={formHeader}>
+            <strong style={formTitle}>New research job</strong>
+            <span style={formCopy}>
+              Configure one command, review exactly what will run, then dispatch. Results stay with this project.
+            </span>
           </div>
-          <textarea
-            aria-label="Command"
-            style={{ ...input, height: "76px", resize: "vertical", "line-height": 1.45, padding: "9px 10px" }}
-            value={command()}
-            placeholder={"python train.py --config config.yaml"}
-            spellcheck={false}
-            onInput={(event) => setCommand(event.currentTarget.value)}
-          />
+          <Field label="Job name">
+            <input
+              aria-label="Job name"
+              style={input}
+              value={name()}
+              placeholder="Experiment name"
+              onInput={(event) => setName(event.currentTarget.value)}
+            />
+          </Field>
+          <div
+            style={{ display: "grid", "grid-template-columns": "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px" }}
+          >
+            <Field label="Run location">
+              <input aria-label="Run location" style={input} value="This computer" readOnly />
+            </Field>
+            <Field label="Working directory">
+              <input
+                aria-label="Working directory"
+                style={input}
+                value={cwd()}
+                placeholder="Project directory"
+                onInput={(event) => setCwd(event.currentTarget.value)}
+              />
+            </Field>
+          </div>
+          <Field label="Command">
+            <textarea
+              aria-label="Command"
+              style={{ ...input, height: "84px", resize: "vertical", "line-height": 1.5, padding: "9px 10px" }}
+              value={command()}
+              placeholder={"python train.py --config config.yaml"}
+              spellcheck={false}
+              onInput={(event) => setCommand(event.currentTarget.value)}
+            />
+          </Field>
           <button
             type="button"
             aria-expanded={advanced()}
             style={advancedToggle}
             onClick={() => setAdvanced((value) => !value)}
           >
-            <span>resources & reproducibility</span>
-            <span>{advanced() ? "hide" : "configure"}</span>
+            <span>Resources and reproducibility</span>
+            <span>{advanced() ? "Hide" : "Configure"}</span>
           </button>
           <Show when={advanced()}>
             <div style={advancedGrid}>
@@ -345,7 +319,7 @@ export function ComputeJobs(): JSX.Element {
                   style={input}
                   type="number"
                   min="1"
-                  placeholder="cores"
+                  placeholder="Cores"
                   value={cpus()}
                   onInput={(event) => setCpus(event.currentTarget.value)}
                 />
@@ -356,7 +330,7 @@ export function ComputeJobs(): JSX.Element {
                   style={input}
                   type="number"
                   min="0"
-                  placeholder="count"
+                  placeholder="Count"
                   value={gpus()}
                   onInput={(event) => setGpus(event.currentTarget.value)}
                 />
@@ -379,260 +353,321 @@ export function ComputeJobs(): JSX.Element {
                   style={input}
                   type="number"
                   min="1"
-                  placeholder="minutes"
+                  placeholder="Minutes"
                   value={time()}
                   onInput={(event) => setTime(event.currentTarget.value)}
                 />
               </Field>
             </div>
-            <input
-              aria-label="Scheduler partition"
-              style={input}
-              value={partition()}
-              placeholder="Slurm partition (optional)"
-              onInput={(event) => setPartition(event.currentTarget.value)}
-            />
-            <input
-              aria-label="Environment modules"
-              style={input}
-              value={modules()}
-              placeholder="Modules: cuda/12.4, python/3.12"
-              onInput={(event) => setModules(event.currentTarget.value)}
-            />
-            <input
-              aria-label="Apptainer image"
-              style={input}
-              value={container()}
-              placeholder="Apptainer/Singularity image"
-              onInput={(event) => setContainer(event.currentTarget.value)}
-            />
-            <input
-              aria-label="Artifact patterns"
-              style={input}
-              value={artifacts()}
-              placeholder="Collect: outputs/**/*.csv, figures/*.png"
-              onInput={(event) => setArtifacts(event.currentTarget.value)}
-            />
-            <input
-              aria-label="Checkpoint path"
-              style={input}
-              value={checkpoint()}
-              placeholder="Checkpoint: checkpoints/latest.ckpt"
-              onInput={(event) => setCheckpoint(event.currentTarget.value)}
-            />
+            <Field label="Queue or partition">
+              <input
+                aria-label="Queue or partition"
+                style={input}
+                value={partition()}
+                placeholder="Optional queue or partition"
+                onInput={(event) => setPartition(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label="Environment modules">
+              <input
+                aria-label="Environment modules"
+                style={input}
+                value={modules()}
+                placeholder="cuda/12.4, python/3.12"
+                onInput={(event) => setModules(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label="Runtime image">
+              <input
+                aria-label="Runtime image"
+                style={input}
+                value={container()}
+                placeholder="Optional container image"
+                onInput={(event) => setContainer(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label="Files to capture">
+              <input
+                aria-label="Artifact patterns"
+                style={input}
+                value={artifacts()}
+                placeholder="outputs/**/*.csv, figures/*.png"
+                onInput={(event) => setArtifacts(event.currentTarget.value)}
+              />
+            </Field>
+            <Field label="Checkpoint">
+              <input
+                aria-label="Checkpoint path"
+                style={input}
+                value={checkpoint()}
+                placeholder="checkpoints/latest.ckpt"
+                onInput={(event) => setCheckpoint(event.currentTarget.value)}
+              />
+            </Field>
             <span style={advancedHint}>
-              Local runs capture git state, lockfiles, artifact checksums, and the checkpoint automatically.
+              Project runs capture git state, lockfiles, file checksums, and the checkpoint automatically.
             </span>
           </Show>
-          <div style={{ display: "flex", "justify-content": "flex-end", gap: "6px" }}>
+          <Show when={reviewed() && command().trim()}>
+            <DispatchPreview staged={staged()} />
+          </Show>
+          <div style={{ display: "flex", "justify-content": "flex-end", gap: "8px", "padding-top": "2px" }}>
             <button type="button" style={secondaryButton} onClick={reset}>
-              cancel
+              Cancel
             </button>
-            <button type="submit" style={primaryButton} disabled={busy() || !name().trim() || !command().trim()}>
-              {busy() ? "starting…" : "run job"}
+            <Show when={!reviewed()}>
+              <button
+                type="button"
+                style={secondaryButton}
+                disabled={!name().trim() || !command().trim()}
+                onClick={() => setReviewed(true)}
+              >
+                Review command
+              </button>
+            </Show>
+            <button
+              type="submit"
+              style={primaryButton}
+              title={authority.message() ?? (reviewed() ? undefined : "Review the exact command before dispatching")}
+              disabled={!ready() || !authority.allowed()}
+            >
+              {busy() ? "Dispatching…" : "Dispatch"}
             </button>
           </div>
         </form>
       </Show>
 
-      <Show
-        when={(jobs()?.length ?? 0) > 0}
-        fallback={
-          <div style={empty}>
-            <span style={emptyMark}>
-              <IconActivity size={18} />
-            </span>
-            <strong style={{ color: "var(--color-text)", "font-size": "12px" }}>No compute jobs yet</strong>
-            <span>Run a script locally or send it to an SSH, Slurm, or PBS machine. Output stays attached here.</span>
-            <button style={primaryButton} onClick={() => setCreating(true)}>
-              create first job
-            </button>
-          </div>
-        }
-      >
-        <div style={listHeader}>
-          <span>recent runs</span>
-          <button disabled={busy()} style={textButton} onClick={() => void clear()}>
-            <IconTrash size={10} />
-            clear finished
-          </button>
-        </div>
-        <div style={list}>
-          <For each={jobs()}>
-            {(job) => (
-              <button
-                type="button"
-                onClick={() => setSelected(job.id)}
-                style={{
-                  ...row,
-                  background: selected() === job.id ? "var(--color-surface-solid)" : "transparent",
-                  "border-color": selected() === job.id ? "var(--color-border-strong)" : "transparent",
-                }}
-              >
-                <StatusIcon status={job.status} />
-                <span style={{ display: "flex", "flex-direction": "column", gap: "3px", "min-width": 0, flex: 1 }}>
-                  <span
-                    style={{
-                      color: "var(--color-text)",
-                      "font-weight": 600,
-                      overflow: "hidden",
-                      "text-overflow": "ellipsis",
-                      "white-space": "nowrap",
-                    }}
-                  >
-                    {job.name}
-                  </span>
-                  <span
-                    style={{
-                      color: "var(--color-text-faint)",
-                      overflow: "hidden",
-                      "text-overflow": "ellipsis",
-                      "white-space": "nowrap",
-                    }}
-                  >
-                    {job.target_label} · {job.scheduler === "none" ? job.status : `${job.scheduler} · ${job.status}`}
-                  </span>
+      <Show when={!creating()}>
+        <>
+          <Show
+            when={(jobs()?.length ?? 0) > 0}
+            fallback={
+              <div style={empty}>
+                <span style={emptyMark}>
+                  <IconActivity size={20} strokeWidth={1.5} />
                 </span>
-                <span style={{ color: "var(--color-text-faint)", "font-size": "9px", "white-space": "nowrap" }}>
-                  {age(job.created_at)}
+                <strong style={emptyTitle}>No jobs in this project</strong>
+                <span style={emptyCopy}>
+                  Run a command and keep its output, captured files, and reproducibility record together.
                 </span>
-              </button>
-            )}
-          </For>
-        </div>
-      </Show>
-
-      <Show when={current()}>
-        {(job) => (
-          <div style={detail}>
-            <div style={{ display: "flex", "align-items": "flex-start", gap: "8px" }}>
-              <div style={{ display: "flex", "flex-direction": "column", gap: "3px", flex: 1, "min-width": 0 }}>
-                <span
-                  style={{
-                    color: "var(--color-text)",
-                    "font-family": FONT_SANS,
-                    "font-size": "12px",
-                    "font-weight": 650,
-                  }}
+                <button
+                  type="button"
+                  style={primaryButton}
+                  title={authority.message()}
+                  disabled={!authority.allowed()}
+                  onClick={() => setCreating(true)}
                 >
-                  {job().name}
-                </span>
-                <span style={{ color: "var(--color-text-faint)", "font-family": FONT_MONO, "font-size": "9px" }}>
-                  {job().id} · {duration(job())}
-                </span>
+                  Create first job
+                </button>
               </div>
-              <Show when={!terminal.has(job().status)}>
-                <Action title="cancel job" onClick={() => void cancel(job())}>
-                  <IconStop size={11} />
-                </Action>
-              </Show>
-              <button style={secondaryButton} onClick={() => rerun(job())}>
-                rerun
+            }
+          >
+            <div style={listHeader}>
+              <span>Recent runs</span>
+              <button type="button" disabled={busy()} style={textButton} onClick={() => void clear()}>
+                <IconTrash size={14} />
+                Clear finished
               </button>
             </div>
-            <div style={commandBox}>
-              <span style={{ color: "var(--color-text-faint)", "user-select": "none" }}>$</span>
-              <span>{job().command}</span>
-            </div>
-            <Show when={job().cwd}>
-              <div style={meta}>cwd · {job().cwd}</div>
-            </Show>
-            <Show when={resourceLabel(job())}>{(value) => <div style={meta}>resources · {value()}</div>}</Show>
-            <Show when={job().modules?.length}>
-              <div style={meta}>modules · {job().modules?.join(", ")}</div>
-            </Show>
-            <Show when={job().container}>
-              <div style={meta}>container · {job().container}</div>
-            </Show>
-            <Show when={job().artifacts?.length || job().checkpoint}>
-              <section style={captureCard}>
-                <div style={cardTitle}>
-                  <span>captured outputs</span>
-                  <span>{(job().artifacts?.length ?? 0) + (job().checkpoint ? 1 : 0)} verified</span>
-                </div>
-                <Show when={job().checkpoint}>{(item) => <ArtifactRow item={item()} label="checkpoint" />}</Show>
-                <For each={job().artifacts}>{(item) => <ArtifactRow item={item} />}</For>
-              </section>
-            </Show>
-            <Show when={job().reproducibility}>
-              {(manifest) => (
-                <section style={captureCard}>
-                  <div style={cardTitle}>
-                    <span>reproducibility</span>
-                    <span>{manifest().git?.dirty ? "working tree changed" : "captured"}</span>
-                  </div>
-                  <div style={manifestGrid}>
-                    <span>runtime</span>
-                    <strong>
-                      {manifest().platform} · {manifest().arch} · Bun {manifest().bun}
-                    </strong>
-                    <span>code</span>
-                    <strong>
-                      {manifest().git?.branch ?? "no git branch"}
-                      {manifest().git?.commit ? ` · ${manifest().git?.commit?.slice(0, 8)}` : ""}
-                      {manifest().git?.dirty ? " · dirty" : ""}
-                    </strong>
-                    <span>environment</span>
-                    <strong>
-                      {manifest().lockfiles.length
-                        ? manifest()
-                            .lockfiles.map((file) => file.path)
-                            .join(", ")
-                        : "no lockfile found"}
-                    </strong>
-                  </div>
+            <div style={list}>
+              <For each={jobs()}>
+                {(job) => (
                   <button
                     type="button"
-                    style={exportButton}
-                    onClick={() =>
-                      save(
-                        `${safeName(job().name)}-reproducibility.json`,
-                        JSON.stringify(manifest(), null, 2),
-                        "application/json",
-                      )
-                    }
+                    onClick={() => setSelected(job.id)}
+                    style={{
+                      ...row,
+                      background:
+                        selected() === job.id
+                          ? "color-mix(in srgb, var(--color-surface-solid) 92%, var(--color-accent) 8%)"
+                          : "transparent",
+                      "border-color":
+                        selected() === job.id
+                          ? "color-mix(in srgb, var(--color-border-strong) 72%, transparent)"
+                          : "transparent",
+                    }}
                   >
-                    <IconDownload size={11} />
-                    export manifest
+                    <StatusIcon status={job.status} />
+                    <span style={{ display: "flex", "flex-direction": "column", gap: "4px", "min-width": 0, flex: 1 }}>
+                      <span
+                        style={{
+                          color: "var(--color-text)",
+                          "font-size": "14px",
+                          "font-weight": 600,
+                          overflow: "hidden",
+                          "text-overflow": "ellipsis",
+                          "white-space": "nowrap",
+                        }}
+                      >
+                        {job.name}
+                      </span>
+                      <span
+                        style={{
+                          color: "var(--color-text-faint)",
+                          "font-size": "12px",
+                          overflow: "hidden",
+                          "text-overflow": "ellipsis",
+                          "white-space": "nowrap",
+                        }}
+                      >
+                        {job.target_label} · {job.status}
+                      </span>
+                    </span>
+                    <span style={{ color: "var(--color-text-faint)", "font-size": "11px", "white-space": "nowrap" }}>
+                      {age(job.created_at)}
+                    </span>
                   </button>
-                </section>
-              )}
-            </Show>
-            <div style={logHeader}>
-              <span>output</span>
-              <span style={{ display: "inline-flex", "align-items": "center", gap: "7px" }}>
-                <span>{output.loading ? "syncing…" : `${output()?.length ?? 0} bytes`}</span>
-                <button
-                  type="button"
-                  title="copy command"
-                  aria-label="copy command"
-                  style={iconButton}
-                  onClick={() => void navigator.clipboard.writeText(job().command)}
-                >
-                  <IconCopy size={10} />
-                </button>
-                <button
-                  type="button"
-                  title="download log"
-                  aria-label="download log"
-                  style={iconButton}
-                  onClick={() => save(`${safeName(job().name)}.log`, output() ?? "")}
-                >
-                  <IconDownload size={10} />
-                </button>
-              </span>
+                )}
+              </For>
             </div>
-            <pre style={log}>
-              {output() || (terminal.has(job().status) ? "No output was captured." : "Waiting for output…")}
-            </pre>
-            <Show when={job().error}>
-              <div style={errorBox}>{job().error}</div>
-            </Show>
-            <Show when={job().capture_error}>
-              <div style={errorBox}>The run finished, but reproducibility capture failed: {job().capture_error}</div>
-            </Show>
-          </div>
-        )}
+          </Show>
+
+          <Show when={current()}>
+            {(job) => (
+              <div style={detail}>
+                <div style={{ display: "flex", "align-items": "flex-start", gap: "12px" }}>
+                  <div style={{ display: "flex", "flex-direction": "column", gap: "4px", flex: 1, "min-width": 0 }}>
+                    <span
+                      style={{
+                        color: "var(--color-text)",
+                        "font-family": FONT_SANS,
+                        "font-size": "15px",
+                        "font-weight": 650,
+                        "line-height": 1.25,
+                      }}
+                    >
+                      {job().name}
+                    </span>
+                    <span style={{ color: "var(--color-text-faint)", "font-family": FONT_MONO, "font-size": "11px" }}>
+                      {job().id} · {duration(job())}
+                    </span>
+                  </div>
+                  <Show when={!terminal.has(job().status) && job().target.kind === "local"}>
+                    <Action title="Cancel job" onClick={() => void cancel(job())}>
+                      <IconStop size={16} />
+                    </Action>
+                  </Show>
+                  <button
+                    type="button"
+                    style={secondaryButton}
+                    disabled={job().target.kind !== "local"}
+                    title={
+                      job().target.kind === "local"
+                        ? "Rerun this command locally"
+                        : "Remote dispatch is unavailable until its full lifecycle passes real-host validation"
+                    }
+                    onClick={() => rerun(job())}
+                  >
+                    Rerun
+                  </button>
+                </div>
+                <div style={commandBox}>
+                  <span style={{ color: "var(--color-text-faint)", "user-select": "none" }}>$</span>
+                  <span>{job().command}</span>
+                </div>
+                <Show when={job().cwd}>
+                  <div style={meta}>Working directory · {job().cwd}</div>
+                </Show>
+                <Show when={resourceLabel(job())}>{(value) => <div style={meta}>Resources · {value()}</div>}</Show>
+                <Show when={job().modules?.length}>
+                  <div style={meta}>Modules · {job().modules?.join(", ")}</div>
+                </Show>
+                <Show when={job().container}>
+                  <div style={meta}>Runtime image · {job().container}</div>
+                </Show>
+                <Show when={job().artifacts?.length || job().checkpoint}>
+                  <section style={captureCard}>
+                    <div style={cardTitle}>
+                      <span>Captured outputs</span>
+                      <span>{(job().artifacts?.length ?? 0) + (job().checkpoint ? 1 : 0)} verified</span>
+                    </div>
+                    <Show when={job().checkpoint}>{(item) => <ArtifactRow item={item()} label="Checkpoint" />}</Show>
+                    <For each={job().artifacts}>{(item) => <ArtifactRow item={item} />}</For>
+                  </section>
+                </Show>
+                <Show when={job().reproducibility}>
+                  {(manifest) => (
+                    <section style={captureCard}>
+                      <div style={cardTitle}>
+                        <span>Reproducibility</span>
+                        <span>{manifest().git?.dirty ? "Working tree changed" : "Captured"}</span>
+                      </div>
+                      <div style={manifestGrid}>
+                        <span>Runtime</span>
+                        <strong>
+                          {manifest().platform} · {manifest().arch} · Bun {manifest().bun}
+                        </strong>
+                        <span>Code</span>
+                        <strong>
+                          {manifest().git?.branch ?? "No git branch"}
+                          {manifest().git?.commit ? ` · ${manifest().git?.commit?.slice(0, 8)}` : ""}
+                          {manifest().git?.dirty ? " · dirty" : ""}
+                        </strong>
+                        <span>Environment</span>
+                        <strong>
+                          {manifest().lockfiles.length
+                            ? manifest()
+                                .lockfiles.map((file) => file.path)
+                                .join(", ")
+                            : "No lockfile found"}
+                        </strong>
+                      </div>
+                      <button
+                        type="button"
+                        style={exportButton}
+                        onClick={() =>
+                          save(
+                            `${safeName(job().name)}-reproducibility.json`,
+                            JSON.stringify(manifest(), null, 2),
+                            "application/json",
+                          )
+                        }
+                      >
+                        <IconDownload size={16} />
+                        Export manifest
+                      </button>
+                    </section>
+                  )}
+                </Show>
+                <div style={logHeader}>
+                  <span>Output</span>
+                  <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
+                    <span>{output.loading ? "Syncing…" : `${output()?.length ?? 0} bytes`}</span>
+                    <button
+                      type="button"
+                      title="Copy command"
+                      aria-label="Copy command"
+                      style={iconButton}
+                      onClick={() => void navigator.clipboard.writeText(job().command)}
+                    >
+                      <IconCopy size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Download log"
+                      aria-label="Download log"
+                      style={iconButton}
+                      onClick={() => save(`${safeName(job().name)}.log`, output() ?? "")}
+                    >
+                      <IconDownload size={14} />
+                    </button>
+                  </span>
+                </div>
+                <pre style={log}>
+                  {output() || (terminal.has(job().status) ? "No output was captured." : "Waiting for output…")}
+                </pre>
+                <Show when={job().error}>
+                  <div style={errorBox}>{job().error}</div>
+                </Show>
+                <Show when={job().capture_error}>
+                  <div style={errorBox}>
+                    The run finished, but reproducibility capture failed: {job().capture_error}
+                  </div>
+                </Show>
+              </div>
+            )}
+          </Show>
+        </>
       </Show>
     </div>
   )
@@ -640,8 +675,8 @@ export function ComputeJobs(): JSX.Element {
 
 function Field(props: { label: string; children: JSX.Element }): JSX.Element {
   return (
-    <label style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-      <span style={{ color: "var(--color-text-faint)", "font-family": FONT_MONO, "font-size": "8px" }}>
+    <label style={{ display: "flex", "flex-direction": "column", gap: "6px" }}>
+      <span style={{ color: "var(--color-text-muted)", "font-family": FONT_SANS, "font-size": "12px" }}>
         {props.label}
       </span>
       {props.children}
@@ -652,12 +687,12 @@ function Field(props: { label: string; children: JSX.Element }): JSX.Element {
 function ArtifactRow(props: { item: Artifact; label?: string }): JSX.Element {
   return (
     <div style={artifactRow}>
-      <span style={{ display: "flex", "flex-direction": "column", gap: "2px", "min-width": 0, flex: 1 }}>
+      <span style={{ display: "flex", "flex-direction": "column", gap: "4px", "min-width": 0, flex: 1 }}>
         <strong
           style={{
             color: "var(--color-text)",
             "font-family": FONT_MONO,
-            "font-size": "9px",
+            "font-size": "13px",
             overflow: "hidden",
             "text-overflow": "ellipsis",
             "white-space": "nowrap",
@@ -666,12 +701,12 @@ function ArtifactRow(props: { item: Artifact; label?: string }): JSX.Element {
         >
           {props.item.path}
         </strong>
-        <span style={{ color: "var(--color-text-faint)", "font-family": FONT_MONO, "font-size": "8px" }}>
+        <span style={{ color: "var(--color-text-faint)", "font-family": FONT_MONO, "font-size": "11px" }}>
           {props.label ? `${props.label} · ` : ""}
           {bytes(props.item.size)} · sha256 {props.item.sha256.slice(0, 10)}
         </span>
       </span>
-      <IconCheckCircle size={11} strokeWidth={1.6} />
+      <IconCheckCircle size={15} strokeWidth={1.6} />
     </div>
   )
 }
@@ -687,31 +722,42 @@ function StatusIcon(props: { status: Status }): JSX.Element {
   }
   return (
     <span style={{ color: config().color, display: "inline-flex", "flex-shrink": 0 }}>
-      <Dynamic component={config().icon} size={13} strokeWidth={1.7} />
+      <Dynamic component={config().icon} size={16} strokeWidth={1.7} />
     </span>
   )
 }
 
-function Action(props: { title: string; active?: boolean; onClick: () => void; children: JSX.Element }): JSX.Element {
+function Action(props: {
+  title: string
+  active?: boolean
+  disabled?: boolean
+  onClick: () => void
+  children: JSX.Element
+}): JSX.Element {
   return (
     <button
       type="button"
       title={props.title}
       aria-label={props.title}
+      disabled={props.disabled}
       onClick={props.onClick}
       style={{
         all: "unset",
-        cursor: "pointer",
-        width: "27px",
-        height: "27px",
+        cursor: props.disabled ? "not-allowed" : "pointer",
+        opacity: props.disabled ? 0.45 : 1,
+        width: "32px",
+        height: "32px",
         display: "inline-flex",
         "align-items": "center",
         "justify-content": "center",
-        "border-radius": "4px",
-        border: "1px solid var(--color-border)",
-        background: props.active ? "var(--color-accent-subtle)" : "var(--color-bg-elevated)",
+        "border-radius": "8px",
+        border: "1px solid color-mix(in srgb, var(--color-border) 82%, transparent)",
+        background: props.active
+          ? "color-mix(in srgb, var(--color-accent-subtle) 88%, transparent)"
+          : "var(--color-bg-elevated)",
         color: props.active ? "var(--color-accent)" : "var(--color-text-muted)",
         "box-sizing": "border-box",
+        transition: "background-color 140ms ease, border-color 140ms ease, color 140ms ease",
       }}
     >
       {props.children}
@@ -784,188 +830,255 @@ const shell: JSX.CSSProperties = {
   display: "flex",
   "flex-direction": "column",
   overflow: "hidden",
-  background: "var(--color-bg-subtle)",
+  background: "var(--color-bg)",
   "font-family": FONT_SANS,
+  "font-size": "14px",
 }
 
 const header: JSX.CSSProperties = {
+  "min-height": "48px",
+  "box-sizing": "border-box",
   display: "flex",
   "align-items": "center",
   "justify-content": "space-between",
   gap: "10px",
-  padding: "10px",
-  "border-bottom": "1px solid var(--color-border)",
+  padding: "7px 10px 7px 12px",
+  "border-bottom": "1px solid color-mix(in srgb, var(--color-border) 68%, transparent)",
   background: "var(--color-bg)",
   "flex-shrink": 0,
 }
 
 const mark: JSX.CSSProperties = {
-  width: "27px",
-  height: "27px",
+  width: "32px",
+  height: "32px",
   display: "inline-flex",
   "align-items": "center",
   "justify-content": "center",
-  "border-radius": "6px",
-  background: "color-mix(in srgb, var(--color-accent) 12%, transparent)",
+  "border-radius": "8px",
+  background: "color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-solid))",
   color: "var(--color-accent)",
+  "flex-shrink": 0,
 }
 
 const title: JSX.CSSProperties = {
   color: "var(--color-text)",
-  "font-size": "12px",
-  "font-weight": 680,
+  "font-size": "15px",
+  "font-weight": 600,
   "letter-spacing": "-0.01em",
+  "line-height": 1.2,
 }
 
 const subtitle: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
-  "font-family": FONT_MONO,
-  "font-size": "9px",
+  "font-family": FONT_SANS,
+  "font-size": "11px",
+  "line-height": 1.3,
 }
 
 const form: JSX.CSSProperties = {
   display: "flex",
   "flex-direction": "column",
-  gap: "7px",
-  padding: "10px",
-  "border-bottom": "1px solid var(--color-border)",
-  background: "var(--color-surface-solid)",
-  "flex-shrink": 0,
+  gap: "10px",
+  margin: "8px 10px 0",
+  padding: "12px",
+  "max-height": "min(68vh, 680px)",
+  overflow: "auto",
+  border: "1px solid color-mix(in srgb, var(--color-border) 72%, transparent)",
+  "border-radius": "12px",
+  background: "color-mix(in srgb, var(--color-surface-solid) 94%, var(--color-bg) 6%)",
+  "box-shadow": "none",
+  "flex-shrink": 1,
+}
+
+const formHeader: JSX.CSSProperties = {
+  display: "flex",
+  "flex-direction": "column",
+  gap: "2px",
+  "padding-bottom": "2px",
+}
+
+const formTitle: JSX.CSSProperties = {
+  color: "var(--color-text)",
+  "font-size": "15px",
+  "font-weight": 600,
+  "letter-spacing": "-0.01em",
+}
+
+const formCopy: JSX.CSSProperties = {
+  color: "var(--color-text-muted)",
+  "font-size": "12px",
+  "line-height": 1.4,
 }
 
 const input: JSX.CSSProperties = {
   width: "100%",
-  height: "32px",
+  height: "36px",
   "box-sizing": "border-box",
-  border: "1px solid var(--color-border)",
-  "border-radius": "4px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 84%, transparent)",
+  "border-radius": "8px",
   background: "var(--color-bg)",
   color: "var(--color-text)",
-  padding: "0 9px",
-  outline: "none",
-  "font-family": FONT_MONO,
-  "font-size": "10px",
+  padding: "0 10px",
+  outline: "2px solid transparent",
+  "outline-offset": "1px",
+  "font-family": FONT_SANS,
+  "font-size": "13px",
+  transition: "border-color 140ms ease, outline-color 140ms ease, background-color 140ms ease",
 }
 
 const advancedToggle: JSX.CSSProperties = {
-  all: "unset",
   cursor: "pointer",
+  width: "100%",
+  "min-height": "36px",
   display: "flex",
   "align-items": "center",
   "justify-content": "space-between",
+  gap: "10px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 72%, transparent)",
+  "border-radius": "8px",
+  background: "color-mix(in srgb, var(--color-bg-subtle) 82%, transparent)",
   color: "var(--color-text-muted)",
-  "font-family": FONT_MONO,
-  "font-size": "9px",
-  padding: "4px 1px",
+  "font-family": FONT_SANS,
+  "font-size": "13px",
+  "font-weight": 550,
+  padding: "0 10px",
+  "text-align": "left",
 }
 
 const advancedGrid: JSX.CSSProperties = {
   display: "grid",
-  "grid-template-columns": "repeat(4, minmax(0, 1fr))",
-  gap: "6px",
+  "grid-template-columns": "repeat(auto-fit, minmax(104px, 1fr))",
+  gap: "10px",
 }
 
 const advancedHint: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
-  "font-size": "9px",
+  "font-size": "11px",
   "line-height": 1.4,
+  padding: "2px 2px 0",
 }
 
 const primaryButton: JSX.CSSProperties = {
   cursor: "pointer",
   border: "1px solid var(--color-accent)",
-  "border-radius": "4px",
+  "border-radius": "8px",
   background: "var(--color-accent)",
   color: "var(--color-bg)",
-  padding: "6px 10px",
-  "font-family": FONT_MONO,
-  "font-size": "10px",
-  "font-weight": 650,
+  "min-height": "34px",
+  padding: "0 13px",
+  "font-family": FONT_SANS,
+  "font-size": "13px",
+  "font-weight": 600,
+  transition: "filter 140ms ease, transform 140ms ease",
 }
 
 const secondaryButton: JSX.CSSProperties = {
   cursor: "pointer",
-  border: "1px solid var(--color-border)",
-  "border-radius": "4px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 82%, transparent)",
+  "border-radius": "8px",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text-muted)",
-  padding: "5px 8px",
-  "font-family": FONT_MONO,
-  "font-size": "10px",
+  "min-height": "32px",
+  padding: "0 10px",
+  "font-family": FONT_SANS,
+  "font-size": "13px",
+  "font-weight": 550,
 }
 
 const empty: JSX.CSSProperties = {
+  flex: 1,
+  "min-height": 0,
   display: "flex",
   "flex-direction": "column",
   "align-items": "center",
-  gap: "8px",
-  padding: "36px 22px",
+  "justify-content": "center",
+  gap: "10px",
+  padding: "36px 24px 44px",
   color: "var(--color-text-muted)",
-  "font-size": "11px",
+  "font-size": "13px",
   "line-height": 1.5,
   "text-align": "center",
 }
 
 const emptyMark: JSX.CSSProperties = {
-  width: "38px",
-  height: "38px",
+  width: "40px",
+  height: "40px",
   display: "inline-flex",
   "align-items": "center",
   "justify-content": "center",
   "border-radius": "10px",
-  background: "var(--color-surface-solid)",
-  border: "1px solid var(--color-border)",
-  color: "var(--color-text-faint)",
+  background: "color-mix(in srgb, var(--color-surface-solid) 94%, var(--color-accent) 6%)",
+  border: "1px solid color-mix(in srgb, var(--color-border) 72%, transparent)",
+  color: "var(--color-accent)",
+}
+
+const emptyTitle: JSX.CSSProperties = {
+  color: "var(--color-text)",
+  "font-size": "15px",
+  "font-weight": 600,
+  "letter-spacing": "-0.01em",
+}
+
+const emptyCopy: JSX.CSSProperties = {
+  "max-width": "360px",
+  color: "var(--color-text-muted)",
+  "font-size": "13px",
+  "line-height": 1.5,
 }
 
 const listHeader: JSX.CSSProperties = {
   display: "flex",
   "align-items": "center",
   "justify-content": "space-between",
-  padding: "8px 10px 4px",
+  gap: "12px",
+  padding: "10px 12px 4px",
   color: "var(--color-text-faint)",
-  "font-family": FONT_MONO,
-  "font-size": "9px",
-  "text-transform": "uppercase",
-  "letter-spacing": "0.08em",
+  "font-family": FONT_SANS,
+  "font-size": "11px",
+  "font-weight": 600,
 }
 
 const textButton: JSX.CSSProperties = {
-  all: "unset",
   cursor: "pointer",
   display: "inline-flex",
   "align-items": "center",
-  gap: "4px",
-  color: "var(--color-text-faint)",
-  "font-size": "9px",
-  "text-transform": "none",
-  "letter-spacing": "normal",
+  gap: "6px",
+  "min-height": "32px",
+  padding: "0 8px",
+  border: 0,
+  "border-radius": "8px",
+  background: "transparent",
+  color: "var(--color-text-muted)",
+  "font-family": FONT_SANS,
+  "font-size": "12px",
 }
 
 const list: JSX.CSSProperties = {
   display: "flex",
   "flex-direction": "column",
   gap: "2px",
-  padding: "3px 7px 8px",
-  "max-height": "190px",
+  padding: "0 8px 8px",
+  "max-height": "216px",
   overflow: "auto",
   "flex-shrink": 0,
-  "border-bottom": "1px solid var(--color-border)",
+  "border-bottom": "1px solid color-mix(in srgb, var(--color-border) 66%, transparent)",
 }
 
 const row: JSX.CSSProperties = {
   cursor: "pointer",
   width: "100%",
+  "min-height": "44px",
   display: "flex",
   "align-items": "center",
   gap: "8px",
-  padding: "8px",
+  padding: "5px 8px",
   border: "1px solid transparent",
-  "border-radius": "5px",
+  "border-radius": "8px",
   "text-align": "left",
-  "font-family": FONT_MONO,
-  "font-size": "10px",
+  "font-family": FONT_SANS,
+  "font-size": "14px",
+  transition: "background-color 140ms ease, border-color 140ms ease",
 }
 
 const detail: JSX.CSSProperties = {
@@ -974,22 +1087,22 @@ const detail: JSX.CSSProperties = {
   overflow: "auto",
   display: "flex",
   "flex-direction": "column",
-  gap: "8px",
-  padding: "10px",
+  gap: "10px",
+  padding: "12px",
   background: "var(--color-bg)",
 }
 
 const commandBox: JSX.CSSProperties = {
   display: "flex",
-  gap: "7px",
-  padding: "8px",
-  border: "1px solid var(--color-border)",
-  "border-radius": "4px",
+  gap: "8px",
+  padding: "10px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 74%, transparent)",
+  "border-radius": "10px",
   background: "var(--color-bg-subtle)",
   color: "var(--color-text-muted)",
   "font-family": FONT_MONO,
-  "font-size": "10px",
-  "line-height": 1.45,
+  "font-size": "12px",
+  "line-height": 1.5,
   "white-space": "pre-wrap",
   "overflow-wrap": "anywhere",
 }
@@ -997,7 +1110,7 @@ const commandBox: JSX.CSSProperties = {
 const meta: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_MONO,
-  "font-size": "9px",
+  "font-size": "11px",
   overflow: "hidden",
   "text-overflow": "ellipsis",
   "white-space": "nowrap",
@@ -1006,92 +1119,98 @@ const meta: JSX.CSSProperties = {
 const captureCard: JSX.CSSProperties = {
   display: "flex",
   "flex-direction": "column",
-  gap: "6px",
-  padding: "8px",
-  border: "1px solid var(--color-border)",
-  "border-radius": "5px",
-  background: "var(--color-bg-subtle)",
+  gap: "8px",
+  padding: "12px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 70%, transparent)",
+  "border-radius": "12px",
+  background: "color-mix(in srgb, var(--color-bg-subtle) 82%, transparent)",
 }
 
 const cardTitle: JSX.CSSProperties = {
   display: "flex",
   "align-items": "center",
   "justify-content": "space-between",
+  gap: "10px",
   color: "var(--color-text-faint)",
-  "font-family": FONT_MONO,
-  "font-size": "8px",
-  "text-transform": "uppercase",
-  "letter-spacing": "0.07em",
+  "font-family": FONT_SANS,
+  "font-size": "11px",
+  "font-weight": 600,
 }
 
 const artifactRow: JSX.CSSProperties = {
   display: "flex",
   "align-items": "center",
-  gap: "8px",
+  gap: "9px",
   color: "var(--color-success)",
-  padding: "6px",
-  border: "1px solid var(--color-border)",
-  "border-radius": "4px",
+  padding: "8px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 68%, transparent)",
+  "border-radius": "8px",
   background: "var(--color-bg)",
 }
 
 const manifestGrid: JSX.CSSProperties = {
   display: "grid",
-  "grid-template-columns": "72px minmax(0, 1fr)",
-  gap: "5px 8px",
+  "grid-template-columns": "92px minmax(0, 1fr)",
+  gap: "7px 10px",
   color: "var(--color-text-faint)",
   "font-family": FONT_MONO,
-  "font-size": "8px",
-  "line-height": 1.35,
+  "font-size": "11px",
+  "line-height": 1.4,
 }
 
 const exportButton: JSX.CSSProperties = {
-  all: "unset",
   cursor: "pointer",
   display: "inline-flex",
   "align-items": "center",
   "justify-content": "center",
-  gap: "5px",
-  padding: "5px 7px",
-  border: "1px solid var(--color-border)",
-  "border-radius": "4px",
+  gap: "6px",
+  "min-height": "32px",
+  padding: "0 10px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 78%, transparent)",
+  "border-radius": "8px",
   background: "var(--color-bg)",
   color: "var(--color-text-muted)",
-  "font-family": FONT_MONO,
-  "font-size": "8px",
+  "font-family": FONT_SANS,
+  "font-size": "12px",
+  "font-weight": 550,
 }
 
 const logHeader: JSX.CSSProperties = {
   display: "flex",
+  "align-items": "center",
   "justify-content": "space-between",
+  gap: "10px",
   color: "var(--color-text-faint)",
-  "font-family": FONT_MONO,
-  "font-size": "9px",
-  "text-transform": "uppercase",
-  "letter-spacing": "0.08em",
-  "margin-top": "2px",
+  "font-family": FONT_SANS,
+  "font-size": "11px",
+  "font-weight": 600,
+  "margin-top": "4px",
 }
 
 const iconButton: JSX.CSSProperties = {
-  all: "unset",
   cursor: "pointer",
+  width: "32px",
+  height: "32px",
   display: "inline-flex",
   "align-items": "center",
   "justify-content": "center",
+  border: "1px solid color-mix(in srgb, var(--color-border) 72%, transparent)",
+  "border-radius": "8px",
+  background: "var(--color-bg-elevated)",
   color: "var(--color-text-faint)",
 }
 
 const log: JSX.CSSProperties = {
   flex: 1,
-  "min-height": "100px",
+  "min-height": "120px",
   margin: 0,
-  padding: "10px",
-  border: "1px solid var(--color-border)",
-  "border-radius": "4px",
+  padding: "12px",
+  border: "1px solid color-mix(in srgb, var(--color-border) 72%, transparent)",
+  "border-radius": "12px",
   background: "#101411",
   color: "#c9d4cc",
   "font-family": FONT_MONO,
-  "font-size": "10px",
+  "font-size": "12px",
   "line-height": 1.55,
   "white-space": "pre-wrap",
   "overflow-wrap": "anywhere",
@@ -1101,13 +1220,26 @@ const log: JSX.CSSProperties = {
 const errorBox: JSX.CSSProperties = {
   display: "flex",
   "align-items": "center",
-  gap: "8px",
-  padding: "8px",
-  "border-radius": "4px",
+  gap: "9px",
+  margin: "8px 10px 0",
+  padding: "10px",
+  "border-radius": "10px",
   border: "1px solid color-mix(in srgb, var(--color-danger) 35%, transparent)",
   background: "color-mix(in srgb, var(--color-danger) 8%, transparent)",
   color: "var(--color-danger)",
-  "font-family": FONT_MONO,
-  "font-size": "9px",
-  "line-height": 1.45,
+  "font-family": FONT_SANS,
+  "font-size": "12px",
+  "line-height": 1.4,
+}
+
+const authorityBox: JSX.CSSProperties = {
+  margin: "8px 10px 0",
+  padding: "8px 10px",
+  "border-radius": "8px",
+  border: "1px solid color-mix(in srgb, var(--color-warning) 20%, var(--color-border))",
+  background: "color-mix(in srgb, var(--color-warning) 7%, var(--color-bg))",
+  color: "var(--color-text-muted)",
+  "font-family": FONT_SANS,
+  "font-size": "12px",
+  "line-height": 1.4,
 }

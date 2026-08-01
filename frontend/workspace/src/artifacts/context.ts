@@ -1,6 +1,7 @@
-import { createSignal } from "solid-js"
+import { createStore } from "solid-js/store"
 import type { ArtifactKind } from "./model"
 import type { ArtifactInspection } from "@/science/renderers"
+import { defaultWorkspaceScope, workspaceScope } from "@/atlas/store/scope"
 
 export type ArtifactContextKind = ArtifactKind | "file"
 
@@ -22,6 +23,18 @@ export interface ArtifactContextInput {
   scienceKind?: string
   inspection?: ArtifactInspection
 }
+
+export interface ArtifactStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+interface PersistedArtifacts {
+  version: 1
+  scopes: Record<string, ArtifactContext | undefined>
+}
+
+const STORAGE_KEY = "openscience-artifact-context-v1"
 
 const kinds: Partial<Record<string, ArtifactContextKind>> = {
   ipynb: "notebook",
@@ -159,14 +172,100 @@ export function clearOwnedArtifact(current: ArtifactContext | undefined, owner: 
   return current
 }
 
-const [active, setActive] = createSignal<ArtifactContext | undefined>()
-
-export const artifactContext = {
-  active,
-  activate(value: ArtifactContext) {
-    setActive(value)
-  },
-  clear(owner: string) {
-    setActive((current) => clearOwnedArtifact(current, owner))
-  },
+function record(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return
+  return value as Record<string, unknown>
 }
+
+function restoreArtifact(value: unknown) {
+  const row = record(value)
+  if (!row || typeof row.directory !== "string" || typeof row.path !== "string") return
+  return createArtifactContext({
+    directory: row.directory,
+    path: row.path,
+    format: typeof row.format === "string" ? row.format : undefined,
+    scienceKind: typeof row.scienceKind === "string" ? row.scienceKind : undefined,
+  })
+}
+
+function restore(storage: ArtifactStorage | undefined) {
+  if (!storage) return {}
+  const raw = (() => {
+    try {
+      return storage.getItem(STORAGE_KEY)
+    } catch {
+      return null
+    }
+  })()
+  if (!raw) return {}
+  const parsed = (() => {
+    try {
+      return JSON.parse(raw) as unknown
+    } catch {
+      return
+    }
+  })()
+  const root = record(parsed)
+  const scopes = record(root?.scopes)
+  if (root?.version !== 1 || !scopes) return {}
+  return Object.fromEntries(Object.entries(scopes).map(([scope, value]) => [scope, restoreArtifact(value)]))
+}
+
+function browserStorage(): ArtifactStorage | undefined {
+  if (typeof localStorage === "undefined") return
+  return localStorage
+}
+
+export function createArtifactState(options: { storage?: ArtifactStorage } = {}) {
+  const storage = options.storage ?? browserStorage()
+  const [store, setStore] = createStore({
+    scope: defaultWorkspaceScope(),
+    scopes: restore(storage) as Record<string, ArtifactContext | undefined>,
+  })
+
+  const persist = () => {
+    if (!storage) return
+    try {
+      const scopes = Object.fromEntries(
+        Object.entries(store.scopes).map(([scope, value]) => [
+          scope,
+          value
+            ? {
+                ...value,
+                inspection: undefined,
+              }
+            : undefined,
+        ]),
+      )
+      storage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          scopes,
+        } satisfies PersistedArtifacts),
+      )
+    } catch {}
+  }
+
+  const active = () => store.scopes[store.scope]
+  const update = (value: ArtifactContext | undefined) => {
+    setStore("scopes", store.scope, value)
+    persist()
+  }
+
+  return {
+    scope: () => store.scope,
+    activateScope(project: string, session: string) {
+      setStore("scope", workspaceScope(project, session))
+    },
+    active,
+    activate(value: ArtifactContext) {
+      update(value)
+    },
+    clear(owner: string) {
+      update(clearOwnedArtifact(active(), owner))
+    },
+  }
+}
+
+export const artifactContext = createArtifactState()

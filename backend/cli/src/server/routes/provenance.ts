@@ -30,6 +30,11 @@ const ReviewInput = z.object({
   verdict: z.enum(["refutes", "supports"]).default("refutes"),
 })
 
+const scope = () => ({
+  projectID: Instance.project.id,
+  directory: Instance.directory,
+})
+
 function summary(nodes: Node[], edges: Edge[]) {
   const kinds = { artifact: 0, run: 0, source: 0, claim: 0 }
   const reviews = { supports: 0, refutes: 0, blocking: 0, major: 0, minor: 0, info: 0 }
@@ -84,7 +89,7 @@ export const ProvenanceRoutes = lazy(() =>
         responses: { 200: { description: "Project provenance graph" } },
       }),
       async (c) => {
-        const graph = await Provenance.project(Instance.directory)
+        const graph = await Provenance.project(scope())
         return c.json({ ...graph, summary: summary(graph.nodes, graph.edges) })
       },
     )
@@ -98,11 +103,11 @@ export const ProvenanceRoutes = lazy(() =>
       validator("json", NodeInput),
       async (c) => {
         const input = c.req.valid("json")
-        const graph = input.derived_from ? await Provenance.project(Instance.directory) : undefined
+        const graph = input.derived_from ? await Provenance.project(scope()) : undefined
         if (input.derived_from && !graph?.nodes.some((node) => node.id === input.derived_from)) {
           return c.json({ error: "The provenance link target was not found" }, 400)
         }
-        const node = await Provenance.record({
+        const node = await Provenance.recordOwned(scope(), {
           kind: input.kind,
           label: input.label,
           ...(input.artifact_type ? { artifactType: input.artifact_type } : {}),
@@ -111,10 +116,14 @@ export const ProvenanceRoutes = lazy(() =>
           ...(input.size !== undefined ? { size: input.size } : {}),
           ...(input.tool ? { tool: input.tool } : {}),
           ...(input.status ? { status: input.status } : {}),
-          meta: { ...input.meta, directory: Instance.directory },
+          meta: {
+            ...input.meta,
+            directory: Instance.directory,
+            projectID: Instance.project.id,
+          },
         } as Parameters<typeof Provenance.record>[0])
         if (input.derived_from) {
-          await Provenance.link({ from: node.id, to: input.derived_from, relation: input.relation })
+          await Provenance.linkOwned(scope(), { from: node.id, to: input.derived_from, relation: input.relation })
         }
         return c.json(node)
       },
@@ -129,7 +138,7 @@ export const ProvenanceRoutes = lazy(() =>
       validator("json", ReviewInput),
       async (c) => {
         const input = c.req.valid("json")
-        const graph = await Provenance.project(Instance.directory)
+        const graph = await Provenance.project(scope())
         if (!graph.nodes.some((node) => node.id === input.target)) {
           return c.json({ error: "The review target was not found" }, 400)
         }
@@ -143,9 +152,49 @@ export const ProvenanceRoutes = lazy(() =>
           },
           verdict: input.verdict,
           reviewer: "manual review",
+          projectID: Instance.project.id,
           directory: Instance.directory,
         })
         return c.json(result)
+      },
+    )
+    .get(
+      "/reviews",
+      describeRoute({
+        summary: "List reviewer findings with lifecycle status",
+        description:
+          "Every reviewer finding in the project. Refuting findings carry a derived status: open, addressed (a fix was recorded), or confirmed (a later reviewer pass verified the target).",
+        operationId: "provenance.reviews.list",
+        responses: { 200: { description: "Reviewer findings" } },
+      }),
+      async (c) => {
+        return c.json(await Review.list(scope()))
+      },
+    )
+    .post(
+      "/reviews/:id/resolve",
+      describeRoute({
+        summary: "Mark a reviewer finding as addressed",
+        description:
+          "Records an append-only resolution against a refuting finding. The finding is only confirmed closed once a later reviewer pass records a supports finding on the same target.",
+        operationId: "provenance.reviews.resolve",
+        responses: { 200: { description: "Resolution node" }, 400: { description: "Not a refuting finding" } },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      validator(
+        "json",
+        z.object({ actor: z.string().trim().min(1).max(240), reason: z.string().trim().min(1).max(10_000) }),
+      ),
+      async (c) => {
+        const input = c.req.valid("json")
+        const node = await Review.resolve({
+          finding: c.req.valid("param").id,
+          actor: input.actor,
+          reason: input.reason,
+          ...scope(),
+        }).catch((error) => (error instanceof Error ? error : new Error(String(error))))
+        if (node instanceof Error) return c.json({ error: node.message }, 400)
+        return c.json(node)
       },
     )
     .get(
@@ -156,12 +205,16 @@ export const ProvenanceRoutes = lazy(() =>
         responses: { 200: { description: "Portable JSON audit packet" } },
       }),
       async (c) => {
-        const graph = await Provenance.project(Instance.directory)
+        const graph = await Provenance.project(scope())
         c.header("Content-Disposition", 'attachment; filename="openscience-provenance-audit.json"')
         return c.json({
           format: "openscience.provenance.audit.v1",
           generated_at: new Date().toISOString(),
-          project: Instance.directory,
+          project_id: Instance.project.id,
+          project: Instance.project.id,
+          metadata: {
+            root: Instance.directory,
+          },
           summary: summary(graph.nodes, graph.edges),
           ...graph,
         })
@@ -176,7 +229,7 @@ export const ProvenanceRoutes = lazy(() =>
       }),
       validator("param", z.object({ id: z.string() })),
       async (c) => {
-        const graph = await Provenance.project(Instance.directory)
+        const graph = await Provenance.project(scope())
         const id = c.req.valid("param").id
         if (!graph.nodes.some((node) => node.id === id)) return c.json({ error: "Provenance node not found" }, 404)
         const connected = lineage(id, graph.nodes, graph.edges)

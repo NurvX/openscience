@@ -1,7 +1,22 @@
-import { For, Show, type JSX, type ParentComponent, type Component } from "solid-js"
+import { For, Show, createSignal, type JSX, type ParentComponent, type Component } from "solid-js"
 import { Icon } from "@synsci/ui/icon"
 import type { IconProps } from "@synsci/ui/icon"
 import { DropdownMenu } from "@synsci/ui/dropdown-menu"
+
+// These menus render inside the modal settings Dialog. Kobalte portals a
+// dropdown to document.body by default, which lands OUTSIDE the dialog's
+// dismissable layer — the dialog then treats the open as an outside
+// interaction and closes the menu instantly. Mounting the portal into the
+// enclosing dialog content nests the layers so the menu opens and stays open.
+// Falls back to the default body portal when not inside a dialog.
+function useDialogMount() {
+  const [mount, setMount] = createSignal<HTMLElement>()
+  const anchor = (el: HTMLElement) => {
+    const content = el.closest<HTMLElement>('[data-slot="dialog-content"]')
+    if (content) setMount(content)
+  }
+  return { mount, anchor }
+}
 
 // Shared visual language for the OpenScience settings panels. Matches the
 // reference (rounded cards, muted subheaders, filter/search/add toolbar) while
@@ -132,9 +147,11 @@ export const FilterMenu: Component<{ options: FilterOption[]; value: string; onS
   props,
 ) => {
   const active = () => props.options.find((o) => o.id === props.value) ?? props.options[0]
+  const dialog = useDialogMount()
   return (
     <DropdownMenu>
       <DropdownMenu.Trigger
+        ref={dialog.anchor}
         class={`${controlBase} text-text-strong hover:bg-surface-raised-base/60 data-[expanded]:bg-surface-raised-base-active flex-shrink-0`}
       >
         <span class="truncate max-w-[160px]">
@@ -143,7 +160,7 @@ export const FilterMenu: Component<{ options: FilterOption[]; value: string; onS
         </span>
         <Icon name="chevron-down" size="small" class="text-icon-weak-base" />
       </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
+      <DropdownMenu.Portal mount={dialog.mount()}>
         <DropdownMenu.Content class="mt-1 min-w-[180px]">
           <For each={props.options}>
             {(option) => (
@@ -168,36 +185,41 @@ export interface AddItem {
   onSelect: () => void
 }
 
-export const AddMenu: Component<{ label: string; items: AddItem[] }> = (props) => (
-  <DropdownMenu>
-    <DropdownMenu.Trigger
-      class={`${controlBase} text-text-strong bg-surface-raised-base-active hover:bg-surface-raised-base-active/80 data-[expanded]:bg-surface-raised-base-active flex-shrink-0`}
-    >
-      <Icon name="plus" size="small" />
-      <span class="truncate">{props.label}</span>
-      <Icon name="chevron-down" size="small" class="text-icon-weak-base" />
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Portal>
-      <DropdownMenu.Content class="mt-1 min-w-[240px]">
-        <For each={props.items}>
-          {(item) => (
-            <DropdownMenu.Item onSelect={item.onSelect} class="items-start gap-2.5 py-2">
-              <Icon name={item.icon} size="small" class="text-icon-weak-base mt-0.5 flex-shrink-0" />
-              <div class="flex flex-col gap-0.5 min-w-0">
-                <DropdownMenu.ItemLabel>{item.label}</DropdownMenu.ItemLabel>
-                <Show when={item.description}>
-                  <DropdownMenu.ItemDescription class="text-12-regular text-text-weak">
-                    {item.description}
-                  </DropdownMenu.ItemDescription>
-                </Show>
-              </div>
-            </DropdownMenu.Item>
-          )}
-        </For>
-      </DropdownMenu.Content>
-    </DropdownMenu.Portal>
-  </DropdownMenu>
-)
+export const AddMenu: Component<{ label: string; items: AddItem[] }> = (props) => {
+  const dialog = useDialogMount()
+  return (
+    <DropdownMenu>
+      <DropdownMenu.Trigger
+        ref={dialog.anchor}
+        aria-label={props.label}
+        class={`${controlBase} text-text-strong bg-surface-raised-base-active hover:bg-surface-raised-base-active/80 data-[expanded]:bg-surface-raised-base-active flex-shrink-0`}
+      >
+        <Icon name="plus" size="small" />
+        <span class="truncate">{props.label}</span>
+        <Icon name="chevron-down" size="small" class="text-icon-weak-base" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal mount={dialog.mount()}>
+        <DropdownMenu.Content class="mt-1 min-w-[240px]">
+          <For each={props.items}>
+            {(item) => (
+              <DropdownMenu.Item aria-label={item.label} onSelect={item.onSelect} class="items-start gap-2.5 py-2">
+                <Icon name={item.icon} size="small" class="text-icon-weak-base mt-0.5 flex-shrink-0" />
+                <div class="flex flex-col gap-0.5 min-w-0">
+                  <DropdownMenu.ItemLabel>{item.label}</DropdownMenu.ItemLabel>
+                  <Show when={item.description}>
+                    <DropdownMenu.ItemDescription class="text-12-regular text-text-weak">
+                      {item.description}
+                    </DropdownMenu.ItemDescription>
+                  </Show>
+                </div>
+              </DropdownMenu.Item>
+            )}
+          </For>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu>
+  )
+}
 
 export const Toolbar: ParentComponent = (props) => <div class="flex items-center gap-2 flex-wrap">{props.children}</div>
 

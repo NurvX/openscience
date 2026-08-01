@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import { Instance } from "../../src/project/instance"
 import { ProvenanceRoutes } from "../../src/server/routes/provenance"
 import { tmpdir } from "../fixture/fixture"
@@ -78,7 +79,11 @@ describe("/provenance routes", () => {
         const audit = await app.request("/export")
         expect(audit.status).toBe(200)
         expect(audit.headers.get("content-disposition")).toContain("openscience-provenance-audit.json")
-        expect(((await audit.json()) as { project: string }).project).toBe(tmp.path)
+        expect(await audit.json()).toMatchObject({
+          project_id: Instance.project.id,
+          project: Instance.project.id,
+          metadata: { root: tmp.path },
+        })
       },
     })
   })
@@ -135,5 +140,71 @@ describe("/provenance routes", () => {
         expect(link.status).toBe(400)
       },
     })
+  })
+
+  test("shares project-owned provenance between a main worktree and linked sandbox", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const sandbox = path.join(path.dirname(tmp.path), `${path.basename(tmp.path)}-provenance-worktree`)
+    const branch = `provenance-${crypto.randomUUID()}`
+    await Bun.$`git worktree add ${sandbox} -b ${branch}`.cwd(tmp.path).quiet()
+    try {
+      const root = await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const response = await ProvenanceRoutes().request("/nodes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              kind: "source",
+              label: "Main worktree source",
+              meta: { projectID: "attempted-override" },
+            }),
+          })
+          const node = (await response.json()) as { id: string; meta: Record<string, unknown> }
+          return { node, projectID: Instance.project.id }
+        },
+      })
+      expect(root.node.meta).toMatchObject({
+        projectID: root.projectID,
+        directory: tmp.path,
+      })
+
+      const linked = await Instance.provide({
+        directory: sandbox,
+        fn: async () => {
+          expect(Instance.project.id).toBe(root.projectID)
+          const before = (await (await ProvenanceRoutes().request("/")).json()) as {
+            nodes: Array<{ id: string }>
+          }
+          expect(before.nodes.map((node) => node.id)).toContain(root.node.id)
+          const response = await ProvenanceRoutes().request("/nodes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "claim", label: "Linked worktree claim", derived_from: root.node.id }),
+          })
+          expect(response.status).toBe(200)
+          return (await response.json()) as { id: string }
+        },
+      })
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const graph = (await (await ProvenanceRoutes().request("/")).json()) as {
+            nodes: Array<{ id: string }>
+            edges: Array<{ from: string; to: string }>
+          }
+          expect(graph.nodes.map((node) => node.id)).toEqual(expect.arrayContaining([root.node.id, linked.id]))
+          expect(graph.edges).toContainEqual(
+            expect.objectContaining({
+              from: linked.id,
+              to: root.node.id,
+            }),
+          )
+        },
+      })
+    } finally {
+      await Bun.$`git worktree remove --force ${sandbox}`.cwd(tmp.path).quiet()
+    }
   })
 })

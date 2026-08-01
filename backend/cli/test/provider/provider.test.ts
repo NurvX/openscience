@@ -133,7 +133,7 @@ test("synthesized Codex OAuth models use Codex variants and context instead of p
         expect(Object.keys(codex54.variants ?? {})).toEqual(["low", "medium", "high", "xhigh"])
         expect(Object.keys(codex54.modes ?? {})).toEqual(["fast"])
         expect(Object.keys(codex.models["gpt-5.4-mini"].modes ?? {})).toEqual(["fast"])
-        expect(codex.name).toBe("OpenAI (ChatGPT subscription)")
+        expect(codex.name).toBe("OpenAI (Codex subscription)")
 
         const publicSol = providers.openai?.models["gpt-5.6-sol"]
         expect(Object.keys(publicSol?.variants ?? {})).toEqual(["none", "low", "medium", "high", "xhigh", "max"])
