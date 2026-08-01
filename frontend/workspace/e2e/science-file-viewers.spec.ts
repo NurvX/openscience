@@ -1,39 +1,24 @@
-import path from "node:path"
-import type { Page } from "@playwright/test"
 import { test, expect } from "./fixtures"
+import { openWorkspaceFile } from "./utils"
 
-const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+const view = (page: import("@playwright/test").Page) => page.locator('[data-component="file-view"]')
 
-async function openFile(page: Page, directory: string, relativePath: string) {
-  await page.getByRole("tab", { name: "Files", exact: true }).click()
+test("markdown files render and can toggle their editable source", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, "README.md")
 
-  const folder = path.join(directory, path.dirname(relativePath))
-  const filename = path.basename(relativePath)
-  const location = page.getByPlaceholder("/absolute/path")
-  await location.fill(folder)
-  await location.press("Enter")
-
-  await page.getByPlaceholder("filter this folder…").fill(filename)
-  const file = page.getByRole("button", { name: new RegExp(`^${escapeRegex(filename)}\\b`) }).first()
-  await expect(file).toBeVisible()
-  await file.click()
-  await expect(page.locator(`[role="tab"][title="${filename}"]`)).toHaveAttribute("aria-selected", "true")
-}
-
-test("markdown files render and can toggle their editable source", async ({ page, directory, gotoSession }) => {
-  await gotoSession()
-  await openFile(page, directory, "README.md")
-
-  await expect(page.locator("[data-component=markdown].atlas-md")).toBeVisible()
+  await expect(view(page).locator("[data-component=markdown].atlas-md")).toBeVisible()
   await expect(page.getByText("The open-source AI workbench for scientific research", { exact: true })).toBeVisible()
-  await page.getByTitle("raw source", { exact: true }).click()
-  await expect(page.getByTitle("rendered view", { exact: true })).toBeVisible()
-  await expect(page.getByLabel("File source")).toHaveValue(/### The open-source AI workbench for scientific research/)
+  await view(page).getByRole("tab", { name: "Source", exact: true }).click()
+  await expect(view(page).getByRole("tab", { name: "Preview", exact: true })).toBeVisible()
+  await expect(view(page).getByLabel("File source")).toHaveValue(
+    /### The open-source AI workbench for scientific research/,
+  )
 })
 
-test("image files render their decoded dimensions", async ({ page, directory, gotoSession }) => {
-  await gotoSession()
-  await openFile(page, directory, "frontend/ui/src/assets/images/social-share.png")
+test("image files render their decoded dimensions", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, "frontend/ui/src/assets/images/social-share.png")
 
   const image = page.getByRole("img", { name: "social-share.png", exact: true })
   await expect(image).toBeVisible()
@@ -42,9 +27,9 @@ test("image files render their decoded dimensions", async ({ page, directory, go
     .toEqual([1280, 721, expect.stringMatching(/^data:image\/png;base64,/)])
 })
 
-test("PDF files rasterize their pages without an error", async ({ page, directory, gotoSession }) => {
-  await gotoSession()
-  await openFile(page, directory, "backend/cli/skills/writing/ml-paper-writing/templates/icml2026/icml_numpapers.pdf")
+test("PDF files rasterize their pages without an error", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, "backend/cli/skills/writing/ml-paper-writing/templates/icml2026/icml_numpapers.pdf")
 
   const viewer = page.locator('[data-component="science-pdf"]')
   await expect(viewer).toBeVisible()
@@ -55,9 +40,9 @@ test("PDF files rasterize their pages without an error", async ({ page, director
   await expect(viewer.locator('[data-slot="pdf-error"]')).toHaveCount(0)
 })
 
-test("XYZ files open as interactive 3D chemistry with source access", async ({ page, directory, gotoSession }) => {
-  await gotoSession()
-  await openFile(page, directory, "frontend/workspace/e2e/science/water.xyz")
+test("XYZ files open as interactive 3D chemistry with source access", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, "frontend/workspace/e2e/science/water.xyz")
 
   const artifact = page.locator('[data-component="science-artifact"][data-kind="chem-3d"]')
   await expect(artifact).toBeVisible()
@@ -66,9 +51,9 @@ test("XYZ files open as interactive 3D chemistry with source access", async ({ p
   await expect(summary).toContainText("3 atoms")
   await expect(summary).toContainText("H 2")
   await expect(summary).toContainText("O 1")
-  await expect(page.getByRole("button", { name: "Source", exact: true })).toBeVisible()
-  await expect(page.getByRole("button", { name: "Copy", exact: true })).toBeVisible()
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0)
+  await expect(view(page).getByRole("tab", { name: "Source", exact: true })).toBeVisible()
+  await expect(view(page).getByRole("button", { name: "Copy contents", exact: true })).toBeVisible()
+  await expect(view(page).getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0)
 
   const structure = artifact.locator('[data-component="mol-structure"]')
   await expect(structure).toHaveAttribute("data-status", "ready", { timeout: 30_000 })
@@ -87,23 +72,23 @@ test("XYZ files open as interactive 3D chemistry with source access", async ({ p
   await controls.getByRole("button", { name: "Export PNG", exact: true }).click()
   await expect((await download).suggestedFilename()).toMatch(/^water-structure\.png$/)
 
-  await page.getByTitle("raw source", { exact: true }).click()
-  await expect(page.getByTitle("rendered view", { exact: true })).toBeVisible()
-  await expect(page.locator("textarea")).toHaveValue(/water/)
+  await view(page).getByRole("tab", { name: "Source", exact: true }).click()
+  await expect(view(page).getByRole("tab", { name: "Preview", exact: true })).toBeVisible()
+  await expect(view(page).getByLabel("File source")).toHaveValue(/water/)
 })
 
-test("PDB and SDF files select their molecular renderers", async ({ page, directory, gotoSession }) => {
-  await gotoSession()
-  await openFile(page, directory, "frontend/workspace/e2e/science/example.pdb")
+test("PDB and SDF files select their molecular renderers", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, "frontend/workspace/e2e/science/example.pdb")
   await expect(page.locator('[data-component="science-artifact"][data-kind="protein-structure"]')).toBeVisible()
 
-  await openFile(page, directory, "frontend/workspace/e2e/science/ligand.sdf")
+  await openWorkspaceFile(page, "frontend/workspace/e2e/science/ligand.sdf")
   await expect(page.locator('[data-component="science-artifact"][data-kind="chem-3d"]')).toBeVisible()
 })
 
-test("aligned FASTA files open in the sequence alignment viewer", async ({ page, directory, gotoSession }) => {
-  await gotoSession()
-  await openFile(page, directory, "frontend/workspace/e2e/science/alignment.fasta")
+test("aligned FASTA files open in the sequence alignment viewer", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, "frontend/workspace/e2e/science/alignment.fasta")
 
   const artifact = page.locator('[data-component="science-artifact"][data-kind="msa"]')
   await expect(artifact).toBeVisible()

@@ -63,7 +63,7 @@ function sortNodes(nodes: FileNode[]): FileNode[] {
 export function OpenScienceFileTree(props: { onOpen?: (path: string) => void }): JSX.Element {
   const sdk = useSDK()
   const sync = useSync()
-  const directory = () => sync.project?.worktree || sync.data.path.directory || sdk.directory
+  const directory = () => sdk.directory || sync.data.path.directory || sync.project?.worktree || ""
 
   const [filter, setFilter] = createSignal("")
   // Debounced query drives match filtering (each visible Node re-evaluates

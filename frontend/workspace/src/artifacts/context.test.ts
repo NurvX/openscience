@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { clearOwnedArtifact, createArtifactContext, inferArtifactKind, type ArtifactContext } from "./context"
+import {
+  clearOwnedArtifact,
+  createArtifactContext,
+  createArtifactState,
+  inferArtifactKind,
+  type ArtifactContext,
+  type ArtifactStorage,
+} from "./context"
+
+function memoryStorage(): ArtifactStorage {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  }
+}
 
 describe("artifact context", () => {
   test("normalizes equivalent locations to one stable identity", () => {
@@ -75,5 +90,26 @@ describe("artifact context", () => {
     expect(clearOwnedArtifact(active, "artifact:/another/file")).toBe(active)
     expect(clearOwnedArtifact(active, active.id)).toBeUndefined()
     expect(clearOwnedArtifact(undefined, active.id)).toBeUndefined()
+  })
+
+  test("isolates and restores selected artifacts by project and session", () => {
+    const storage = memoryStorage()
+    const first = createArtifactState({ storage })
+    const alpha = createArtifactContext({ directory: "/alpha", path: "result.csv" })
+    const beta = createArtifactContext({ directory: "/beta", path: "report.pdf" })
+
+    first.activateScope("project-a", "session-a")
+    first.activate(alpha)
+    first.activateScope("project-b", "session-a")
+    expect(first.active()).toBeUndefined()
+    first.activate(beta)
+
+    const restored = createArtifactState({ storage })
+    restored.activateScope("project-a", "session-a")
+    expect(restored.active()?.id).toBe(alpha.id)
+    restored.activateScope("project-b", "session-a")
+    expect(restored.active()?.id).toBe(beta.id)
+    restored.activateScope("project-a", "session-b")
+    expect(restored.active()).toBeUndefined()
   })
 })

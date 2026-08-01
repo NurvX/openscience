@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { createArtifactContext } from "./context"
-import { inspectorTabs, normalizeInspectorData, normalizePublicationReview } from "./inspector"
+import {
+  filterReviewerFindings,
+  inspectorTabs,
+  normalizeInspectorData,
+  normalizePublicationReview,
+  normalizeReviewerFindings,
+} from "./inspector"
+
+const source = () => readFileSync(fileURLToPath(new URL("./ArtifactInspector.tsx", import.meta.url)), "utf8")
 
 const context = createArtifactContext({
   directory: "/work/project",
@@ -72,6 +82,59 @@ describe("artifact inspector model", () => {
     expect(inspectorTabs).toEqual(["details", "code", "run", "messages", "environment", "review", "history"])
   })
 
+  test("threads producing runs and messages from recorded lineage", () => {
+    const result = normalizeInspectorData(context, {
+      lineage: {
+        runs: [
+          {
+            id: "run_1",
+            tool: "kernel.execute",
+            label: "Fold protein",
+            status: "ok",
+            recordedAt: "2026-07-29T00:00:05.000Z",
+            sessionID: "ses_1",
+            messageID: "msg_1",
+            callID: "call_1",
+            code: "print('fold')",
+            cwd: "/work/project",
+            kernel: { language: "python", name: "python3" },
+            startedAt: "2026-07-29T00:00:00.000Z",
+            completedAt: "2026-07-29T00:00:05.000Z",
+          },
+        ],
+        messages: [{ sessionID: "ses_1", messageID: "msg_1" }],
+      },
+    })
+
+    expect(result.runs).toHaveLength(1)
+    expect(result.runs[0]).toMatchObject({
+      id: "run_1",
+      tool: "kernel.execute",
+      status: "ok",
+      kernel: { language: "python", name: "python3" },
+      code: "print('fold')",
+      cwd: "/work/project",
+    })
+    expect(result.messages).toEqual([{ sessionID: "ses_1", messageID: "msg_1" }])
+    expect(result.tabs.run).toMatchObject({ available: true, title: "Producing run recorded" })
+    expect(result.tabs.run.detail).toContain("1 recorded run")
+    expect(result.tabs.messages).toMatchObject({ available: true, title: "Producing messages recorded" })
+  })
+
+  test("keeps malformed lineage honest instead of inventing runs or messages", () => {
+    const result = normalizeInspectorData(context, {
+      lineage: {
+        runs: [{ id: "run_1", tool: 12, label: "no tool", recordedAt: "2026-07-29T00:00:00.000Z" }, "nope"],
+        messages: [{ sessionID: "ses_1" }, { messageID: "msg_1" }, 7],
+      },
+    })
+
+    expect(result.runs).toEqual([])
+    expect(result.messages).toEqual([])
+    expect(result.tabs.run.available).toBe(false)
+    expect(result.tabs.messages.available).toBe(false)
+  })
+
   test("normalizes publication readiness without inventing a review", () => {
     const skipped = normalizePublicationReview("pdb", undefined)
     expect(skipped.kind).toBe("not-applicable")
@@ -79,6 +142,9 @@ describe("artifact inspector model", () => {
     const missing = normalizePublicationReview("md", { status: "ready" })
     expect(missing.kind).toBe("not-run")
     expect(missing.report).toBeUndefined()
+    // Display-only rename: the deterministic checks present as a preflight and
+    // never claim scientific review. The persisted format string is untouched.
+    expect(missing.title).toBe("No publication preflight yet")
   })
 
   test("distinguishes blocked, stale, and finalized manuscript states", () => {
@@ -133,5 +199,119 @@ describe("artifact inspector model", () => {
       kind: "finalized",
       report: { finalized: { actor: "Aayam Bansal" } },
     })
+    expect(
+      normalizePublicationReview("md", {
+        ...report,
+        status: "ready",
+        finalized: { actor: "Aayam Bansal", at: 3, artifactHash: "a".repeat(64) },
+      }).title,
+    ).toBe("Publication preflight finalized")
+  })
+})
+
+describe("reviewer findings model", () => {
+  const entry = (over: Record<string, unknown> = {}, meta: Record<string, unknown> = {}) => ({
+    finding: {
+      id: "node_1",
+      kind: "claim",
+      label: "review (major): unsupported claim",
+      recordedAt: "2026-07-30T10:00:00.000Z",
+      meta: {
+        review: true,
+        claim: "AUC improved to 0.94",
+        issue: "The evaluation notebook reports 0.87",
+        severity: "major",
+        evidence: "results/eval.ipynb cell 12",
+        reviewer: "reviewer",
+        sessionID: "ses_1",
+        ...meta,
+      },
+    },
+    target: "node_0",
+    verdict: "refutes",
+    status: "open",
+    ...over,
+  })
+
+  test("normalizes reviewer entries with lifecycle status and resolution", () => {
+    const rows = normalizeReviewerFindings([
+      entry(),
+      entry({
+        status: "addressed",
+        resolution: { actor: "Aayam Bansal", reason: "reran the evaluation", recordedAt: "2026-07-30T11:00:00.000Z" },
+      }),
+      entry({ verdict: "supports", status: undefined }, { issue: "verified" }),
+    ])
+
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toMatchObject({
+      id: "node_1",
+      target: "node_0",
+      verdict: "refutes",
+      severity: "major",
+      claim: "AUC improved to 0.94",
+      issue: "The evaluation notebook reports 0.87",
+      evidence: "results/eval.ipynb cell 12",
+      sessionID: "ses_1",
+    })
+    expect(rows.map((row) => row.status)).toContain("addressed")
+    expect(rows.find((row) => row.status === "addressed")?.resolution).toMatchObject({ actor: "Aayam Bansal" })
+    expect(rows.find((row) => row.verdict === "supports")?.status).toBeUndefined()
+  })
+
+  test("drops malformed entries instead of inventing findings", () => {
+    expect(normalizeReviewerFindings(undefined)).toEqual([])
+    expect(
+      normalizeReviewerFindings([
+        "nope",
+        { finding: { id: "x" }, target: "t", verdict: "refutes" },
+        entry({ verdict: "maybe" }),
+        entry({}, { severity: "catastrophic" }),
+      ]),
+    ).toEqual([])
+  })
+
+  test("scopes honestly to the open session when one exists", () => {
+    const rows = normalizeReviewerFindings([entry(), entry({}, { sessionID: "ses_2" })])
+    expect(filterReviewerFindings(rows, "ses_2")).toHaveLength(1)
+    expect(filterReviewerFindings(rows, "ses_2")[0]?.sessionID).toBe("ses_2")
+    expect(filterReviewerFindings(rows)).toHaveLength(2)
+  })
+})
+
+describe("artifact inspector presentation", () => {
+  test("uses readable type, control, and grouping geometry", () => {
+    const component = source()
+
+    expect(component).toContain('const BODY_FONT_SIZE = "16px"')
+    expect(component).toContain('const SECTION_TITLE_SIZE = "20px"')
+    expect(component).toContain('const CONTROL_HEIGHT = "44px"')
+    expect(component).toContain('const GROUP_RADIUS = "18px"')
+    expect(component).toContain('"font-size": BODY_FONT_SIZE')
+    expect(component).toContain('"min-height": CONTROL_HEIGHT')
+    expect(component).toContain('"border-radius": GROUP_RADIUS')
+    expect(component).not.toMatch(/"font-size": "(?:8|9|10|11|12)px"/)
+  })
+
+  test("renders producing runs and messages instead of only empty states", () => {
+    const component = source()
+
+    expect(component).toContain("<Runs data={model()} />")
+    expect(component).toContain("<Messages data={model()}")
+    expect(component).toContain('data-component="artifact-run"')
+    expect(component).toContain('data-component="artifact-message"')
+    expect(component).toContain("Show in conversation")
+    expect(component).toContain('document.querySelector(`[data-message-id="${props.message.messageID}"]`)')
+  })
+
+  test("labels review evidence and versions explicitly", () => {
+    const component = source()
+
+    expect(component).toContain('data-label="review-version"')
+    expect(component).toContain("Preflight version {report().version}")
+    expect(component).toContain('data-section="finding-evidence"')
+    expect(component).toMatch(/>\s*Evidence\s*<\/span>/)
+    expect(component).toContain("Annotation version {props.annotation.version}")
+    expect(component).toContain("Latest recorded version")
   })
 })

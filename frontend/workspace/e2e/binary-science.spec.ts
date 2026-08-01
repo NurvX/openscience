@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { test, expect } from "./fixtures"
+import { expect, test } from "./fixtures"
+import { openConnectedFile } from "./utils"
 
-test("inspects and streams scientific binary containers", async ({ page, gotoSession }) => {
-  const directory = mkdtempSync(path.join(tmpdir(), "openscience-binary-e2e-"))
+test("inspects and streams scientific binary containers", async ({ page, sdk, openSession }) => {
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openscience-binary-e2e-")))
   writeFileSync(
     path.join(directory, "cells.h5ad"),
     Uint8Array.from([0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
@@ -13,14 +14,10 @@ test("inspects and streams scientific binary containers", async ({ page, gotoSes
   writeFileSync(path.join(directory, "sample.cram.crai"), "index")
 
   try {
-    await gotoSession()
-    await page.getByRole("tab", { name: "Files", exact: true }).click()
-    const location = page.getByPlaceholder("/absolute/path")
-    await location.fill(directory)
-    await location.press("Enter")
+    const sessionID = await openSession()
+    await sdk.session.filesystem.grant({ sessionID, path: directory, access: "read", scope: "session" })
 
-    await page.getByPlaceholder("filter this folder…").fill("cells.h5ad")
-    await page.getByRole("button", { name: /^cells\.h5ad\b/ }).click()
+    await openConnectedFile(page, directory, "cells.h5ad")
     const h5ad = page.locator('[data-component="binary-science"][data-format="h5ad"]')
     await expect(h5ad).toBeVisible()
     await expect(h5ad.getByText("signature valid", { exact: true })).toBeVisible()
@@ -28,23 +25,23 @@ test("inspects and streams scientific binary containers", async ({ page, gotoSes
     await expect(h5ad.getByText("python -m pip install h5py anndata", { exact: true })).toBeVisible()
 
     const download = page.waitForEvent("download")
-    await page.getByRole("button", { name: "Download", exact: true }).click()
+    await page.getByRole("button", { name: "Download file", exact: true }).click()
     expect((await download).suggestedFilename()).toBe("cells.h5ad")
 
-    await page.getByRole("tab", { name: "Files", exact: true }).click()
-    await page.getByPlaceholder("filter this folder…").fill("sample.cram")
-    await page.locator('button[title$="/sample.cram"]').click()
+    await openConnectedFile(page, directory, "sample.cram")
     const cram = page.locator('[data-component="binary-science"][data-format="cram"]')
     await expect(cram).toBeVisible()
-    await expect(cram.getByText("sample.cram.crai", { exact: true })).toBeVisible()
+    // Opened from a connected folder, the detected index reports its absolute
+    // path, which ends with the sidecar filename.
+    await expect(cram.getByText(/sample\.cram\.crai$/)).toBeVisible()
     await expect(cram.getByText("CRAM container detected", { exact: true })).toBeVisible()
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
 })
 
-test("renders an H5AD embedding with categorical cell labels", async ({ page, gotoSession }) => {
-  const directory = mkdtempSync(path.join(tmpdir(), "openscience-h5ad-embedding-e2e-"))
+test("renders an H5AD embedding with categorical cell labels", async ({ page, sdk, openSession }) => {
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openscience-h5ad-embedding-e2e-")))
   writeFileSync(
     path.join(directory, "atlas.h5ad"),
     Uint8Array.from([0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]),
@@ -86,13 +83,9 @@ test("renders an H5AD embedding with categorical cell labels", async ({ page, go
   })
 
   try {
-    await gotoSession()
-    await page.getByRole("tab", { name: "Files", exact: true }).click()
-    const location = page.getByPlaceholder("/absolute/path")
-    await location.fill(directory)
-    await location.press("Enter")
-    await page.getByPlaceholder("filter this folder…").fill("atlas.h5ad")
-    await page.getByRole("button", { name: /^atlas\.h5ad\b/ }).click()
+    const sessionID = await openSession()
+    await sdk.session.filesystem.grant({ sessionID, path: directory, access: "read", scope: "session" })
+    await openConnectedFile(page, directory, "atlas.h5ad")
 
     const h5ad = page.locator('[data-component="binary-science"][data-format="h5ad"]')
     await expect(h5ad.getByText("Embedding preview", { exact: true })).toBeVisible()

@@ -31,10 +31,14 @@ import { ApplyPatchTool } from "./apply_patch"
 import { BiologyTools, BIOLOGY_TOOL_IDS } from "./biology"
 import { ArtifactTool } from "./artifact"
 import { LearnTool } from "./learn"
+import { MemoryTool } from "./memory"
 import { ScienceTools } from "./science"
 import { ProvenanceTools } from "./provenance"
 import { NotebookTool } from "./notebook"
 import { RKernelTool } from "./rkernel"
+import { AtlasTool } from "./atlas"
+import { AtlasRecordTool } from "./atlas-record"
+import { ArtifactSnapshotTool } from "./artifact-snapshot"
 
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
@@ -69,37 +73,35 @@ export namespace ToolRegistry {
   })
 
   function fromPlugin(id: string, def: ToolDefinition): Tool.Info {
-    return {
-      id,
-      init: async (initCtx) => ({
-        parameters: z.object(def.args),
-        description: def.description,
-        execute: async (args, ctx) => {
-          const pluginCtx = {
-            ...ctx,
-            directory: Instance.directory,
-            worktree: Instance.worktree,
-          } as unknown as PluginToolContext
-          const result = await def.execute(args as any, pluginCtx)
-          const out = await Truncate.output(result, {}, initCtx?.agent)
-          return {
-            title: "",
-            output: out.truncated ? out.content : result,
-            metadata: { truncated: out.truncated, outputPath: out.truncated ? out.outputPath : undefined },
-          }
-        },
-      }),
-    }
+    return Tool.define(id, async (initCtx) => ({
+      parameters: z.object(def.args),
+      description: def.description,
+      execute: async (args, ctx) => {
+        const pluginCtx = {
+          ...ctx,
+          directory: Instance.directory,
+          worktree: Instance.worktree,
+        } as unknown as PluginToolContext
+        const result = await def.execute(args as any, pluginCtx)
+        const out = await Truncate.output(result, {}, initCtx?.agent)
+        return {
+          title: "",
+          output: out.truncated ? out.content : result,
+          metadata: { truncated: out.truncated, outputPath: out.truncated ? out.outputPath : undefined },
+        }
+      },
+    }))
   }
 
   export async function register(tool: Tool.Info) {
     const { custom } = await state()
+    const secured = Tool.define(tool.id, tool.init)
     const idx = custom.findIndex((t) => t.id === tool.id)
     if (idx >= 0) {
-      custom.splice(idx, 1, tool)
+      custom.splice(idx, 1, secured)
       return
     }
-    custom.push(tool)
+    custom.push(secured)
   }
 
   async function all(): Promise<Tool.Info[]> {
@@ -131,16 +133,26 @@ export namespace ToolRegistry {
       ...BiologyTools,
       ...ScienceTools,
       ...ProvenanceTools,
+      ArtifactSnapshotTool,
+      AtlasTool,
+      AtlasRecordTool,
       NotebookTool,
       RKernelTool,
       ArtifactTool,
       LearnTool,
+      MemoryTool,
       ...custom,
     ]
   }
 
   const ARTIFACT_TOOL_ID = "artifact"
   const ARTIFACT_AGENTS = ["research", "biology", "ml"]
+
+  // Memory tool: only user-facing primary agents may read/write persistent
+  // memory; subagents (title, compaction, explore, ...) cannot. Plan mode is
+  // excluded because PlanMode.enforce blocks all mutating tools there anyway.
+  const MEMORY_TOOL_ID = "memory"
+  const MEMORY_AGENTS = ["research", "biology", "physics", "ml"]
 
   export async function ids() {
     return all().then((x) => x.map((t) => t.id))
@@ -165,6 +177,10 @@ export namespace ToolRegistry {
           // Artifact tool: only for artifact-oriented scientific agents.
           if (t.id === ARTIFACT_TOOL_ID) {
             return !!agent?.name && ARTIFACT_AGENTS.includes(agent.name)
+          }
+
+          if (t.id === MEMORY_TOOL_ID) {
+            return !!agent?.name && MEMORY_AGENTS.includes(agent.name)
           }
 
           // Enable websearch/codesearch for zen users OR via enable flag

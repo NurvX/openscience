@@ -27,7 +27,7 @@ import { useDialog } from "@synsci/ui/context/dialog"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
 import { uiStore } from "@/atlas/store/ui"
-import { FONT_MONO, FONT_SANS, FONT_SERIF, sectionTitle } from "@/styles/tokens"
+import { FONT_MONO, FONT_SANS, sectionTitle } from "@/styles/tokens"
 import { IconRefresh, IconPlus, IconNetwork, IconArrowRight } from "@/atlas/shared/Icon"
 import { createAtlasAPI, type AtlasNode } from "@/atlas/api/atlas"
 import { toast } from "@/atlas/Toast"
@@ -140,7 +140,7 @@ export function AtlasCanvas(): JSX.Element {
   const dialog = useDialog()
   const sync = useSync()
   const sdk = useSDK()
-  const atlas = createAtlasAPI(() => sdk.url)
+  const atlas = createAtlasAPI(sdk.request)
   // The project the SPA has open (NOT the serve launch dir). Same resolution as
   // RightPane — threaded to the bridge so the canvas defaults to THIS project's
   // graph instead of the launch directory's.
@@ -168,9 +168,9 @@ export function AtlasCanvas(): JSX.Element {
   // instead of another project's. `null` = unlinked (offer Initialize); read via
   // `.latest` so it never suspends. `undefined` = still resolving.
   const [folderProjectError, setFolderProjectError] = createSignal<Error>()
-  const [folderProject, { refetch: refetchFolderProject }] = createResource(directory, (dir) =>
+  const [folderProject, { refetch: refetchFolderProject }] = createResource(directory, () =>
     atlas
-      .resolveProject(dir)
+      .resolveProject()
       .then((r) => {
         setFolderProjectError(undefined)
         return r.project_id
@@ -546,7 +546,9 @@ export function AtlasCanvas(): JSX.Element {
     if (!title) return
     setCreating(true)
     try {
-      const created = await atlas.createNode({ title, directory: directory(), parentID })
+      const projectID = sdk.projectID
+      if (!projectID) throw new Error("Project selector unavailable.")
+      const created = await atlas.createNode({ title, projectID, parentID })
       await Promise.all([refetchGraphs(), refetchTree()])
       setSelectedID(created.node_id)
       toast.info("node staged", title)
@@ -563,7 +565,7 @@ export function AtlasCanvas(): JSX.Element {
     if (initializing()) return
     setInitializing(true)
     try {
-      const result = await atlas.initProject(directory())
+      const result = await atlas.initProject()
       const { project_id } = result
       // Backward compatibility for an older bridge that returned a structured
       // 200 failure. Current bridges use non-2xx + detail, which requestJSON
@@ -972,7 +974,7 @@ export function AtlasCanvas(): JSX.Element {
                                   font-size="12"
                                   fill="var(--color-text)"
                                   style={{
-                                    "font-family": FONT_SERIF,
+                                    "font-family": FONT_SANS,
                                     "pointer-events": "none",
                                     "paint-order": "stroke",
                                     stroke: "var(--color-bg)",
@@ -1189,7 +1191,7 @@ function CardNode(props: { node: AtlasNode; selected: boolean; hovered: boolean 
         y={-CARD_H / 2 + 36}
         font-size="13"
         fill="var(--color-text)"
-        style={{ "font-family": FONT_SERIF, "font-weight": 400, "pointer-events": "none" }}
+        style={{ "font-family": FONT_SANS, "font-weight": 400, "pointer-events": "none" }}
       >
         {truncate(props.node.title || props.node.slug_name || "untitled", 28)}
       </text>
@@ -1238,7 +1240,7 @@ function OrbitTooltip(props: { node: AtlasNode; x: number; y: number; byId: Map<
     >
       <div
         style={{
-          "font-family": FONT_SERIF,
+          "font-family": FONT_SANS,
           "font-size": "13px",
           "font-weight": 400,
           color: "var(--color-text)",
@@ -1283,7 +1285,7 @@ function OrbitTooltip(props: { node: AtlasNode; x: number; y: number; byId: Map<
 
 function NodeDetail(props: { node: AtlasNode; onClose: () => void }): JSX.Element {
   const sdk = useSDK()
-  const atlas = createAtlasAPI(() => sdk.url)
+  const atlas = createAtlasAPI(sdk.request)
   const [artifactError, setArtifactError] = createSignal<Error>()
   const [artifacts] = createResource(
     () => props.node.node_id,
@@ -1331,7 +1333,7 @@ function NodeDetail(props: { node: AtlasNode; onClose: () => void }): JSX.Elemen
         />
         <span
           style={{
-            "font-family": FONT_SERIF,
+            "font-family": FONT_SANS,
             "font-size": "14px",
             "font-weight": 400,
             color: "var(--color-text)",

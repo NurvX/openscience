@@ -1,8 +1,8 @@
 // Headless first-run gate. Auto-opens the SetupDialog exactly once when a
 // brand-new user (running server, nothing configured, not previously dismissed)
 // lands, mirroring the terminal wizard's isConfigured() check (cli/onboard.ts):
-// a connected non-demo provider OR an Atlas session OR a configured default
-// model. Mounted once in the root Layout; renders nothing.
+// a connected provider OR an Atlas session OR a configured default model.
+// Mounted once in the root Layout; renders nothing.
 import { createEffect, createSignal } from "solid-js"
 import { useDialog } from "@synsci/ui/context/dialog"
 import { useServer } from "@/context/server"
@@ -34,9 +34,9 @@ export function SetupGate() {
     }
   }
 
-  // "synsci" is the managed/demo provider — it can appear connected while signed
-  // out, so it does NOT count as a real BYOK provider. Managed is captured via
-  // the Atlas session instead.
+  // "synsci" is the managed transport and can appear connected while signed out,
+  // so it does not count as a configured model source. Managed access is
+  // captured by the Atlas session instead.
   const configured = () =>
     providers.connected().some((p) => p.id !== "synsci") || session() || !!globalSync.data.config?.model
 

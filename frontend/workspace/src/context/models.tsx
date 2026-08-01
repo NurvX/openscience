@@ -13,8 +13,23 @@ type User = ModelKey & { visibility: Visibility; favorite?: boolean }
 type Store = {
   user: User[]
   recent: ModelKey[]
+  pinned?: ModelKey[]
   variant?: Record<string, string | undefined>
   tier?: Record<string, string | undefined>
+}
+
+export const togglePinned = (current: ModelKey[], model: ModelKey) => {
+  const models = current.slice(0, 3)
+  const pinned = models.some((item) => item.providerID === model.providerID && item.modelID === model.modelID)
+  if (pinned) {
+    return {
+      models: models.filter((item) => item.providerID !== model.providerID || item.modelID !== model.modelID),
+      pinned: false,
+      limited: false,
+    }
+  }
+  if (models.length >= 3) return { models, pinned: false, limited: true }
+  return { models: [...models, model], pinned: true, limited: false }
 }
 
 export const { use: useModels, provider: ModelsProvider } = createSimpleContext({
@@ -27,6 +42,7 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       createStore<Store>({
         user: [],
         recent: [],
+        pinned: undefined,
         variant: {},
         tier: {},
       }),
@@ -120,6 +136,19 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       setStore("recent", uniq)
     }
 
+    // Existing users already have a useful recent-model history. Treat its
+    // first three entries as the initial pin set, then persist the first
+    // explicit pin/unpin action. The composer stays intentionally capped at
+    // three models while the full picker remains unrestricted.
+    const pinned = createMemo(() => (store.pinned ?? store.recent.slice(0, 3)).slice(0, 3))
+    const isPinned = (model: ModelKey) =>
+      pinned().some((item) => item.providerID === model.providerID && item.modelID === model.modelID)
+    const togglePin = (model: ModelKey) => {
+      const result = togglePinned(pinned(), model)
+      if (!result.limited) setStore("pinned", result.models)
+      return { pinned: result.pinned, limited: result.limited }
+    }
+
     const variantKey = (model: ModelKey) => `${model.providerID}/${model.modelID}`
     const getVariant = (model: ModelKey) => store.variant?.[variantKey(model)]
 
@@ -152,6 +181,11 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       recent: {
         list: createMemo(() => store.recent),
         push,
+      },
+      pinned: {
+        list: pinned,
+        has: isPinned,
+        toggle: togglePin,
       },
       variant: {
         get: getVariant,

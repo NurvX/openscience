@@ -1,0 +1,77 @@
+import { Show, createMemo, createSignal, type Component } from "solid-js"
+import { Button } from "@synsci/ui/button"
+import { StatusDot } from "@/atlas/shared/StatusDot"
+import { useGlobalSDK } from "@/context/global-sdk"
+import { usePlatform } from "@/context/platform"
+import { useProviders } from "@/hooks/use-providers"
+
+export const CodexConnection: Component<{
+  onError?: (message: string | undefined) => void
+  onConnected?: () => void
+}> = (props) => {
+  const sdk = useGlobalSDK()
+  const platform = usePlatform()
+  const providers = useProviders()
+  const [busy, setBusy] = createSignal(false)
+  const connected = createMemo(() => providers.connected().some((provider) => provider.id === "openai-codex"))
+
+  const connect = async () => {
+    if (busy()) return
+    setBusy(true)
+    props.onError?.(undefined)
+    try {
+      const result = await sdk.client.provider.oauth.authorize({ providerID: "openai-codex", method: 0 })
+      if (result.data?.url) platform.openLink(result.data.url)
+      await sdk.client.provider.oauth.callback({ providerID: "openai-codex", method: 0 })
+      await sdk.client.global.sync()
+      props.onConnected?.()
+    } catch (error) {
+      props.onError?.(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const disconnect = async () => {
+    if (!window.confirm("Disconnect ChatGPT / Codex from this machine?")) return
+    setBusy(true)
+    props.onError?.(undefined)
+    try {
+      await sdk.client.auth.remove({ providerID: "openai-codex" })
+      await sdk.client.global.dispose()
+    } catch (error) {
+      props.onError?.(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div class="flex flex-col gap-3 rounded-[4px] border border-border-weak-base bg-surface-base/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex min-w-0 flex-col gap-0.5">
+        <span class="text-13-medium text-text-strong">Sign in with ChatGPT</span>
+        <span class="text-12-regular text-text-weak">
+          Keep Codex model access through your ChatGPT Plus, Pro, or Business plan.
+        </span>
+      </div>
+      <Show
+        when={!connected()}
+        fallback={
+          <div class="flex shrink-0 items-center gap-2">
+            <StatusDot status="active" size={8} />
+            <span class="text-12-regular text-text-weak">Connected</span>
+            <Button size="small" variant="secondary" disabled={busy()} onClick={() => void disconnect()}>
+              disconnect
+            </Button>
+          </div>
+        }
+      >
+        <Button type="button" size="small" variant="primary" disabled={busy()} onClick={() => void connect()}>
+          {busy() ? "waiting for ChatGPT…" : "Sign in with ChatGPT"}
+        </Button>
+      </Show>
+    </div>
+  )
+}
+
+export default CodexConnection

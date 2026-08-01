@@ -82,7 +82,11 @@ export namespace SessionSummary {
       messageID: z.string(),
     }),
     async (input) => {
-      const all = await Session.messages({ sessionID: input.sessionID })
+      const all = await Session.messages({ sessionID: input.sessionID }).catch((error) => {
+        if (error instanceof Storage.NotFoundError) return
+        throw error
+      })
+      if (!all) return
       const message = all.find((item) => item.info.id === input.messageID)
       if (!message || message.info.role !== "user") {
         log.warn("skipping summary for missing user message", input)
@@ -214,6 +218,7 @@ export namespace SessionSummary {
       messageID: Identifier.schema("message").optional(),
     }),
     async (input) => {
+      await Session.assertDirectory(input.sessionID)
       const diffs = await Storage.read<Snapshot.FileDiff[]>(["session_diff", input.sessionID]).catch(() => [])
       const next = diffs.map((item) => {
         const file = unquoteGitPath(item.file)

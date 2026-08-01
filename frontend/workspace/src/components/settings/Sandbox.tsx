@@ -68,7 +68,8 @@ const Sandbox: Component = () => {
   const [testing, setTesting] = createSignal(false)
   const [newPath, setNewPath] = createSignal("")
 
-  const config = () => data()?.config ?? {}
+  const config = (): SandboxConfig =>
+    data()?.config ?? { enabled: true, network: "deny", allowWrite: [], onUnavailable: "error" }
   const status = () => data()?.status
 
   const patch = async (body: SandboxConfig, failure: string) => {
@@ -114,8 +115,8 @@ const Sandbox: Component = () => {
           <h2 class="text-16-medium text-text-strong">Execution sandbox</h2>
           <p class="text-13-regular text-text-weak">
             Permissions decide <em>whether</em> the agent runs a shell command — not what it can reach once it does.
-            Turn this on to confine the agent's commands inside an OS sandbox: writes are limited to the workspace, and
-            network egress can be denied.
+            OpenScience confines local terminals, kernels, and shell commands by default: writes are limited to
+            authorized project roots and network egress is denied unless you explicitly relax the machine-wide policy.
           </p>
         </div>
       </div>
@@ -154,13 +155,13 @@ const Sandbox: Component = () => {
             <div class="flex flex-col gap-0.5 min-w-0 pr-4">
               <span class="text-14-medium text-text-strong">Sandbox agent commands</span>
               <span class="text-12-regular text-text-weak">
-                {config().enabled
+                {config().enabled !== false
                   ? "On — commands run confined to the workspace."
                   : "Off — commands run with your full user authority."}
               </span>
             </div>
             <Switch
-              checked={config().enabled === true}
+              checked={config().enabled !== false}
               disabled={busy()}
               onChange={(checked) => patch({ enabled: checked }, "Couldn't update the sandbox setting")}
             />
@@ -168,7 +169,7 @@ const Sandbox: Component = () => {
         </section>
 
         {/* ── Options (only when enabled) ── */}
-        <Show when={config().enabled}>
+        <Show when={config().enabled !== false}>
           <section class="flex flex-col gap-4">
             <h3 class="text-13-medium text-text-strong">Policy</h3>
 
@@ -182,7 +183,7 @@ const Sandbox: Component = () => {
                 </div>
                 <Select
                   options={NETWORK_OPTS}
-                  current={NETWORK_OPTS.find((o) => o.value === (config().network ?? "allow"))}
+                  current={NETWORK_OPTS.find((o) => o.value === (config().network ?? "deny"))}
                   value={(o) => o.value}
                   label={(o) => o.label}
                   onSelect={(o) => o && patch({ network: o.value }, "Couldn't update network policy")}
@@ -201,7 +202,7 @@ const Sandbox: Component = () => {
                 </div>
                 <Select
                   options={UNAVAILABLE_OPTS}
-                  current={UNAVAILABLE_OPTS.find((o) => o.value === (config().onUnavailable ?? "warn"))}
+                  current={UNAVAILABLE_OPTS.find((o) => o.value === (config().onUnavailable ?? "error"))}
                   value={(o) => o.value}
                   label={(o) => o.label}
                   onSelect={(o) => o && patch({ onUnavailable: o.value }, "Couldn't update fallback behavior")}

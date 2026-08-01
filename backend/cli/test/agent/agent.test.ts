@@ -132,6 +132,27 @@ test("custom agent from config creates new agent", async () => {
   })
 })
 
+test("legacy docs config remains a subagent", async () => {
+  await using tmp = await tmpdir({
+    config: {
+      agent: {
+        docs: {
+          description: "Documentation specialist",
+          mode: "all",
+        },
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const docs = await Agent.get("docs")
+      expect(docs?.mode).toBe("subagent")
+      expect(docs?.description).toBe("Documentation specialist")
+    },
+  })
+})
+
 test("custom agent config overrides native agent properties", async () => {
   await using tmp = await tmpdir({
     config: {

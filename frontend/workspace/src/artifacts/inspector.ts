@@ -26,12 +26,36 @@ export interface InspectorState {
   detail: string
 }
 
+export interface LineageRun {
+  id: string
+  tool: string
+  label: string
+  status?: "ok" | "error"
+  recordedAt: string
+  sessionID?: string
+  messageID?: string
+  callID?: string
+  code?: string
+  command?: string
+  cwd?: string
+  kernel?: { language?: string; name?: string }
+  startedAt?: string
+  completedAt?: string
+}
+
+export interface LineageMessage {
+  sessionID: string
+  messageID: string
+}
+
 export interface InspectorData {
   context: ArtifactContext
   source?: string
   provenance?: ArtifactProvenance
   environments: string[]
   lockfiles: string[]
+  runs: LineageRun[]
+  messages: LineageMessage[]
   tabs: Record<InspectorTab, InspectorState>
 }
 
@@ -107,10 +131,100 @@ export interface PublicationReviewState {
   report?: PublicationReviewReport
 }
 
+// ── Reviewer findings (provenance graph) ────────────────────────────────────
+//
+// Findings recorded by the independent reviewer agent live in the project
+// provenance graph (GET /provenance/reviews), not in the deterministic
+// publication preflight above. A refuting finding carries a derived lifecycle:
+// open → addressed (a fix was recorded) → confirmed (a LATER reviewer pass
+// verified the same target — never closed by assertion alone).
+
+export type ReviewerVerdict = "refutes" | "supports"
+export type ReviewerFindingStatus = "open" | "addressed" | "confirmed"
+
+export interface ReviewerFinding {
+  id: string
+  target: string
+  verdict: ReviewerVerdict
+  status?: ReviewerFindingStatus
+  severity: PublicationReviewSeverity
+  claim: string
+  issue: string
+  evidence: string
+  reviewer: string
+  sessionID?: string
+  recordedAt: string
+  resolution?: { actor: string; reason: string; recordedAt: string }
+}
+
+export function normalizeReviewerFindings(value: unknown): ReviewerFinding[] {
+  if (!Array.isArray(value)) return []
+  const severities = new Set(["blocking", "major", "minor", "info"])
+  const statuses = new Set(["open", "addressed", "confirmed"])
+  return value
+    .flatMap((item): ReviewerFinding[] => {
+      const row = record(item)
+      const finding = record(row?.finding)
+      const meta = record(finding?.meta)
+      if (
+        !row ||
+        !finding ||
+        !meta ||
+        typeof finding.id !== "string" ||
+        typeof finding.recordedAt !== "string" ||
+        typeof row.target !== "string" ||
+        (row.verdict !== "refutes" && row.verdict !== "supports") ||
+        typeof meta.claim !== "string" ||
+        typeof meta.issue !== "string" ||
+        typeof meta.severity !== "string" ||
+        !severities.has(meta.severity) ||
+        typeof meta.evidence !== "string"
+      )
+        return []
+      const status = typeof row.status === "string" && statuses.has(row.status) ? row.status : undefined
+      const resolution = record(row.resolution)
+      const parsed =
+        resolution &&
+        typeof resolution.actor === "string" &&
+        typeof resolution.reason === "string" &&
+        typeof resolution.recordedAt === "string"
+          ? { actor: resolution.actor, reason: resolution.reason, recordedAt: resolution.recordedAt }
+          : undefined
+      return [
+        {
+          id: finding.id,
+          target: row.target,
+          verdict: row.verdict,
+          ...(status ? { status: status as ReviewerFindingStatus } : {}),
+          severity: meta.severity as PublicationReviewSeverity,
+          claim: meta.claim,
+          issue: meta.issue,
+          evidence: meta.evidence,
+          reviewer: typeof meta.reviewer === "string" ? meta.reviewer : "reviewer",
+          ...(typeof meta.sessionID === "string" ? { sessionID: meta.sessionID } : {}),
+          recordedAt: finding.recordedAt,
+          ...(parsed ? { resolution: parsed } : {}),
+        },
+      ]
+    })
+    .toSorted((a, b) => b.recordedAt.localeCompare(a.recordedAt))
+}
+
+/**
+ * Findings cannot be reliably related to a single artifact (the target is a
+ * provenance node id, not a path), so the surface scopes honestly: the current
+ * session's findings when a session is open, the whole project otherwise.
+ */
+export function filterReviewerFindings(rows: ReviewerFinding[], sessionID?: string): ReviewerFinding[] {
+  if (!sessionID) return rows
+  return rows.filter((row) => row.sessionID === sessionID)
+}
+
 interface InspectorInput {
   file?: unknown
   provenance?: unknown
   audit?: unknown
+  lineage?: unknown
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -173,6 +287,62 @@ function source(value: unknown): string | undefined {
   return row.content
 }
 
+function lineageRun(value: unknown): LineageRun | undefined {
+  const row = record(value)
+  if (
+    !row ||
+    typeof row.id !== "string" ||
+    typeof row.tool !== "string" ||
+    typeof row.label !== "string" ||
+    typeof row.recordedAt !== "string"
+  )
+    return
+  const kernel = record(row.kernel)
+  const language = kernel && typeof kernel.language === "string" ? kernel.language : undefined
+  const name = kernel && typeof kernel.name === "string" ? kernel.name : undefined
+  return {
+    id: row.id,
+    tool: row.tool,
+    label: row.label,
+    ...(row.status === "ok" || row.status === "error" ? { status: row.status } : {}),
+    recordedAt: row.recordedAt,
+    ...(typeof row.sessionID === "string" ? { sessionID: row.sessionID } : {}),
+    ...(typeof row.messageID === "string" ? { messageID: row.messageID } : {}),
+    ...(typeof row.callID === "string" ? { callID: row.callID } : {}),
+    ...(typeof row.code === "string" ? { code: row.code } : {}),
+    ...(typeof row.command === "string" ? { command: row.command } : {}),
+    ...(typeof row.cwd === "string" ? { cwd: row.cwd } : {}),
+    ...(language !== undefined || name !== undefined
+      ? { kernel: { ...(language !== undefined ? { language } : {}), ...(name !== undefined ? { name } : {}) } }
+      : {}),
+    ...(typeof row.startedAt === "string" ? { startedAt: row.startedAt } : {}),
+    ...(typeof row.completedAt === "string" ? { completedAt: row.completedAt } : {}),
+  }
+}
+
+function lineageMessage(value: unknown): LineageMessage | undefined {
+  const row = record(value)
+  if (!row || typeof row.sessionID !== "string" || typeof row.messageID !== "string") return
+  return { sessionID: row.sessionID, messageID: row.messageID }
+}
+
+function lineage(value: unknown): { runs: LineageRun[]; messages: LineageMessage[] } {
+  const row = record(value)
+  const runs = Array.isArray(row?.runs)
+    ? row.runs.flatMap((item) => {
+        const parsed = lineageRun(item)
+        return parsed ? [parsed] : []
+      })
+    : []
+  const messages = Array.isArray(row?.messages)
+    ? row.messages.flatMap((item) => {
+        const parsed = lineageMessage(item)
+        return parsed ? [parsed] : []
+      })
+    : []
+  return { runs, messages }
+}
+
 function state(available: boolean, title: string, detail: string): InspectorState {
   return { available, title, detail }
 }
@@ -189,14 +359,14 @@ export function normalizePublicationReview(format: string, value: unknown): Publ
   if (!report) {
     return {
       kind: "not-run",
-      title: "No publication review yet",
+      title: "No publication preflight yet",
       detail: "Run deterministic citation, numeric, figure, and provenance checks against this manuscript.",
     }
   }
   if (report.stale) {
     return {
       kind: "stale",
-      title: "Review is stale",
+      title: "Preflight is stale",
       detail: "The manuscript changed after this report was generated. Run the checks again.",
       report,
     }
@@ -204,7 +374,7 @@ export function normalizePublicationReview(format: string, value: unknown): Publ
   if (report.finalized) {
     return {
       kind: "finalized",
-      title: report.status === "ready" ? "Publication review finalized" : "Finalized with recorded warnings",
+      title: report.status === "ready" ? "Publication preflight finalized" : "Finalized with recorded warnings",
       detail: `Bound to ${report.artifactHash.slice(0, 12)} by ${report.finalized.actor}.`,
       report,
     }
@@ -220,7 +390,7 @@ export function normalizePublicationReview(format: string, value: unknown): Publ
   if (report.status === "warnings") {
     return {
       kind: "warnings",
-      title: "Review has open warnings",
+      title: "Preflight has open warnings",
       detail: `${report.summary.open} non-blocking finding${report.summary.open === 1 ? "" : "s"} remain.`,
       report,
     }
@@ -240,24 +410,41 @@ export function normalizeInspectorData(context: ArtifactContext, input: Inspecto
   const environments = strings(audit?.environments)
   const lockfiles = strings(audit?.lockfiles)
   const environment = environments.length > 0 || lockfiles.length > 0
+  const trace = lineage(input.lineage)
   return {
     context,
     ...(text !== undefined ? { source: text } : {}),
     ...(version ? { provenance: version } : {}),
     environments,
     lockfiles,
+    runs: trace.runs,
+    messages: trace.messages,
     tabs: {
       details: state(true, "Artifact details", "Format, location, and recorded scientific metadata."),
       code:
         text !== undefined
           ? state(true, "Source available", "The original text source is available for inspection.")
           : state(false, "Source is not directly displayable", "Open the file view or download the original artifact."),
-      run: state(false, "No generating run is recorded", "Execute or attach a run to connect logs and resources."),
-      messages: state(
-        false,
-        "No message range is recorded",
-        "Artifacts created from a conversation will show the exact producing messages here.",
-      ),
+      run:
+        trace.runs.length > 0
+          ? state(
+              true,
+              "Producing run recorded",
+              `${trace.runs.length} recorded run${trace.runs.length === 1 ? "" : "s"} produced this artifact.`,
+            )
+          : state(false, "No generating run is recorded", "Execute or attach a run to connect logs and resources."),
+      messages:
+        trace.messages.length > 0
+          ? state(
+              true,
+              "Producing messages recorded",
+              `${trace.messages.length} conversation message${trace.messages.length === 1 ? "" : "s"} produced this artifact.`,
+            )
+          : state(
+              false,
+              "No message range is recorded",
+              "Artifacts created from a conversation will show the exact producing messages here.",
+            ),
       environment: environment
         ? state(true, "Environment records found", "Project environment specifications and lockfiles are available.")
         : state(false, "No environment is recorded", "Add a lockfile or environment specification to this project."),

@@ -10,6 +10,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconArrowRight,
+  IconFile,
   IconSearch,
   IconRefresh,
   IconHome,
@@ -18,10 +19,13 @@ import {
 interface FolderEntry {
   name: string
   absolute: string
+  type: "file" | "directory"
 }
 
 interface PickerProps {
   multiple?: boolean
+  kind?: "folder" | "file"
+  title?: string
   onSelect: (result: string | string[] | null) => void
 }
 
@@ -76,9 +80,21 @@ export function FolderPicker(props: PickerProps): JSX.Element {
         const data = res?.data ?? res
         const list = Array.isArray(data) ? data : []
         return list
-          .filter((n: any) => n?.type === "directory" && !n.name.startsWith(".") && !n.ignored)
-          .map((n: any) => ({ name: n.name as string, absolute: n.absolute as string }))
-          .sort((a, b) => a.name.localeCompare(b.name))
+          .filter(
+            (n: any) =>
+              (n?.type === "directory" || (props.kind === "file" && n?.type === "file")) &&
+              !n.name.startsWith(".") &&
+              !n.ignored,
+          )
+          .map((n: any) => ({
+            name: n.name as string,
+            absolute: n.absolute as string,
+            type: n.type as "file" | "directory",
+          }))
+          .sort((a, b) => {
+            if (a.type !== b.type) return a.type === "directory" ? -1 : 1
+            return a.name.localeCompare(b.name)
+          })
       } catch (err) {
         // Surface the failure instead of masking it as an empty folder — an
         // empty list and a failed listing are very different states.
@@ -134,6 +150,10 @@ export function FolderPicker(props: PickerProps): JSX.Element {
   }
 
   const drillInto = (e: FolderEntry) => {
+    if (e.type === "file") {
+      pick(e.absolute)
+      return
+    }
     setCwd(e.absolute)
     setFilter("")
   }
@@ -165,7 +185,8 @@ export function FolderPicker(props: PickerProps): JSX.Element {
   }
 
   const pick = (path: string) => {
-    pushRecent(path)
+    const recent = props.kind === "file" ? path.slice(0, path.lastIndexOf("/")) || "/" : path
+    pushRecent(recent)
     props.onSelect(props.multiple ? [path] : path)
     dialog.close()
   }
@@ -190,7 +211,11 @@ export function FolderPicker(props: PickerProps): JSX.Element {
   const recents = createMemo(() => readRecents())
 
   return (
-    <Dialog title="Open folder" size="large" transition>
+    <Dialog
+      title={props.title ?? (props.kind === "file" ? "Choose a file" : "Choose a folder")}
+      size="large"
+      transition
+    >
       <div
         style={{
           display: "flex",
@@ -227,7 +252,7 @@ export function FolderPicker(props: PickerProps): JSX.Element {
                     sublabel={p.replace(home() + "/", "~/").replace(home(), "~")}
                     active={cwd() === p}
                     onClick={() => goTo(p)}
-                    onDblClick={() => pick(p)}
+                    onDblClick={() => (props.kind === "file" ? goTo(p) : pick(p))}
                   />
                 )}
               </For>
@@ -326,7 +351,7 @@ export function FolderPicker(props: PickerProps): JSX.Element {
             <input
               value={filter()}
               onInput={(e) => setFilter(e.currentTarget.value)}
-              placeholder="filter folders…"
+              placeholder={props.kind === "file" ? "filter files and folders…" : "filter folders…"}
               autofocus
               style={{
                 all: "unset",
@@ -345,7 +370,7 @@ export function FolderPicker(props: PickerProps): JSX.Element {
                 "letter-spacing": "0.04em",
               }}
             >
-              {filtered().length} {filtered().length === 1 ? "folder" : "folders"}
+              {filtered().length} {filtered().length === 1 ? "item" : "items"}
             </span>
           </div>
 
@@ -527,7 +552,13 @@ export function FolderPicker(props: PickerProps): JSX.Element {
                             cwd().endsWith("/Documents") ||
                             cwd().endsWith("/Downloads")
                           }
-                          fallback={<span>this folder is empty · pick it with the button below</span>}
+                          fallback={
+                            <span>
+                              {props.kind === "file"
+                                ? "this folder does not contain any files"
+                                : "this folder is empty · pick it below"}
+                            </span>
+                          }
                         >
                           <span style={{ color: "var(--color-text)" }}>
                             macOS is blocking the listing of <code>{cwd().split("/").pop()}</code>
@@ -545,7 +576,14 @@ export function FolderPicker(props: PickerProps): JSX.Element {
               }
             >
               <For each={filtered()}>
-                {(e) => <FolderRow entry={e} onDrill={() => drillInto(e)} onPick={() => pick(e.absolute)} />}
+                {(e) => (
+                  <PickerRow
+                    entry={e}
+                    onOpen={() => drillInto(e)}
+                    onPick={() => pick(e.absolute)}
+                    pickingFile={props.kind === "file"}
+                  />
+                )}
               </For>
             </Show>
           </div>
@@ -576,17 +614,19 @@ export function FolderPicker(props: PickerProps): JSX.Element {
             <button onClick={cancel} style={cancelBtn()}>
               cancel
             </button>
-            <button
-              onClick={async () => {
-                const valid = await validateDirectoryPath(sdk.url, cwd())
-                if (valid) pick(valid)
-              }}
-              title="open the current folder as a project"
-              style={primaryBtn()}
-            >
-              <IconArrowRight size={11} strokeWidth={2} />
-              open this folder
-            </button>
+            <Show when={props.kind !== "file"}>
+              <button
+                onClick={async () => {
+                  const valid = await validateDirectoryPath(sdk.url, cwd())
+                  if (valid) pick(valid)
+                }}
+                title="choose the current folder"
+                style={primaryBtn()}
+              >
+                <IconArrowRight size={11} strokeWidth={2} />
+                use this folder
+              </button>
+            </Show>
           </div>
         </div>
       </div>
@@ -594,20 +634,28 @@ export function FolderPicker(props: PickerProps): JSX.Element {
   )
 }
 
-function FolderRow(props: { entry: FolderEntry; onDrill: () => void; onPick: () => void }): JSX.Element {
+function PickerRow(props: {
+  entry: FolderEntry
+  onOpen: () => void
+  onPick: () => void
+  pickingFile: boolean
+}): JSX.Element {
   const [hover, setHover] = createSignal(false)
+  const folder = () => props.entry.type === "directory"
   return (
     <div
       role="button"
       tabindex="0"
-      onClick={props.onDrill}
-      onDblClick={props.onPick}
+      onClick={props.onOpen}
+      onDblClick={() => (folder() ? props.onPick() : undefined)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") props.onDrill()
+        if (e.key === "Enter") props.onOpen()
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={`${props.entry.absolute} · click to enter · double-click to open as project`}
+      title={
+        folder() ? `${props.entry.absolute} · click to enter` : `${props.entry.absolute} · click to choose this file`
+      }
       style={{
         cursor: "pointer",
         display: "flex",
@@ -620,7 +668,9 @@ function FolderRow(props: { entry: FolderEntry; onDrill: () => void; onPick: () 
         transition: "background 160ms ease, transform 160ms ease",
       }}
     >
-      <IconFolder size={13} strokeWidth={1.5} />
+      <Show when={folder()} fallback={<IconFile size={13} strokeWidth={1.5} />}>
+        <IconFolder size={13} strokeWidth={1.5} />
+      </Show>
       <span
         style={{
           flex: 1,
@@ -634,45 +684,60 @@ function FolderRow(props: { entry: FolderEntry; onDrill: () => void; onPick: () 
       >
         {props.entry.name}
       </span>
-      <button
-        type="button"
-        onClick={(ev) => {
-          ev.stopPropagation()
-          props.onPick()
-        }}
-        title="open this folder as a project"
-        style={{
-          all: "unset",
-          cursor: "pointer",
-          padding: "2px 8px",
-          "border-radius": "4px",
-          "font-family": FONT_MONO,
-          "font-size": "10px",
-          "letter-spacing": "0.08em",
-          "text-transform": "uppercase",
-          color: "var(--color-text-muted)",
-          border: "1px solid var(--color-border)",
-          background: "var(--color-surface-solid)",
-          opacity: hover() ? 1 : 0,
-          transform: hover() ? "translateX(0)" : "translateX(4px)",
-          "pointer-events": hover() ? "auto" : "none",
-          transition: "opacity 160ms ease, transform 160ms ease",
-        }}
-      >
-        open
-      </button>
-      <IconChevronRight
-        size={11}
-        strokeWidth={1.5}
-        style={{
-          opacity: hover() ? 1 : 0.5,
-          transform: hover() ? "translateX(2px)" : "translateX(0)",
-          transition: "opacity 160ms ease, transform 160ms ease",
-        }}
-      />
+      <Show when={folder()} fallback={<span style={chooseLabel(hover())}>choose</span>}>
+        <Show when={!props.pickingFile}>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onPick()
+            }}
+            title="choose this folder"
+            style={chooseButton(hover())}
+          >
+            choose
+          </button>
+        </Show>
+        <IconChevronRight
+          size={11}
+          strokeWidth={1.5}
+          style={{
+            opacity: hover() ? 1 : 0.5,
+            transform: hover() ? "translateX(2px)" : "translateX(0)",
+            transition: "opacity 160ms ease, transform 160ms ease",
+          }}
+        />
+      </Show>
     </div>
   )
 }
+
+const chooseButton = (visible: boolean): JSX.CSSProperties => ({
+  all: "unset",
+  cursor: "pointer",
+  padding: "2px 8px",
+  "border-radius": "4px",
+  "font-family": FONT_MONO,
+  "font-size": "10px",
+  "letter-spacing": "0.08em",
+  "text-transform": "uppercase",
+  color: "var(--color-text-muted)",
+  border: "1px solid var(--color-border)",
+  background: "var(--color-surface-solid)",
+  opacity: visible ? 1 : 0,
+  transform: visible ? "translateX(0)" : "translateX(4px)",
+  "pointer-events": visible ? "auto" : "none",
+  transition: "opacity 160ms ease, transform 160ms ease",
+})
+
+const chooseLabel = (visible: boolean): JSX.CSSProperties => ({
+  "font-family": FONT_MONO,
+  "font-size": "10px",
+  "letter-spacing": "0.08em",
+  "text-transform": "uppercase",
+  color: "var(--color-text-muted)",
+  opacity: visible ? 1 : 0.55,
+})
 
 function SectionLabel(props: { children: JSX.Element }): JSX.Element {
   return (

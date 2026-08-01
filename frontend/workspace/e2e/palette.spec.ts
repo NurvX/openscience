@@ -1,13 +1,11 @@
 import { test, expect } from "./fixtures"
-import { modKey } from "./utils"
-
 test("search palette opens and closes", async ({ page, gotoSession }) => {
   await gotoSession()
 
-  await page.keyboard.press(`${modKey}+K`)
+  await page.getByRole("button", { name: "Search and commands", exact: true }).click()
 
   const dialog = page.getByRole("dialog", { name: "command palette" })
-  const search = dialog.getByRole("textbox", { name: "search commands and projects" })
+  const search = dialog.getByRole("textbox", { name: "search projects, sessions, messages, and artifacts" })
   await expect(dialog).toBeVisible()
   await expect(search).toBeVisible()
   await expect(dialog.getByRole("button", { name: /Settings/ })).toBeVisible()

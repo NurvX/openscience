@@ -1,3 +1,5 @@
+import { resolvePath } from "@/utils/markdown-assets"
+
 export interface Manuscript {
   frontmatter: string
   body: string
@@ -67,19 +69,7 @@ export function relativeArtifactPath(manuscript: string, artifact: string): stri
 }
 
 export function resolveReferencePath(manuscript: string, reference: string): string {
-  const base = cleanPath(manuscript).split("/").slice(0, -1)
-  const parts = [...base, ...cleanPath(reference).split("/")]
-  return parts
-    .reduce<string[]>((result, part) => {
-      if (!part || part === ".") return result
-      if (part === "..") {
-        result.pop()
-        return result
-      }
-      result.push(part)
-      return result
-    }, [])
-    .join("/")
+  return resolvePath(manuscript, reference)
 }
 
 export function rewritePreviewImages(markdown: string, manuscript: string, asset: (path: string) => string): string {

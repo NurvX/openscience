@@ -1,5 +1,5 @@
-// Storage — real on-disk footprint of the OpenScience data directory, a
-// supported "change location" move, and a jump to Credentials for cloud buckets.
+// Storage — real on-disk footprint of the OpenScience data directory and a
+// supported "change location" move.
 // Backed by /settings/storage (routes/settings/storage.ts).
 import { type Component, type JSX, For, Show, createMemo, createSignal, onMount } from "solid-js"
 import { Button } from "@synsci/ui/button"
@@ -7,7 +7,6 @@ import { useGlobalSDK } from "@/context/global-sdk"
 import { usePlatform } from "@/context/platform"
 import { FONT_CODE, FONT_SANS } from "@/styles/tokens"
 import { settingsApi } from "./api"
-import { useSettingsNav } from "./nav"
 
 type Entry = { name: string; path: string; bytes: number; kind: "dir" | "file" }
 type Usage = {
@@ -35,7 +34,6 @@ function fmt(bytes: number): string {
 export const Storage: Component = () => {
   const sdk = useGlobalSDK()
   const platform = usePlatform()
-  const navigate = useSettingsNav()
 
   const base = () => sdk.url
   const fetchFn = () => platform.fetch ?? fetch
@@ -211,21 +209,6 @@ export const Storage: Component = () => {
             </div>
           </Show>
         </div>
-
-        {/* Cloud storage */}
-        <div class="flex flex-col gap-3">
-          <div class="flex flex-col gap-1">
-            <h3 class="text-13-medium text-text-weak tracking-wide">Cloud storage</h3>
-            <p class="text-12-regular text-text-weak">
-              Object-storage buckets (S3 and GCS) are configured through service credentials — the matching CLI (aws /
-              gcloud / rclone) must be installed for the agent to use them.
-            </p>
-          </div>
-          <button type="button" onClick={() => navigate("credentials")} style={linkRowStyle()}>
-            <span class="text-13-regular text-text-strong">manage cloud credentials</span>
-            <span class="text-12-regular text-text-weak">Credentials →</span>
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -243,20 +226,5 @@ function bannerStyle(color: string, border: string): JSX.CSSProperties {
     "border-radius": "4px",
     padding: "10px 12px",
     "white-space": "pre-wrap",
-  }
-}
-
-function linkRowStyle(): JSX.CSSProperties {
-  return {
-    all: "unset",
-    "box-sizing": "border-box",
-    cursor: "pointer",
-    display: "flex",
-    "align-items": "center",
-    "justify-content": "space-between",
-    padding: "14px 16px",
-    "border-radius": "4px",
-    border: "1px solid var(--color-border)",
-    background: "var(--color-surface-solid, transparent)",
   }
 }

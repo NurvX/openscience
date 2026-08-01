@@ -65,3 +65,43 @@ test("can send a prompt and receive a reply", async ({ page, sdk, gotoSession })
     throw new Error(`Page error(s):\n${pageErrors.join("\n")}`)
   }
 })
+
+test("can send the first prompt after New research opens the explicit new-session route", async ({
+  page,
+  sdk,
+  openSession,
+}) => {
+  test.setTimeout(45_000)
+  await openSession()
+  await page.getByRole("button", { name: "New research", exact: true }).click()
+  await expect(page).toHaveURL(/\/session\/new(?:\?|#|$)/)
+
+  const token = `E2E_OK_${Date.now()}`
+  const prompt = page.locator(promptSelector)
+  await prompt.click()
+  await page.keyboard.type(`Reply with exactly: ${token}`)
+  await page.keyboard.press("Enter")
+  await expect(page).toHaveURL(/\/session\/(?!new(?:[/?#]|$))[^/?#]+/, { timeout: 30_000 })
+
+  const sessionID = sessionIDFromUrl(page.url())
+  if (!sessionID || sessionID === "new") throw new Error(`Failed to parse created session id from url: ${page.url()}`)
+
+  try {
+    await expect
+      .poll(
+        () =>
+          sdk.session.messages({ sessionID, limit: 50 }).then((response) =>
+            (response.data ?? [])
+              .filter((message) => message.info.role === "assistant")
+              .flatMap((message) => message.parts)
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n"),
+          ),
+        { timeout: 20_000 },
+      )
+      .toContain(token)
+  } finally {
+    await sdk.session.delete({ sessionID }).catch(() => undefined)
+  }
+})

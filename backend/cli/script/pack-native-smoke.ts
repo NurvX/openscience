@@ -8,6 +8,7 @@ import { createWrapperPackageManifest } from "./publish-manifest"
 const outputArg = process.argv[2]
 if (!outputArg) throw new Error("usage: pack-native-smoke.ts <output-directory>")
 const output: string = path.resolve(outputArg)
+const single = process.argv.includes("--single")
 
 const cli = path.resolve(import.meta.dir, "..")
 await fs.rm(output, { recursive: true, force: true })
@@ -38,7 +39,9 @@ async function pack(directory: string): Promise<string> {
 // Include both Linux architectures. npm must install only the native optional
 // dependency on each matrix runner, which exercises os/cpu selection instead
 // of merely proving that a cached binary can execute.
-const platformNames = ["@synsci/openscience-linux-x64", "@synsci/openscience-linux-arm64"]
+const platformNames = single
+  ? [`@synsci/openscience-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`]
+  : ["@synsci/openscience-linux-x64", "@synsci/openscience-linux-arm64"]
 const binaries: Record<string, string> = {}
 let packageVersion = "0.0.0-native-smoke"
 for (const name of platformNames) {
@@ -52,6 +55,15 @@ for (const name of platformNames) {
   await fs.writeFile(path.join(directory, "package.json"), JSON.stringify(platformManifest, null, 2) + "\n")
   await fs.chmod(path.join(directory, "bin", "openscience"), 0o755)
   binaries[name] = `file:${await pack(directory)}`
+}
+
+const metadata = await Bun.file(path.resolve(cli, "../../frontend/workspace/dist/version.json"))
+  .json()
+  .catch(() => undefined)
+if (metadata?.version !== packageVersion) {
+  throw new Error(
+    `packaged version mismatch: native package is ${packageVersion}, web metadata is ${metadata?.version ?? "missing"}`,
+  )
 }
 
 // Keep the wrapper's companion dependency hermetic as well. The smoke test is
@@ -76,4 +88,18 @@ await fs.writeFile(path.join(wrapper, "package.json"), JSON.stringify(manifest, 
 
 const wrapperTarball = await pack(wrapper)
 await fs.copyFile(wrapperTarball, path.join(output, "wrapper.tgz"))
+
+const launcherSource = path.resolve(cli, "../../tooling/launcher")
+const launcher = path.join(output, "launcher")
+await fs.mkdir(launcher, { recursive: true })
+await Promise.all([
+  fs.cp(path.join(launcherSource, "bin"), path.join(launcher, "bin"), { recursive: true }),
+  fs.cp(path.join(launcherSource, "lib"), path.join(launcher, "lib"), { recursive: true }),
+])
+const launcherManifest = await Bun.file(path.join(launcherSource, "package.json")).json()
+launcherManifest.version = packageVersion
+await fs.writeFile(path.join(launcher, "package.json"), JSON.stringify(launcherManifest, null, 2) + "\n")
+const launcherTarball = await pack(launcher)
+await fs.copyFile(launcherTarball, path.join(output, "launcher.tgz"))
+
 console.log(`packed native npm smoke fixture at ${output}`)

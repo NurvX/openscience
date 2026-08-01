@@ -1,16 +1,16 @@
 import { test, expect } from "./fixtures"
+import { openSettings } from "./utils"
 
 const panels = [
+  "Models",
+  "Skills",
   "Connectors",
   "Specialists",
-  "Memory",
   "Compute",
-  "Local models",
   "Network",
   "Permissions",
   "Sandbox",
   "Credentials",
-  "Billing",
   "Storage",
   "General",
 ] as const
@@ -20,10 +20,7 @@ test("every settings panel loads inside the fixed dialog shell", async ({ page, 
   page.on("pageerror", (error) => pageErrors.push(error.message))
 
   await gotoSession()
-  await page.getByRole("button", { name: "More", exact: true }).click()
-  await page.getByRole("menuitem", { name: "Settings", exact: true }).click()
-  const dialog = page.getByRole("dialog")
-  await expect(dialog).toBeVisible()
+  const dialog = await openSettings(page)
 
   for (const panel of panels) {
     await dialog.getByRole("button", { name: panel, exact: true }).click()

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import os from "node:os"
 import path from "node:path"
-import { chmod, copyFile, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 
 // The launcher (backend/cli/bin/openscience) is a plain CJS Node script. When
 // the resolved binary is killed by a signal (SIGSEGV/SIGILL on some ARM64
@@ -12,9 +12,6 @@ const launcherSource = path.join(__dirname, "../../bin/openscience")
 
 describe("launcher signal handling (#190)", () => {
   test("exits non-zero with an actionable diagnostic when the binary is killed by a signal", async () => {
-    // CRITICAL SAFETY: run() destructively cleans ~/.openscience (unlinks
-    // files, rmSync's node_modules). HOME must point at a throwaway temp dir
-    // so this test never touches the real home directory.
     const tmpHome = await mkdtemp(path.join(os.tmpdir(), "openscience-signal-home-"))
     const tmpBin = await mkdtemp(path.join(os.tmpdir(), "openscience-signal-bin-"))
     const crashScript = path.join(tmpBin, "crash.sh")
@@ -26,6 +23,9 @@ describe("launcher signal handling (#190)", () => {
     // installs default to CommonJS — copying to a bare temp dir (no ambient
     // package.json) reproduces that real-world resolution instead.
     const launcherCopy = path.join(tmpBin, "openscience")
+    const config = path.join(tmpHome, ".openscience")
+    const manifest = path.join(config, "package.json")
+    const sentinel = path.join(config, "node_modules", "sentinel")
 
     try {
       // A shell script that signals itself SEGV. isBinary() in the launcher
@@ -34,6 +34,9 @@ describe("launcher signal handling (#190)", () => {
       await writeFile(crashScript, "#!/bin/sh\nkill -s SEGV $$\n")
       await chmod(crashScript, 0o755)
       await copyFile(launcherSource, launcherCopy)
+      await mkdir(path.dirname(sentinel), { recursive: true })
+      await writeFile(manifest, "preserve manifest\n")
+      await writeFile(sentinel, "preserve modules\n")
 
       const proc = Bun.spawn(["node", launcherCopy, "some-arg"], {
         env: { ...process.env, HOME: tmpHome, OPENSCIENCE_BIN_PATH: crashScript },
@@ -46,6 +49,34 @@ describe("launcher signal handling (#190)", () => {
       expect(exitCode).not.toBe(0)
       expect(stderr).toContain("SIGSEGV")
       expect(stderr).toContain("incompatible")
+      await expect(readFile(manifest, "utf8")).resolves.toBe("preserve manifest\n")
+      await expect(readFile(sentinel, "utf8")).resolves.toBe("preserve modules\n")
+    } finally {
+      await rm(tmpHome, { recursive: true, force: true })
+      await rm(tmpBin, { recursive: true, force: true })
+    }
+  })
+
+  test("does not launch an unrelated system installation when its native package is missing", async () => {
+    const tmpHome = await mkdtemp(path.join(os.tmpdir(), "openscience-missing-home-"))
+    const tmpBin = await mkdtemp(path.join(os.tmpdir(), "openscience-missing-bin-"))
+    const launcherCopy = path.join(tmpBin, "openscience")
+
+    try {
+      await copyFile(launcherSource, launcherCopy)
+      const proc = Bun.spawn(["node", launcherCopy, "--version"], {
+        env: { ...process.env, HOME: tmpHome },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+
+      expect(exitCode, stdout).not.toBe(0)
+      expect(stderr).toContain("Expected npm package: @synsci/openscience-")
     } finally {
       await rm(tmpHome, { recursive: true, force: true })
       await rm(tmpBin, { recursive: true, force: true })

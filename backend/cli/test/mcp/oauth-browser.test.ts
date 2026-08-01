@@ -105,7 +105,16 @@ const { MCP } = await import("../../src/mcp/index")
 const { Bus } = await import("../../src/bus")
 const { McpOAuthCallback } = await import("../../src/mcp/oauth-callback")
 const { Instance } = await import("../../src/project/instance")
+const { ProjectTrust } = await import("../../src/project/trust")
 const { tmpdir } = await import("../fixture/fixture")
+
+async function trust() {
+  const status = await ProjectTrust.status(Instance.project)
+  await ProjectTrust.update(Instance.project, {
+    trusted: true,
+    root: status.root,
+  })
+}
 
 test("BrowserOpenFailed event is published when open() throws", async () => {
   await using tmp = await tmpdir({
@@ -128,6 +137,7 @@ test("BrowserOpenFailed event is published when open() throws", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      await trust()
       openShouldFail = true
 
       const events: Array<{ mcpName: string; url: string }> = []
@@ -182,6 +192,7 @@ test("BrowserOpenFailed event is NOT published when open() succeeds", async () =
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      await trust()
       openShouldFail = false
 
       const events: Array<{ mcpName: string; url: string }> = []
@@ -236,6 +247,7 @@ test("open() is called with the authorization URL", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      await trust()
       openShouldFail = false
       openCalledWith = undefined
 

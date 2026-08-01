@@ -1,4 +1,5 @@
 import {
+  createComputed,
   createEffect,
   createMemo,
   createSignal,
@@ -8,26 +9,26 @@ import {
   onCleanup,
   onMount,
   Show,
-  Suspense,
   Switch,
   type JSX,
 } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
+import { createMediaQuery } from "@solid-primitives/media"
 import { SessionTurn } from "@synsci/ui/session-turn"
 import { createAutoScroll } from "@synsci/ui/hooks"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
 import { useLayout } from "@/context/layout"
+import { usePrompt } from "@/context/prompt"
+import { useServer } from "@/context/server"
+import { usePlatform } from "@/context/platform"
 import { useTheme } from "@synsci/ui/theme"
+import { useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { NewSessionView } from "@/components/session/session-new-view"
 import { AsciiSpinner } from "@/atlas/shared/AsciiSpinner"
 import { AppHeader, HeaderIconButton } from "@/atlas/AppHeader"
 import { RightPane } from "@/atlas/RightPane"
-import { FileExplorer } from "@/atlas/FileExplorer"
-import { FileView } from "@/atlas/FilePreview"
-import SkillsPage from "@/atlas/SkillsPage"
-import { centerTabs } from "@/atlas/store/centerTabs"
 import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import { uiStore } from "@/atlas/store/ui"
 import { useGlobalKeys } from "@/atlas/useGlobalKeys"
@@ -36,6 +37,12 @@ import { useCommand, type CommandOption } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { confirmDialog } from "@/atlas/dialogs"
 import { DialogSettings } from "@/components/dialog-settings"
+import {
+  CompactContextActions,
+  SessionSidebarActions,
+  SidebarAction,
+  type SessionContext,
+} from "@/pages/session-sidebar-action"
 import { DisconnectedPanel } from "@/atlas/DisconnectedPanel"
 import { CommandPalette } from "@/atlas/CommandPalette"
 import { HelpOverlay } from "@/atlas/HelpOverlay"
@@ -46,29 +53,31 @@ import {
   IconPlus,
   IconSearch,
   IconBookOpen,
+  IconCheckCircle,
   IconSettings,
   IconSun,
   IconMoon,
   IconMessageSquare,
-  IconFolderTree,
-  IconFile,
-  IconBrain,
-  IconX,
-  IconLayoutGrid,
   IconMoreH,
+  IconX,
 } from "@/atlas/shared/Icon"
 import { StatusDot } from "@/atlas/shared/StatusDot"
-import { DateTime } from "luxon"
 import { IconTrash } from "@/atlas/shared/Icon"
 import { toast } from "@/atlas/Toast"
+import { artifactContext } from "@/artifacts/context"
+import { fetchSetupSession } from "@/atlas/setup-session"
+import { createSessionTabs } from "@/atlas/store/sessionTabs"
+import { ProjectTrustControl } from "@/atlas/ProjectTrust"
+import { projectTrustApi, type ProjectTrustApi } from "@/atlas/project-trust"
+import { terminalEndpointAvailable } from "@/atlas/terminal-endpoint"
 
 type SyncSession = ReturnType<typeof useSync>["data"]["session"][number]
 
 /**
  * Session page — new visual identity (Synthetic Sciences wordmark + sessions
- * sidebar + chat + canvas/agents/skills/files right pane) wrapping the
- * unchanged openscience backend chat (SessionTurn rendering, PromptInput, real
- * SSE streaming, sub-task delegation, tool calls, TODOs, diff cards).
+ * sidebar + conversation workspace + contextual files and research pane) wrapping
+ * the unchanged openscience backend chat (SessionTurn rendering, PromptInput,
+ * real SSE streaming, sub-task delegation, tool calls, TODOs, diff cards).
  */
 export default function Page(): JSX.Element {
   const params = useParams()
@@ -76,22 +85,49 @@ export default function Page(): JSX.Element {
   const sync = useSync()
   const sdk = useSDK()
   const layout = useLayout()
+  const prompt = usePrompt()
+  const terminal = useTerminal()
+  const server = useServer()
+  const platform = usePlatform()
   const theme = useTheme()
   const dialog = useDialog()
+  const trust = projectTrustApi(sdk.client)
   const [creating, setCreating] = createSignal(false)
   const [mobileSessionsOpen, setMobileSessionsOpen] = createSignal(false)
+  const [atlasConnected, setAtlasConnected] = createSignal(false)
+  const sessionTabs = createSessionTabs()
 
-  async function newSession() {
+  createEffect(
+    on(
+      () => server.url,
+      (url) => {
+        setAtlasConnected(false)
+        if (!url) return
+        void fetchSetupSession(url, platform.fetch ?? fetch)
+          .then(setAtlasConnected)
+          .catch(() => setAtlasConnected(false))
+      },
+    ),
+  )
+
+  function newSession() {
+    if (!params.id || params.id === "new") {
+      prompt.reset()
+      return
+    }
+    navigate(`/${params.dir}/session/new`)
+  }
+
+  async function ensureSession() {
     if (creating()) return
     setCreating(true)
     try {
-      const res: any = await sdk.client.session.create({
-        directory: sync.project?.worktree ?? sync.data.path.directory,
-      } as any)
+      const res: any = await sdk.client.session.create()
       const data = res?.data ?? res
       const id = data?.id ?? data?.sessionID
       if (id) {
         navigate(`/${params.dir}/session/${id}`)
+        return id as string
       } else {
         navigate(`/${params.dir}/session/new`)
       }
@@ -100,6 +136,12 @@ export default function Page(): JSX.Element {
     } finally {
       setCreating(false)
     }
+  }
+
+  const openContext = (context: SessionContext) => {
+    uiStore.openContext(context)
+    if ((context !== "terminal" && context !== "files") || (params.id && params.id !== "new")) return
+    void ensureSession()
   }
 
   async function deleteSession(sessionID: string) {
@@ -181,15 +223,62 @@ export default function Page(): JSX.Element {
 
   const project = createMemo(() => sync.project)
   const projectName = () => {
+    const configured = project()?.name?.trim()
+    if (configured) return configured
     const p = projectPath()
     const segs = p.split("/").filter(Boolean)
     return segs[segs.length - 1] ?? p
   }
-  const projectPath = () => project()?.worktree ?? sdk.directory
-
+  const projectPath = () => sdk.directory
   const sessions = createMemo<SyncSession[]>(() =>
     [...sync.data.session].filter((s) => !s.parentID).sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0)),
   )
+
+  createComputed(
+    on(
+      () => [sdk.scope, params.id] as const,
+      ([project, id]) => {
+        sessionTabs.activateProject(project)
+        if (!id || id === "new") return
+        sessionTabs.open(id)
+      },
+    ),
+  )
+
+  createEffect(() => {
+    const id = params.id
+    if (!id || id === "new") return
+    sessionTabs.setDraft(id, prompt.dirty())
+  })
+
+  createEffect(() => {
+    const id = params.id
+    if (!id || id === "new") return
+    const updated = sessions().find((session) => session.id === id)?.time?.updated ?? 0
+    if (!updated) return
+    sessionTabs.markRead(id, updated)
+  })
+
+  const openSessions = createMemo(() =>
+    sessionTabs.tabs().map((id) => {
+      const session = sessions().find((item) => item.id === id)
+      const updated = session?.time?.updated ?? 0
+      return {
+        id,
+        title: session?.title || "session",
+        working: Boolean(sync.data.session_status?.[id] && sync.data.session_status[id].type !== "idle"),
+        dirty: sessionTabs.dirty(id),
+        unread: sessionTabs.unread(id, updated),
+      }
+    }),
+  )
+
+  const closeSessionTab = (id: string) => {
+    const next = sessionTabs.close(id)
+    if (params.id !== id) return
+    navigate(next ? `/${params.dir}/session/${next}` : `/${params.dir}/session/new`)
+  }
+
   const messages = createMemo(() => (params.id ? (sync.data.message[params.id] ?? []) : []))
   const lastUserMessage = createMemo(() => {
     const ms = messages()
@@ -210,33 +299,16 @@ export default function Page(): JSX.Element {
   // composer (matches the v1.1.116 new-session flow).
   const [newSessionWorktree, setNewSessionWorktree] = createSignal("main")
 
-  // A `path.md` mentioned in an assistant message dispatches this; open it as a
-  // document tab (same surface as the Files tab / a tool-card filename click).
+  // A `path.md` mentioned in an assistant message dispatches this. Keep the
+  // transcript mounted and open the file in the contextual Files pane.
   onMount(() => {
     const onOpenFile = (e: Event) => {
       const path = (e as CustomEvent).detail?.path
       if (typeof path !== "string" || !path) return
-      const dir = projectPath()
-      const rel = dir && path.startsWith(dir + "/") ? path.slice(dir.length + 1) : path
-      centerTabs.openFile(dir, rel)
+      uiStore.openFile(projectPath(), path)
     }
     document.addEventListener("openscience:open-file", onOpenFile)
     onCleanup(() => document.removeEventListener("openscience:open-file", onOpenFile))
-
-    // "Open in Shell tab" on a bash tool card → reveal the right pane's terminal
-    // and re-run the command there (the RightPane picks up terminalCommand).
-    const onShell = (e: Event) => {
-      const command = (e as CustomEvent).detail?.command
-      if (typeof command !== "string" || !command) return
-      uiStore.setRightPaneOpen(true)
-      uiStore.setTerminalCommand({
-        command: "bash",
-        args: ["-lc", command],
-        title: command.length > 24 ? command.slice(0, 24) + "…" : command,
-      })
-    }
-    document.addEventListener("open-shell-tab", onShell)
-    onCleanup(() => document.removeEventListener("open-shell-tab", onShell))
   })
   const turnMessages = createMemo(() => {
     const revertID = revertInfo()?.messageID
@@ -301,10 +373,38 @@ export default function Page(): JSX.Element {
   // a pending revert until the next message makes it permanent.
   const commands = useCommand()
   const language = useLanguage()
+  const showTerminal = () => {
+    if (uiStore.context() === "terminal" && uiStore.open()) return
+    openContext("terminal")
+  }
   commands.register(() => {
     const id = params.id
-    if (!id || id === "new") return []
     const list: CommandOption[] = []
+    list.push(
+      {
+        id: "terminal.toggle",
+        title: language.t("command.terminal.toggle"),
+        description: "Open or close the project terminal",
+        category: language.t("command.category.terminal"),
+        keybind: "ctrl+`",
+        onSelect: () => openContext("terminal"),
+      },
+      {
+        id: "terminal.new",
+        title: language.t("command.terminal.new"),
+        description: language.t("command.terminal.new.description"),
+        category: language.t("command.category.terminal"),
+        keybind: "ctrl+shift+`",
+        disabled: !terminalEndpointAvailable(sdk.url) || !id || id === "new",
+        onSelect: () => {
+          showTerminal()
+          void terminal.new().catch((cause: unknown) => {
+            toast.error("could not start terminal", cause instanceof Error ? cause.message : String(cause))
+          })
+        },
+      },
+    )
+    if (!id || id === "new") return list
     const last = lastUserMessage()
     if (last && !revertInfo()) {
       list.push({
@@ -369,24 +469,14 @@ export default function Page(): JSX.Element {
   const toggleSteps = (id: string) => setStepsExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
 
   const isDark = () => theme.mode() === "dark"
-  useGlobalKeys({ onNew: () => void newSession() })
+  useGlobalKeys({ onNew: newSession })
 
-  // Center-pane tabs. The chat tab is always mounted (so streaming + scroll
-  // survive tab switches); Files mounts on first visit; document tabs mount
-  // when opened from the explorer and unmount on close.
+  // The center belongs to the conversation for the lifetime of the route.
+  // Files and other research surfaces mount only in the right context pane.
   const chatTitle = createMemo(() => {
     const s = sessions().find((x) => x.id === params.id)
-    return s?.title || "Chat"
+    return s?.title || "New session"
   })
-  const [visitedFiles, setVisitedFiles] = createSignal(false)
-  createEffect(() => {
-    if (centerTabs.active() === "files") setVisitedFiles(true)
-  })
-  const [visitedSkills, setVisitedSkills] = createSignal(false)
-  createEffect(() => {
-    if (centerTabs.active() === "skills") setVisitedSkills(true)
-  })
-
   // Chat scroll: stick to the bottom while the agent streams; detach the
   // moment the user scrolls up (a "jump to latest" button re-attaches).
   // Follow is driven by content growth (ResizeObserver on the content
@@ -399,33 +489,78 @@ export default function Page(): JSX.Element {
     return !!status && status.type !== "idle"
   })
 
+  // The reviewer is a direct action, never a chat prompt: POST /session/:id/review
+  // launches the reviewer pass on the open session (project-scoped like every
+  // other request) and its findings stream into the session as a turn.
+  const reviewDisabled = createMemo(() => !params.id || params.id === "new" || working())
+  const runReview = async () => {
+    const id = params.id
+    if (!id || id === "new" || working()) return
+    const response = await sdk.request(`/session/${id}/review`, { method: "POST" }).catch(() => undefined)
+    if (!response?.ok) {
+      toast.error("review failed", response ? `${response.status}` : "request failed")
+      return
+    }
+    toast.success("review started", "the reviewer streams into this session")
+  }
+
   const chatScroll = createAutoScroll({
     working,
     overflowAnchor: "dynamic",
     bottomThreshold: 120,
   })
+  const sessionKey = createMemo(() => `${sdk.scope}/${params.id ?? "new"}`)
+  const chatView = layout.view(sessionKey)
+  const restoration: {
+    target?: {
+      scope: string
+      x: number
+      y: number
+    }
+  } = {}
+  let chatElement: HTMLDivElement | undefined
+  let contentElement: HTMLDivElement | undefined
+  let observer: ResizeObserver | undefined
 
-  // Re-pin when the user switches sessions, and on initial mount once
-  // messages populate (covers direct URL / bookmark / refresh into a long,
-  // idle session, where createAutoScroll's settling window would otherwise
-  // expire before async-loaded messages render).
+  const cancelRestoration = () => {
+    restoration.target = undefined
+  }
+
+  const applyRestoration = () => {
+    const target = restoration.target
+    const element = chatElement
+    if (!target || !element || target.scope !== sessionKey()) return
+    element.scrollLeft = target.x
+    const max = Math.max(0, element.scrollHeight - element.clientHeight)
+    if (max + 1 < target.y) {
+      element.scrollTop = max
+      return
+    }
+    restoration.target = undefined
+    element.scrollTop = target.y
+    chatScroll.handleScroll()
+  }
+
+  // Restore one exact position per scoped conversation. Resize observation
+  // handles progressively rendered markdown without repeated timers; the first
+  // wheel/pointer interaction cancels restoration immediately.
   createEffect(
     on(
-      () => [params.id, messages().length > 0] as const,
-      ([, hasMessages]) => {
+      () => [sessionKey(), messages().length > 0] as const,
+      ([scope, hasMessages]) => {
+        restoration.target = undefined
         if (!hasMessages) return
-        // A turn's markdown/code-highlight/katex renders progressively AFTER the
-        // message array populates, growing scrollHeight over ~1s. An idle session
-        // isn't in follow-mode, so createAutoScroll won't track that growth — a
-        // single scroll lands at the early bottom. Re-pin across the load window
-        // (bail the moment the user scrolls up, so we never fight them).
-        chatScroll.forceScrollToBottom()
-        const timers = [80, 200, 450, 800, 1200].map((ms) =>
-          setTimeout(() => {
-            if (!chatScroll.userScrolled()) chatScroll.forceScrollToBottom()
-          }, ms),
-        )
-        onCleanup(() => timers.forEach(clearTimeout))
+        const frame = requestAnimationFrame(() => {
+          if (scope !== sessionKey()) return
+          const saved = chatView.scroll("conversation")
+          if (!saved) {
+            chatScroll.forceScrollToBottom()
+            return
+          }
+          restoration.target = { scope, x: saved.x, y: saved.y }
+          applyRestoration()
+        })
+        onCleanup(() => cancelAnimationFrame(frame))
       },
     ),
   )
@@ -434,14 +569,10 @@ export default function Page(): JSX.Element {
     if (project()) layout.projects.open(project()!.worktree)
   })
 
-  // Re-anchor a bottom-following view on viewport-height changes with no new
-  // content (window resize, right-pane toggle, mobile virtual keyboard).
   onMount(() => {
-    const onResize = () => {
-      if (!chatScroll.userScrolled()) chatScroll.forceScrollToBottom()
-    }
-    window.addEventListener("resize", onResize)
-    onCleanup(() => window.removeEventListener("resize", onResize))
+    observer = new ResizeObserver(applyRestoration)
+    if (contentElement) observer.observe(contentElement)
+    onCleanup(() => observer?.disconnect())
   })
 
   return (
@@ -461,21 +592,10 @@ export default function Page(): JSX.Element {
       <CommandPalette open={uiStore.paletteOpen()} onClose={() => uiStore.setPaletteOpen(false)} />
 
       <DisconnectedPanel />
-      <Header
-        projectName={projectName()}
-        projectPath={projectPath()}
-        isDark={isDark()}
-        onBack={() => navigate("/")}
-        onOpenPalette={() => uiStore.setPaletteOpen(true)}
-        onOpenHelp={() => uiStore.setHelpOpen(true)}
-        onOpenSettings={() => dialog.show(() => <DialogSettings />)}
-        onToggleTheme={() => theme.setColorScheme(isDark() ? "light" : "dark")}
-        onToggleSessions={() => setMobileSessionsOpen((open) => !open)}
-        onOpenTools={() => uiStore.setRightPaneOpen(true)}
-      />
 
       <div
         class="session-workspace"
+        data-context-open={uiStore.rightPaneOpen() ? "true" : "false"}
         style={{
           flex: 1,
           "min-height": 0,
@@ -494,6 +614,7 @@ export default function Page(): JSX.Element {
           />
         </Show>
         <SessionsSidebar
+          projectName={projectName()}
           sessions={sessions()}
           activeId={params.id}
           dirParam={params.dir ?? ""}
@@ -501,10 +622,28 @@ export default function Page(): JSX.Element {
           mobileOpen={mobileSessionsOpen()}
           onNew={() => {
             setMobileSessionsOpen(false)
-            void newSession()
+            newSession()
           }}
+          onBack={() => navigate("/")}
+          onSearch={() => {
+            setMobileSessionsOpen(false)
+            uiStore.setPaletteOpen(true)
+          }}
+          onCustomize={() => {
+            setMobileSessionsOpen(false)
+            dialog.show(() => <DialogSettings />)
+          }}
+          onContext={(context) => {
+            setMobileSessionsOpen(false)
+            openContext(context)
+          }}
+          context={uiStore.context()}
+          contextOpen={uiStore.open()}
+          artifact={Boolean(artifactContext.active())}
+          atlas={atlasConnected()}
           onSelect={(id) => {
             setMobileSessionsOpen(false)
+            sessionTabs.open(id)
             navigate(`/${params.dir}/session/${id}`)
           }}
           onDelete={(id) => void deleteSession(id)}
@@ -512,6 +651,7 @@ export default function Page(): JSX.Element {
         />
 
         <div
+          class="session-main"
           style={{
             flex: 1,
             "min-width": 0,
@@ -522,7 +662,36 @@ export default function Page(): JSX.Element {
             overflow: "hidden",
           }}
         >
-          <CenterTabStrip chatTitle={chatTitle()} />
+          <Header
+            title={chatTitle()}
+            projectID={project()?.id ?? sdk.projectID}
+            projectName={projectName()}
+            directory={projectPath()}
+            trust={trust}
+            isDark={isDark()}
+            onBack={() => navigate("/")}
+            onOpenPalette={() => uiStore.setPaletteOpen(true)}
+            onOpenHelp={() => uiStore.setHelpOpen(true)}
+            onOpenSettings={() => dialog.show(() => <DialogSettings />)}
+            onRunReview={() => void runReview()}
+            reviewDisabled={reviewDisabled()}
+            onToggleTheme={() => theme.setColorScheme(isDark() ? "light" : "dark")}
+            onToggleSessions={() => setMobileSessionsOpen((open) => !open)}
+            onContext={openContext}
+            context={uiStore.context()}
+            contextOpen={uiStore.open()}
+            atlas={atlasConnected()}
+          />
+          <SessionTabStrip
+            tabs={openSessions()}
+            active={params.id}
+            onSelect={(id) => {
+              sessionTabs.open(id)
+              navigate(`/${params.dir}/session/${id}`)
+            }}
+            onClose={closeSessionTab}
+            onReorder={(id, to) => sessionTabs.move(id, to)}
+          />
 
           <div
             style={{
@@ -534,10 +703,12 @@ export default function Page(): JSX.Element {
               "flex-direction": "column",
             }}
           >
-            {/* chat — always mounted so streaming + scroll survive tab switches */}
-            <div
+            {/* conversation center — never replaced by file navigation */}
+            <section
+              data-component="conversation-center"
+              aria-label="Conversation"
               style={{
-                display: centerTabs.active() === "chat" ? "flex" : "none",
+                display: "flex",
                 flex: 1,
                 "min-height": 0,
                 "flex-direction": "column",
@@ -559,8 +730,20 @@ export default function Page(): JSX.Element {
                     }}
                   >
                     <div
-                      ref={chatScroll.scrollRef}
-                      onScroll={chatScroll.handleScroll}
+                      ref={(element) => {
+                        chatElement = element
+                        chatScroll.scrollRef(element)
+                      }}
+                      onScroll={(event) => {
+                        chatScroll.handleScroll()
+                        if (restoration.target) return
+                        chatView.setScroll("conversation", {
+                          x: event.currentTarget.scrollLeft,
+                          y: event.currentTarget.scrollTop,
+                        })
+                      }}
+                      onWheel={cancelRestoration}
+                      onPointerDown={cancelRestoration}
                       onClick={chatScroll.handleInteraction}
                       class="atlas-scroll atlas-chat-scroll session-scroller"
                       style={{
@@ -602,8 +785,14 @@ export default function Page(): JSX.Element {
 
                       {/* Centered conversation column with 2px between-turn divider */}
                       <div
-                        ref={chatScroll.contentRef}
-                        class="w-full md:max-w-200 md:mx-auto flex flex-col items-start justify-start pt-3 pb-[calc(10rem+64px)]"
+                        ref={(element) => {
+                          contentElement = element
+                          chatScroll.contentRef(element)
+                          observer?.disconnect()
+                          observer?.observe(element)
+                        }}
+                        class="session-transcript w-full flex flex-col items-start justify-start"
+                        style={{ "padding-bottom": "var(--workspace-composer-reserve)" }}
                       >
                         <For each={turnMessages()}>
                           {(message, index) => (
@@ -661,7 +850,7 @@ export default function Page(): JSX.Element {
                                   classes={{
                                     root: "min-w-0 w-full relative",
                                     content: "flex flex-col justify-between !overflow-visible",
-                                    container: "w-full px-4 md:px-6",
+                                    container: "w-full px-4 md:px-5",
                                   }}
                                 />
                               </Show>
@@ -684,11 +873,9 @@ export default function Page(): JSX.Element {
                         title="Jump to latest"
                         style={{
                           position: "absolute",
-                          // The content column reserves calc(10rem + 64px) of bottom
-                          // padding (above) so the last message clears the absolute
-                          // prompt dock; land the pill just above that same
-                          // reservation so the dock doesn't sit on top of it.
-                          bottom: "calc(10rem + 64px + 16px)",
+                          // Share the dock reserve with the transcript so composer
+                          // geometry can change without hiding the final turn.
+                          bottom: "calc(var(--workspace-composer-reserve) + 16px)",
                           left: "50%",
                           transform: "translateX(-50%)",
                           display: "inline-flex",
@@ -763,162 +950,165 @@ export default function Page(): JSX.Element {
                   />
                 </div>
               </div>
-            </div>
-
-            {/* files — the host explorer, mounted on first visit */}
-            <Show when={visitedFiles()}>
-              <div
-                style={{
-                  display: centerTabs.active() === "files" ? "flex" : "none",
-                  flex: 1,
-                  "min-height": 0,
-                  "flex-direction": "column",
-                }}
-              >
-                <FileExplorer />
-              </div>
-            </Show>
-
-            {/* skills — the global capability catalog, mounted on first visit */}
-            <Show when={visitedSkills()}>
-              <div
-                style={{
-                  display: centerTabs.active() === "skills" ? "flex" : "none",
-                  flex: 1,
-                  "min-height": 0,
-                  "flex-direction": "column",
-                }}
-              >
-                {/* Local boundary: SkillsPage reads its skills resource eagerly, so
-                    its first-load suspend must stay in this pane, not blank the
-                    whole session via the coarse route-level <Suspense>. */}
-                <Suspense fallback={<PaneLoading />}>
-                  <SkillsPage />
-                </Suspense>
-              </div>
-            </Show>
-
-            {/* document tabs — one inline FileView per opened file */}
-            <For each={centerTabs.docs()}>
-              {(doc) => (
-                <div
-                  style={{
-                    display: centerTabs.active() === doc.id ? "flex" : "none",
-                    flex: 1,
-                    "min-height": 0,
-                    "flex-direction": "column",
-                  }}
-                >
-                  {/* Local boundary: FileView reads its `file` resource eagerly (the
-                      `kind` memo forces it at mount), so opening a NEW file suspends.
-                      Contain it here so the doc tab shows a local spinner instead of
-                      blanking the entire session through the route-level <Suspense>. */}
-                  <Suspense fallback={<PaneLoading />}>
-                    <FileView
-                      path={doc.path}
-                      directory={doc.directory}
-                      active={centerTabs.active() === doc.id}
-                      subtitle={`This computer · ${doc.directory.replace(/\/$/, "")}/${doc.path}`}
-                    />
-                  </Suspense>
-                </div>
-              )}
-            </For>
+            </section>
           </div>
         </div>
 
-        <RightPane />
+        <RightPane project={sdk.scope} session={params.id ?? "new"} />
       </div>
     </div>
   )
 }
 
-// Pane-scoped Suspense fallback — a small centered spinner shown while an
-// interaction-mounted pane (a file view, the Skills catalog) loads its data,
-// so the load can't reach the route-level boundary and blank the whole session.
-function PaneLoading(): JSX.Element {
-  return (
-    <div style={{ flex: 1, display: "flex", "align-items": "center", "justify-content": "center" }}>
-      <AsciiSpinner size={10} label="loading…" color="var(--color-text-faint)" />
-    </div>
-  )
-}
+const TAB_DRAG_TYPE = "text/openscience-session-tab"
 
-function CenterTabStrip(props: { chatTitle: string }): JSX.Element {
-  const active = centerTabs.active
-  return (
-    <div class="workspace-tabs atlas-scroll" role="tablist" aria-label="Open work">
-      <CenterTab active={active() === "chat"} label={props.chatTitle} onClick={() => centerTabs.setActive("chat")}>
-        <IconMessageSquare size={12} strokeWidth={1.6} />
-      </CenterTab>
-      <CenterTab active={active() === "files"} label="Files" onClick={() => centerTabs.setActive("files")}>
-        <IconFolderTree size={12} strokeWidth={1.6} />
-      </CenterTab>
-      <CenterTab active={active() === "skills"} label="Skills" onClick={() => centerTabs.setActive("skills")}>
-        <IconBrain size={12} strokeWidth={1.6} />
-      </CenterTab>
-      <For each={centerTabs.docs()}>
-        {(doc) => (
-          <CenterTab
-            active={active() === doc.id}
-            label={doc.name}
-            onClick={() => centerTabs.setActive(doc.id)}
-            onClose={() => centerTabs.closeDoc(doc.id)}
-          >
-            <IconFile size={12} strokeWidth={1.6} />
-          </CenterTab>
-        )}
-      </For>
-    </div>
-  )
-}
-
-function CenterTab(props: {
-  active: boolean
-  label: string
-  onClick: () => void
-  onClose?: () => void
-  children: JSX.Element
+function SessionTabStrip(props: {
+  tabs: Array<{ id: string; title: string; working: boolean; dirty: boolean; unread: boolean }>
+  active: string | undefined
+  onSelect: (id: string) => void
+  onClose: (id: string) => void
+  onReorder: (id: string, to: number) => void
 }): JSX.Element {
-  return (
+  const compact = createMediaQuery("(max-width: 719px)")
+  const limit = createMemo(() => (compact() ? 2 : 5))
+  const visible = createMemo(() => {
+    if (props.tabs.length <= limit()) return props.tabs
+    const first = props.tabs.slice(0, limit())
+    const active = props.tabs.find((tab) => tab.id === props.active)
+    if (!active || first.some((tab) => tab.id === active.id)) return first
+    return [...first.slice(0, -1), active]
+  })
+  const hidden = createMemo(() => {
+    const shown = new Set(visible().map((tab) => tab.id))
+    return props.tabs.filter((tab) => !shown.has(tab.id))
+  })
+  const tab = (item: (typeof props.tabs)[number], index: number) => (
     <div
       class="workspace-tab"
       role="tab"
-      aria-selected={props.active}
-      data-active={props.active ? "true" : "false"}
-      onClick={props.onClick}
-      title={props.label}
+      tabindex={0}
+      aria-selected={props.active === item.id}
+      aria-label={`${item.title}${item.working ? ", working" : item.unread ? ", unread" : ""}${item.dirty ? ", draft saved" : ""}`}
+      data-active={props.active === item.id ? "true" : undefined}
+      draggable="true"
+      onDragStart={(event) => {
+        event.dataTransfer?.setData(TAB_DRAG_TYPE, item.id)
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move"
+      }}
+      onDragOver={(event) => {
+        if (event.dataTransfer?.types.includes(TAB_DRAG_TYPE)) event.preventDefault()
+      }}
+      onDrop={(event) => {
+        const dragged = event.dataTransfer?.getData(TAB_DRAG_TYPE)
+        if (!dragged || dragged === item.id) return
+        event.preventDefault()
+        props.onReorder(dragged, index)
+      }}
+      onClick={() => props.onSelect(item.id)}
+      onKeyDown={(event) => {
+        if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+          event.preventDefault()
+          props.onReorder(item.id, index + (event.key === "ArrowRight" ? 1 : -1))
+          return
+        }
+        if (event.key !== "Enter" && event.key !== " ") return
+        event.preventDefault()
+        props.onSelect(item.id)
+      }}
     >
-      <span class="workspace-tab__icon">{props.children}</span>
-      <span style={{ overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap" }}>{props.label}</span>
-      <Show when={props.onClose}>
-        <span
-          class="workspace-tab__close"
-          role="button"
-          aria-label="close tab"
-          onClick={(e) => {
-            e.stopPropagation()
-            props.onClose!()
-          }}
-        >
-          <IconX size={11} strokeWidth={1.8} />
+      <span class="workspace-tab__icon" aria-hidden="true">
+        <StatusDot status={item.working ? "active" : item.unread ? "pending" : "muted"} size={6} />
+      </span>
+      <span class="truncate">{item.title}</span>
+      <Show when={item.dirty}>
+        <span aria-label="Draft saved" title="Draft saved">
+          •
         </span>
       </Show>
+      <button
+        type="button"
+        class="workspace-tab__close"
+        aria-label={`Close ${item.title} tab`}
+        onClick={(event) => {
+          event.stopPropagation()
+          props.onClose(item.id)
+        }}
+      >
+        <IconX size={11} strokeWidth={1.5} />
+      </button>
     </div>
+  )
+
+  return (
+    <Show when={props.tabs.length > 0}>
+      <nav class="workspace-tabs" aria-label="Open session tabs">
+        <div class="workspace-tabs__list" role="tablist">
+          <For each={visible()}>
+            {(item) =>
+              tab(
+                item,
+                props.tabs.findIndex((entry) => entry.id === item.id),
+              )
+            }
+          </For>
+        </div>
+        <Show when={hidden().length > 0}>
+          <details class="workspace-tabs__overflow">
+            <summary aria-label={`${hidden().length} more session tabs`}>
+              <IconMoreH size={14} strokeWidth={1.5} />
+              <span>{hidden().length}</span>
+            </summary>
+            <div role="menu">
+              <For each={hidden()}>
+                {(item) => (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    aria-current={props.active === item.id ? "page" : undefined}
+                    onClick={(event) => {
+                      props.onSelect(item.id)
+                      event.currentTarget.closest("details")?.removeAttribute("open")
+                    }}
+                    onKeyDown={(event) => {
+                      if (!event.altKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return
+                      event.preventDefault()
+                      const index = props.tabs.findIndex((entry) => entry.id === item.id)
+                      props.onReorder(item.id, index + (event.key === "ArrowRight" ? 1 : -1))
+                    }}
+                  >
+                    <StatusDot status={item.working ? "active" : item.unread ? "pending" : "muted"} size={6} />
+                    <span>{item.title}</span>
+                    <Show when={item.dirty}>•</Show>
+                  </button>
+                )}
+              </For>
+            </div>
+          </details>
+        </Show>
+      </nav>
+    </Show>
   )
 }
 
 function Header(props: {
+  title: string
+  projectID?: string
   projectName: string
-  projectPath: string
+  directory: string
+  trust: ProjectTrustApi
   isDark: boolean
   onBack: () => void
   onOpenPalette: () => void
   onOpenHelp: () => void
   onOpenSettings: () => void
+  onRunReview: () => void
+  reviewDisabled: boolean
   onToggleTheme: () => void
   onToggleSessions: () => void
-  onOpenTools: () => void
+  onContext: (context: SessionContext) => void
+  context: SessionContext
+  contextOpen: boolean
+  atlas: boolean
 }): JSX.Element {
   const [menu, setMenu] = createSignal(false)
   return (
@@ -934,24 +1124,58 @@ function Header(props: {
       >
         <IconChevronLeft size={14} strokeWidth={1.6} />
       </button>
-      <div class="workspace-header__title" title={props.projectPath}>
-        <strong>{props.projectName}</strong>
-        <span>Research workspace</span>
+      <div class="workspace-header__project" title={props.title}>
+        <span class="workspace-header__title">
+          <strong>{props.title}</strong>
+        </span>
       </div>
+      <ProjectTrustControl
+        projectID={props.projectID}
+        name={props.projectName}
+        directory={props.directory}
+        api={props.trust}
+      />
       <span class="workspace-header__spacer" />
-      <button class="workspace-header__tools" type="button" onClick={props.onOpenTools}>
-        <IconLayoutGrid size={13} strokeWidth={1.5} />
-        <span>Tools</span>
-      </button>
       <HeaderIconButton class="workspace-header__search" onClick={props.onOpenPalette} title="Search and commands">
         <IconSearch size={13} strokeWidth={1.5} />
       </HeaderIconButton>
       <div class="workspace-header__menu-wrap" onMouseLeave={() => setMenu(false)}>
-        <HeaderIconButton class="workspace-header__menu" onClick={() => setMenu((open) => !open)} title="More">
-          <IconMoreH size={14} strokeWidth={1.7} />
+        <HeaderIconButton
+          class="workspace-header__menu"
+          onClick={() => setMenu((open) => !open)}
+          title="Workspace controls"
+        >
+          <IconSettings size={14} strokeWidth={1.7} />
         </HeaderIconButton>
         <Show when={menu()}>
           <div class="workspace-header__popover" role="menu">
+            <CompactContextActions
+              context={props.context}
+              contextOpen={props.contextOpen}
+              atlas={props.atlas}
+              onContext={(context) => {
+                setMenu(false)
+                props.onContext(context)
+              }}
+            />
+            <button
+              type="button"
+              role="menuitem"
+              disabled={props.reviewDisabled}
+              title={
+                props.reviewDisabled
+                  ? "Open an idle session to run the reviewer"
+                  : "Launch an independent reviewer pass on this session"
+              }
+              style={{ opacity: props.reviewDisabled ? 0.45 : 1 }}
+              onClick={() => {
+                setMenu(false)
+                props.onRunReview()
+              }}
+            >
+              <IconCheckCircle size={13} strokeWidth={1.5} />
+              Run review
+            </button>
             <button
               type="button"
               role="menuitem"
@@ -1065,27 +1289,82 @@ function EditableTitle(props: { title: string; onRename: (t: string) => void }):
 }
 
 function SessionsSidebar(props: {
+  projectName: string
   sessions: SyncSession[]
   activeId: string | undefined
   dirParam: string
   creating: boolean
   mobileOpen: boolean
   onNew: () => void
+  onBack: () => void
+  onSearch: () => void
+  onCustomize: () => void
+  onContext: (context: SessionContext) => void
+  context: SessionContext
+  contextOpen: boolean
+  artifact: boolean
+  atlas: boolean
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onRename: (id: string, title: string) => void
 }): JSX.Element {
   return (
-    <aside class="atlas-scroll session-sidebar" data-mobile-open={props.mobileOpen ? "true" : "false"}>
+    <aside
+      class="atlas-scroll session-sidebar"
+      data-mobile-open={props.mobileOpen ? "true" : "false"}
+      aria-label="Research sessions"
+    >
       <div class="session-sidebar__top">
-        <button class="session-sidebar__new" onClick={props.onNew} disabled={props.creating}>
-          <IconPlus size={13} strokeWidth={1.8} />
-          {props.creating ? "Creating…" : "New research"}
+        <button type="button" class="session-sidebar__project" aria-label="Back to projects" onClick={props.onBack}>
+          <IconChevronLeft size={13} strokeWidth={1.6} />
+          <strong>{props.projectName}</strong>
         </button>
       </div>
 
+      <nav class="session-sidebar__actions" aria-label="Research navigation">
+        <span class="session-sidebar__group-label">Research</span>
+        <div class="session-sidebar__action-list">
+          <SidebarAction
+            class="session-sidebar__new"
+            label={props.creating ? "Creating…" : "New research"}
+            detail="Start a session"
+            ariaLabel="New research"
+            shortcut="⌘N"
+            disabled={props.creating}
+            onClick={props.onNew}
+          >
+            <IconPlus size={13} strokeWidth={1.7} />
+          </SidebarAction>
+          <SidebarAction
+            label="Search"
+            detail="Search and commands"
+            ariaLabel="Search project"
+            shortcut="⌘K"
+            onClick={props.onSearch}
+          >
+            <IconSearch size={13} strokeWidth={1.5} />
+          </SidebarAction>
+          <SidebarAction
+            label="Customize"
+            detail="Open settings"
+            ariaLabel="Customize OpenScience"
+            onClick={props.onCustomize}
+          >
+            <IconSettings size={13} strokeWidth={1.5} />
+          </SidebarAction>
+        </div>
+
+        <SessionSidebarActions
+          context={props.context}
+          contextOpen={props.contextOpen}
+          artifact={props.artifact}
+          atlas={props.atlas}
+          onContext={props.onContext}
+        />
+      </nav>
+
       <div class="session-sidebar__label">
-        <span>Recent</span>
+        <span>Recent sessions</span>
         <span>{props.sessions.length}</span>
       </div>
 
@@ -1102,17 +1381,7 @@ function SessionsSidebar(props: {
           )}
         </For>
         <Show when={props.sessions.length === 0}>
-          <div
-            style={{
-              padding: "12px 10px",
-              "font-family": FONT_MONO,
-              "font-size": "11px",
-              color: "var(--color-text-faint)",
-              "line-height": 1.55,
-            }}
-          >
-            No sessions yet — click <span style={{ color: "var(--color-text-muted)" }}>New research</span> above.
-          </div>
+          <div class="session-sidebar__empty">No sessions yet.</div>
         </Show>
       </div>
     </aside>
@@ -1145,8 +1414,11 @@ function SessionRow(props: {
   }
   return (
     <div
+      class="session-sidebar__session"
       role="button"
       tabindex="0"
+      data-active={props.active ? "true" : undefined}
+      data-actions={hover() && !editing() ? "true" : undefined}
       onClick={() => {
         if (editing()) return
         props.onSelect()
@@ -1168,96 +1440,48 @@ function SessionRow(props: {
       onFocusOut={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHover(false)
       }}
-      style={{
-        cursor: editing() ? "text" : "pointer",
-        display: "flex",
-        "flex-direction": "column",
-        gap: "3px",
-        padding: "8px 12px",
-        "padding-right": hover() && !editing() ? "34px" : "12px",
-        "border-radius": "8px",
-        background: props.active ? "var(--color-bg-elevated)" : hover() ? "var(--color-accent-subtle)" : "transparent",
-        transition: "background 120ms ease, padding 120ms ease",
-        position: "relative",
-      }}
+      style={{ cursor: editing() ? "text" : "pointer" }}
     >
-      <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-        <StatusDot status={props.active ? "active" : "muted"} size={9} />
-        <Show
-          when={editing()}
-          fallback={
-            <span
-              title="Double-click to rename"
-              style={{
-                "font-family": FONT_MONO,
-                "font-size": "12.5px",
-                color: props.active ? "var(--color-text)" : "var(--color-text-muted)",
-                "font-weight": 400,
-                flex: 1,
-                overflow: "hidden",
-                "text-overflow": "ellipsis",
-                "white-space": "nowrap",
-              }}
-            >
-              {props.session.title || "session"}
-            </span>
-          }
-        >
-          <input
-            ref={(el) =>
-              queueMicrotask(() => {
-                el.focus()
-                el.select()
-              })
-            }
-            value={draft()}
-            onInput={(e) => setDraft(e.currentTarget.value)}
-            onClick={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === "Enter") {
-                e.preventDefault()
-                commit()
-              } else if (e.key === "Escape") {
-                e.preventDefault()
-                cancel()
-              }
-            }}
-            onBlur={commit}
-            spellcheck={false}
-            autocomplete="off"
-            style={{
-              all: "unset",
-              "box-sizing": "border-box",
-              flex: 1,
-              "min-width": 0,
-              padding: "1px 5px",
-              "margin-left": "-5px",
-              "border-radius": "5px",
-              background: "var(--color-surface-solid)",
-              "box-shadow": "inset 0 0 0 1px var(--color-border-strong)",
-              "font-family": FONT_MONO,
-              "font-size": "12.5px",
-              color: "var(--color-text)",
-            }}
-          />
-        </Show>
-      </div>
-      <div
-        style={{
-          "font-family": FONT_MONO,
-          "font-size": "10.5px",
-          color: "var(--color-text-faint)",
-          "letter-spacing": "0.04em",
-          "padding-left": "17px",
-        }}
+      <StatusDot status={props.active ? "active" : "muted"} size={7} />
+      <Show
+        when={editing()}
+        fallback={
+          <span class="session-sidebar__session-title" title="Double-click to rename">
+            {props.session.title || "session"}
+          </span>
+        }
       >
-        {props.session.time?.updated ? DateTime.fromMillis(props.session.time.updated).toRelative() : "—"}
-      </div>
+        <input
+          ref={(el) =>
+            queueMicrotask(() => {
+              el.focus()
+              el.select()
+            })
+          }
+          class="session-sidebar__session-input"
+          value={draft()}
+          onInput={(e) => setDraft(e.currentTarget.value)}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === "Enter") {
+              e.preventDefault()
+              commit()
+            } else if (e.key === "Escape") {
+              e.preventDefault()
+              cancel()
+            }
+          }}
+          onBlur={commit}
+          spellcheck={false}
+          autocomplete="off"
+        />
+      </Show>
       <Show when={hover() && !editing()}>
         <button
           type="button"
+          class="session-sidebar__session-delete"
           title="delete session"
           aria-label="delete session"
           onPointerDown={(e) => {
@@ -1269,33 +1493,6 @@ function SessionRow(props: {
             e.stopPropagation()
             e.preventDefault()
             props.onDelete()
-          }}
-          style={{
-            position: "absolute",
-            right: "6px",
-            top: "50%",
-            transform: "translateY(-50%)",
-            display: "inline-flex",
-            "align-items": "center",
-            "justify-content": "center",
-            width: "22px",
-            height: "22px",
-            "border-radius": "4px",
-            background: "var(--color-surface-solid)",
-            border: "1px solid var(--color-border)",
-            color: "var(--color-text-faint)",
-            cursor: "pointer",
-            transition: "all 120ms ease",
-          }}
-          onMouseEnter={(el) => {
-            el.currentTarget.style.background = "var(--color-error-muted)"
-            el.currentTarget.style.borderColor = "var(--color-error)"
-            el.currentTarget.style.color = "var(--color-error)"
-          }}
-          onMouseLeave={(el) => {
-            el.currentTarget.style.background = "var(--color-surface-solid)"
-            el.currentTarget.style.borderColor = "var(--color-border)"
-            el.currentTarget.style.color = "var(--color-text-faint)"
           }}
         >
           <IconTrash size={11} strokeWidth={1.5} />

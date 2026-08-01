@@ -1,17 +1,12 @@
-// General — Account, Model defaults, and Licensing, plus the appearance/theme
+// General — Account and Licensing, plus the appearance/theme
 // controls. Everything here is wired to a real endpoint:
 //   • Account   → client.account.get / client.account.logout, billing link.
-//   • Model      → global config `model` / `small_model` (client.global.config.update
-//                  via useGlobalSync().updateConfig) + the reasoning effort store.
 //   • Licensing  → /settings/preferences (real JSON store, persisted to ~/.openscience).
 //   • Appearance → the extracted AppearanceSections (theme, sounds, updates, …).
-import { Component, Show, createMemo, createSignal, onMount, type JSX } from "solid-js"
+import { Component, Show, createSignal, onMount, type JSX } from "solid-js"
 import { Button } from "@synsci/ui/button"
-import { Select } from "@synsci/ui/select"
 import { showToast } from "@synsci/ui/toast"
 import { useGlobalSDK } from "@/context/global-sdk"
-import { useGlobalSync } from "@/context/global-sync"
-import { useModels } from "@/context/models"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { URLS } from "@/config/urls"
@@ -27,22 +22,12 @@ type Account = {
 }
 
 type Preferences = {
-  reasoning_effort: "minimal" | "low" | "medium" | "high"
   intent: "commercial" | "non-commercial"
   extra_budget_usd: number
 }
 
-const REASONING = [
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-] as const
-
 export default function General() {
   const sdk = useGlobalSDK()
-  const sync = useGlobalSync()
-  const models = useModels()
   const platform = usePlatform()
   const server = useServer()
 
@@ -97,18 +82,6 @@ export default function General() {
     }
   }
 
-  // Model catalog → dropdown options (provider/model). Persisted to real config.
-  const modelOptions = createMemo(() =>
-    models
-      .list()
-      .map((m) => ({ value: `${m.provider.id}/${m.id}`, label: `${m.name} · ${m.provider.name}` }))
-      .sort((a, b) => a.label.localeCompare(b.label)),
-  )
-  const defaultModel = () => sync.data.config.model
-  const subagentModel = () => sync.data.config.small_model
-  const setDefaultModel = (value: string) => void sync.updateConfig({ model: value })
-  const setSubagentModel = (value: string) => void sync.updateConfig({ small_model: value })
-
   const plan = () => (account()?.user?.subscription_plan as string | undefined) ?? undefined
   const org = () => {
     const u = account()?.user ?? {}
@@ -120,7 +93,7 @@ export default function General() {
       <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-raised-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
         <div class="flex flex-col gap-1 pt-8 pb-8 max-w-[760px]">
           <h2 class="text-16-medium text-text-strong">General</h2>
-          <p class="text-13-regular text-text-weak">Your account, default models, licensing, and appearance.</p>
+          <p class="text-13-regular text-text-weak">Your account, licensing, and appearance.</p>
         </div>
       </div>
 
@@ -180,50 +153,6 @@ export default function General() {
                 </p>
               </div>
             </Show>
-          </div>
-        </Section>
-
-        {/* Model */}
-        <Section title="Model" description="Defaults applied to new sessions and background tasks.">
-          <div class="border border-border-weak-base rounded-[4px] overflow-hidden bg-surface-base/40">
-            <Row title="Default model" description="Primary model used when a session starts.">
-              <Select
-                options={modelOptions()}
-                current={modelOptions().find((o) => o.value === defaultModel())}
-                value={(o) => o.value}
-                label={(o) => o.label}
-                onSelect={(o) => o && setDefaultModel(o.value)}
-                variant="secondary"
-                size="small"
-                triggerVariant="settings"
-                placeholder="Auto"
-              />
-            </Row>
-            <Row title="Subagent model" description="Model for titles, summaries, and subagent tasks (small_model).">
-              <Select
-                options={modelOptions()}
-                current={modelOptions().find((o) => o.value === subagentModel())}
-                value={(o) => o.value}
-                label={(o) => o.label}
-                onSelect={(o) => o && setSubagentModel(o.value)}
-                variant="secondary"
-                size="small"
-                triggerVariant="settings"
-                placeholder="Auto"
-              />
-            </Row>
-            <Row title="Reasoning effort" description="Thinking budget for models that support it.">
-              <Select
-                options={[...REASONING]}
-                current={REASONING.find((o) => o.value === prefs()?.reasoning_effort) ?? REASONING[2]}
-                value={(o) => o.value}
-                label={(o) => o.label}
-                onSelect={(o) => o && void savePref({ reasoning_effort: o.value })}
-                variant="secondary"
-                size="small"
-                triggerVariant="settings"
-              />
-            </Row>
           </div>
         </Section>
 

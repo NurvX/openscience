@@ -9,10 +9,21 @@ import { EOL } from "os"
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
-  "openai-codex": "OpenAI (ChatGPT subscription)",
+  "openai-codex": "OpenAI (Codex subscription)",
   google: "Google",
   gemini: "Google Gemini",
+  xai: "xAI",
+  meta: "Meta Model API",
   openrouter: "OpenRouter",
+  togetherai: "Together AI",
+  together: "Together AI",
+  groq: "Groq",
+  "fireworks-ai": "Fireworks AI",
+  fireworks: "Fireworks AI",
+  mistral: "Mistral",
+  deepseek: "DeepSeek",
+  cerebras: "Cerebras",
+  perplexity: "Perplexity",
 }
 
 /** Classify a provider as BYOK, openscience-managed, OAuth, or unknown.

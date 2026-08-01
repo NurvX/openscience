@@ -240,6 +240,7 @@ describe("notebook file integration", () => {
     expect(view).toContain('data-action="run-all"')
     expect(view).toContain('data-action="restart-kernel"')
     expect(view).toContain('data-action="interrupt-kernel"')
+    expect(view).toContain("All in-memory variables and queued cells will be lost.")
     expect(view).toContain('data-action="notebook-diff"')
     expect(view).toContain('data-action="notebook-export"')
     expect(view).toContain('data-slot="notebook-output"')

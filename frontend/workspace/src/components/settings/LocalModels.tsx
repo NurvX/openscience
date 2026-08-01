@@ -6,10 +6,8 @@ import { Component, For, Show, createResource, createSignal } from "solid-js"
 import { Button } from "@synsci/ui/button"
 import { Icon } from "@synsci/ui/icon"
 import { showToast } from "@synsci/ui/toast"
-import { useDialog } from "@synsci/ui/context/dialog"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { usePlatform } from "@/context/platform"
-import { uiStore } from "@/atlas/store/ui"
 import { settingsApi } from "./api"
 
 interface Detected {
@@ -38,14 +36,21 @@ interface Runtime {
 const LocalModels: Component = () => {
   const sdk = useGlobalSDK()
   const platform = usePlatform()
-  const dialog = useDialog()
   const fetchFn = platform.fetch ?? fetch
 
-  // Run a command in the workspace terminal (opens a new tab, reveals the pane)
-  // and close Settings so the user sees it — for people who prefer the terminal.
-  const runInTerminal = (command: string, args: string[], title: string) => {
-    uiStore.setTerminalCommand({ command, args, title })
-    dialog.close()
+  const copyCommand = (command: string) => {
+    if (!navigator.clipboard) {
+      showToast({ title: "Couldn't copy command", description: "Clipboard access is unavailable." })
+      return
+    }
+    return navigator.clipboard.writeText(command).then(
+      () => showToast({ title: "Command copied", description: command }),
+      (error) =>
+        showToast({
+          title: "Couldn't copy command",
+          description: error instanceof Error ? error.message : String(error),
+        }),
+    )
   }
   const call = <T,>(path: string, init?: RequestInit) =>
     settingsApi<T>(sdk.url, fetchFn, `/settings/local${path}`, init)
@@ -133,12 +138,12 @@ const LocalModels: Component = () => {
       "Failed to add models",
     )
 
-  // ── Pull a model (in the terminal, with visible progress) ──
+  // ── Pull a model ──
   const [pullName, setPullName] = createSignal("")
   const pull = () => {
     const m = pullName().trim()
     if (!m) return
-    runInTerminal("ollama", ["pull", m], `ollama pull ${m}`)
+    void copyCommand(`ollama pull ${m}`)
   }
 
   // ── Custom endpoint flow ──
@@ -261,11 +266,11 @@ const LocalModels: Component = () => {
           </For>
         </section>
 
-        {/* ── Pull a model (Ollama, via the terminal) ── */}
+        {/* ── Pull a model (Ollama) ── */}
         <section class="flex flex-col gap-2">
           <h3 class="text-13-medium text-text-strong">Pull a model</h3>
           <p class="text-12-regular text-text-weak/70">
-            Download an Ollama model — runs <code>ollama pull</code> in the terminal so you can watch progress.
+            Copy an <code>ollama pull</code> command, then run it in your terminal to download the model.
           </p>
           <div class="flex gap-2">
             <input
@@ -276,14 +281,15 @@ const LocalModels: Component = () => {
               onKeyDown={(e) => e.key === "Enter" && pull()}
             />
             <Button size="small" variant="secondary" disabled={!pullName().trim()} onClick={pull}>
-              pull in terminal
+              Copy command
             </Button>
           </div>
           <p class="text-11-regular text-text-weak/60">
-            Prefer to do it yourself? In the terminal:{" "}
+            Need to start Ollama first? Copy this command:{" "}
             <button
               class="underline hover:text-text-strong"
-              onClick={() => runInTerminal("ollama", ["serve"], "ollama serve")}
+              aria-label="Copy ollama serve command"
+              onClick={() => void copyCommand("ollama serve")}
             >
               ollama serve
             </button>

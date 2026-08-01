@@ -287,6 +287,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
     const language = useLanguage()
 
     const scope = createMemo(() => sdk.directory)
+    const storage = createMemo(() => sdk.scope)
 
     const directory = createMemo(() => sync.data.path.directory)
 
@@ -436,7 +437,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       return entry.value
     }
 
-    const view = createMemo(() => loadView(params.dir!, params.id))
+    const view = createMemo(() => loadView(storage(), params.id))
 
     function ensure(path: string) {
       if (!path) return

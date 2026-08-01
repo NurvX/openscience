@@ -92,24 +92,6 @@ function run(target) {
     process.exit(1)
   }
 
-  // Clean up files that confuse Bun compiled binaries.
-  // Install dir stays as ~/.openscience/ until the path-migration follow-up PR.
-  const openscienceDir = path.join(os.homedir(), ".openscience")
-  for (const poison of ["package.json", ".gitignore", "bun.lockb", "bunfig.toml"]) {
-    try {
-      fs.unlinkSync(path.join(openscienceDir, poison))
-    } catch {}
-  }
-  try {
-    fs.rmSync(path.join(openscienceDir, "node_modules"), { recursive: true })
-  } catch {}
-  // Clear macOS extended attributes that cause Bun binaries to hang
-  if (os.platform() === "darwin") {
-    try {
-      childProcess.spawnSync("xattr", ["-rc", openscienceDir], { stdio: "ignore" })
-    } catch {}
-  }
-
   const result = childProcess.spawnSync(target, process.argv.slice(2), {
     stdio: "inherit",
   })
@@ -204,22 +186,6 @@ function main() {
     const parent = path.dirname(current)
     if (parent === current) break
     current = parent
-  }
-
-  // Check ~/.openscience/bin (curl installer fallback; dir renamed later)
-  const homeBin = path.join(os.homedir(), ".openscience", "bin", binary)
-  if (isBinary(homeBin)) {
-    run(homeBin)
-  }
-
-  // Check /opt/homebrew/bin (macOS)
-  if (os.platform() === "darwin" && isBinary("/opt/homebrew/bin/openscience")) {
-    run("/opt/homebrew/bin/openscience")
-  }
-
-  // Check /usr/local/bin
-  if (isBinary("/usr/local/bin/openscience")) {
-    run("/usr/local/bin/openscience")
   }
 
   const expectedPackages = expectedPlatformPackages(platform, arch, musl)

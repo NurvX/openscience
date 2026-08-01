@@ -54,6 +54,7 @@ export const FRONTIER_MODELS = new Set([
   "openai/gpt-5-5-pro",
   "openai/gpt-5-5-mini", // announced tier, not yet in the live catalog
   "anthropic/claude-sonnet-5",
+  "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
   "google/gemini-3-6-flash",
   "google/gemini-3-1-pro-preview",

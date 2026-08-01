@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import crypto from "crypto"
@@ -10,6 +10,43 @@ import { OpenScience } from "../../../openscience"
 import { errors } from "../../error"
 import { lazy } from "../../../util/lazy"
 import { ComputeJobs } from "../../../compute/jobs"
+import { Instance } from "../../../project/instance"
+import { InstanceBootstrap } from "../../../project/bootstrap"
+import { HTTPException } from "hono/http-exception"
+import { projectSelection } from "../../project-selection"
+import { Project } from "../../../project/project"
+import { JsonStore } from "../../../util/jsonstore"
+import { SecretFile } from "../../../util/secret-file"
+
+const Directory = z.object({
+  directory: z.string().trim().min(1).optional(),
+})
+
+async function project<T>(context: Context, fn: () => T): Promise<T> {
+  const selected = await projectSelection(context)
+  const directory = selected.directory
+  if (!directory) {
+    throw new HTTPException(400, { message: "Compute project directory does not exist." })
+  }
+  const canonical = await fs.realpath(directory).catch(() => undefined)
+  const info = canonical ? await fs.stat(canonical).catch(() => undefined) : undefined
+  if (!canonical || !info?.isDirectory()) {
+    throw new HTTPException(400, { message: "Compute project directory does not exist." })
+  }
+  return Instance.provide({
+    directory: canonical,
+    init: InstanceBootstrap,
+    async fn() {
+      if (selected.project && Instance.project.id !== selected.project.id) {
+        throw new Project.MismatchError({
+          projectID: selected.project.id,
+          directory: Instance.directory,
+        })
+      }
+      return fn()
+    },
+  })
+}
 
 // ── Compute settings store ──────────────────────────────────────────────────
 //
@@ -21,8 +58,8 @@ import { ComputeJobs } from "../../../compute/jobs"
 //     Vast.ai, RunPod). The provider API key is encrypted AT REST with a
 //     machine-local AES-256-GCM key (mirroring the credentials route) and is
 //     NEVER returned to the client — only presence + metadata are surfaced.
-//   • SSH hosts the agent can dispatch runs to.
-//   • Model endpoints (local or remote inference URLs).
+//   • Legacy SSH host profiles retained for migration. Public dispatch stays
+//     unavailable until the full remote lifecycle is verified end to end.
 //
 // How a stored key actually does something: applyComputeEnv() (mirroring
 // applyCredentialEnv in ./credentials.ts) decrypts each connected provider's
@@ -39,13 +76,7 @@ export namespace ComputeSettings {
 
   // ── Encryption (AES-256-GCM, machine-local key) ──
   async function machineKey(): Promise<Buffer> {
-    const existing = await Bun.file(keyPath)
-      .arrayBuffer()
-      .catch(() => undefined)
-    if (existing && existing.byteLength === 32) return Buffer.from(existing)
-    const key = crypto.randomBytes(32)
-    await Bun.write(keyPath, key, { mode: 0o600 })
-    return key
+    return SecretFile.key(keyPath)
   }
 
   async function encrypt(plain: string): Promise<string> {
@@ -100,14 +131,6 @@ export namespace ComputeSettings {
   export const SshHost = ComputeJobs.Host
   export type SshHost = z.infer<typeof SshHost>
 
-  export const Endpoint = z.object({
-    id: z.string(),
-    label: z.string(),
-    url: z.string(),
-    kind: z.enum(["local", "remote"]),
-  })
-  export type Endpoint = z.infer<typeof Endpoint>
-
   export const Provider = z.object({
     id: z.string(),
     name: z.string(),
@@ -123,7 +146,6 @@ export namespace ComputeSettings {
   export const Info = z.object({
     providers: Provider.array().default([]),
     ssh_hosts: SshHost.array().default([]),
-    endpoints: Endpoint.array().default([]),
   })
   export type Info = z.infer<typeof Info>
 
@@ -136,24 +158,30 @@ export namespace ComputeSettings {
   const Stored = z.object({
     providers: z.record(z.string(), StoredProvider).default({}),
     ssh_hosts: SshHost.array().default([]),
-    endpoints: Endpoint.array().default([]),
   })
   type Stored = z.infer<typeof Stored>
 
-  const EMPTY: Stored = { providers: {}, ssh_hosts: [], endpoints: [] }
+  const EMPTY: Stored = { providers: {}, ssh_hosts: [] }
 
-  async function read(): Promise<Stored> {
-    const parsed = await Bun.file(storePath)
-      .json()
-      .catch(() => null)
-    if (!parsed) return structuredClone(EMPTY)
-    const result = Stored.safeParse(parsed)
+  function parseStored(value: unknown): Stored {
+    const result = Stored.safeParse(value)
     return result.success ? result.data : structuredClone(EMPTY)
   }
 
-  async function write(next: Stored) {
-    await fs.mkdir(Global.Path.data, { recursive: true })
-    await Bun.write(storePath, JSON.stringify(next, null, 2), { mode: 0o600 })
+  async function read(): Promise<Stored> {
+    return parseStored(await JsonStore.read(storePath))
+  }
+
+  async function update(fn: (stored: Stored) => void | Promise<void>): Promise<Stored> {
+    const result: { value?: Stored } = {}
+    await JsonStore.update(storePath, async (data) => {
+      const stored = Stored.parse(data)
+      await fn(stored)
+      result.value = stored
+      return stored
+    })
+    if (!result.value) throw new Error("Compute settings update completed without a store")
+    return result.value
   }
 
   function id() {
@@ -252,7 +280,7 @@ export namespace ComputeSettings {
         last_used: entry?.last_used ?? null,
       }
     })
-    return { providers, ssh_hosts: stored.ssh_hosts, endpoints: stored.endpoints }
+    return { providers, ssh_hosts: stored.ssh_hosts }
   }
 
   export async function get(): Promise<Info> {
@@ -264,54 +292,40 @@ export namespace ComputeSettings {
   }
 
   export async function connectProvider(target: string, key: string): Promise<Info> {
-    const stored = await read()
-    const existing = stored.providers[target]
-    stored.providers[target] = {
-      key: await encrypt(key),
-      connected_at: existing?.connected_at ?? new Date().toISOString(),
-      last_used: existing?.last_used ?? null,
-    }
-    await write(stored)
+    const stored = await update(async (current) => {
+      const existing = current.providers[target]
+      current.providers[target] = {
+        key: await encrypt(key),
+        connected_at: existing?.connected_at ?? new Date().toISOString(),
+        last_used: existing?.last_used ?? null,
+      }
+    })
     return view(stored)
   }
 
   export async function disconnectProvider(target: string): Promise<Info> {
-    const stored = await read()
-    delete stored.providers[target]
-    await write(stored)
+    const stored = await update((current) => {
+      delete current.providers[target]
+    })
     return view(stored)
   }
 
   export async function addSshHost(input: Omit<SshHost, "id">): Promise<Info> {
-    const stored = await read()
-    stored.ssh_hosts.push({ id: id(), ...input })
-    await write(stored)
+    const stored = await update((current) => {
+      current.ssh_hosts.push({ id: id(), ...input })
+    })
     return view(stored)
   }
 
   export async function removeSshHost(target: string): Promise<Info> {
-    const stored = await read()
-    stored.ssh_hosts = stored.ssh_hosts.filter((h) => h.id !== target)
-    await write(stored)
+    const stored = await update((current) => {
+      current.ssh_hosts = current.ssh_hosts.filter((h) => h.id !== target)
+    })
     return view(stored)
   }
 
   export async function findSshHost(target: string): Promise<SshHost | undefined> {
     return (await read()).ssh_hosts.find((host) => host.id === target)
-  }
-
-  export async function addEndpoint(input: Omit<Endpoint, "id">): Promise<Info> {
-    const stored = await read()
-    stored.endpoints.push({ id: id(), ...input })
-    await write(stored)
-    return view(stored)
-  }
-
-  export async function removeEndpoint(target: string): Promise<Info> {
-    const stored = await read()
-    stored.endpoints = stored.endpoints.filter((e) => e.id !== target)
-    await write(stored)
-    return view(stored)
   }
 }
 
@@ -422,38 +436,6 @@ export const ComputeSettingsRoutes = lazy(() =>
       validator("param", z.object({ id: z.string() })),
       async (c) => c.json(await ComputeSettings.removeSshHost(c.req.valid("param").id)),
     )
-    .post(
-      "/endpoint",
-      describeRoute({
-        summary: "Add model endpoint",
-        operationId: "settings.compute.endpoint.add",
-        responses: {
-          200: { description: "Updated", content: { "application/json": { schema: resolver(ComputeSettings.Info) } } },
-          ...errors(400),
-        },
-      }),
-      validator(
-        "json",
-        z.object({
-          label: z.string().min(1),
-          url: z.string().min(1),
-          kind: z.enum(["local", "remote"]),
-        }),
-      ),
-      async (c) => c.json(await ComputeSettings.addEndpoint(c.req.valid("json"))),
-    )
-    .delete(
-      "/endpoint/:id",
-      describeRoute({
-        summary: "Remove model endpoint",
-        operationId: "settings.compute.endpoint.remove",
-        responses: {
-          200: { description: "Updated", content: { "application/json": { schema: resolver(ComputeSettings.Info) } } },
-        },
-      }),
-      validator("param", z.object({ id: z.string() })),
-      async (c) => c.json(await ComputeSettings.removeEndpoint(c.req.valid("param").id)),
-    )
     .get(
       "/jobs",
       describeRoute({
@@ -466,27 +448,39 @@ export const ComputeSettingsRoutes = lazy(() =>
           },
         },
       }),
-      async (c) => c.json(await ComputeJobs.list()),
+      validator("query", Directory),
+      async (c) =>
+        project(c, async () => {
+          return c.json(await ComputeJobs.list())
+        }),
     )
     .post(
       "/jobs",
       describeRoute({
-        summary: "Start a local, SSH, Slurm, or PBS compute job",
+        summary: "Start a local compute job",
         operationId: "settings.compute.jobs.start",
         responses: {
           200: { description: "Started job", content: { "application/json": { schema: resolver(ComputeJobs.Job) } } },
-          ...errors(400),
+          ...errors(400, 409),
         },
       }),
-      validator("json", ComputeJobs.Input),
+      validator("query", Directory),
+      validator("json", ComputeJobs.Request),
       async (c) => {
-        const settings = await ComputeSettings.get()
-        const input = c.req.valid("json")
-        const hostId = input.target.kind === "ssh" ? input.target.host_id : undefined
-        if (hostId && !settings.ssh_hosts.some((host) => host.id === hostId)) {
-          return c.json({ error: "The selected SSH compute profile was not found" }, 400)
-        }
-        return c.json(await ComputeJobs.start(input, { hosts: settings.ssh_hosts }))
+        return project(c, async () => {
+          const input = c.req.valid("json")
+          if (input.target.kind === "ssh") {
+            return c.json(
+              {
+                error: "remote_compute_unavailable",
+                message:
+                  "SSH dispatch is unavailable until staged inputs, durable remote IDs, reattachment, cancellation, logs, and outputs pass real-host validation.",
+              },
+              409,
+            )
+          }
+          return c.json(await ComputeJobs.start(input))
+        })
       },
     )
     .delete(
@@ -503,7 +497,11 @@ export const ComputeSettingsRoutes = lazy(() =>
           },
         },
       }),
-      async (c) => c.json({ cleared: await ComputeJobs.clear() }),
+      validator("query", Directory),
+      async (c) =>
+        project(c, async () => {
+          return c.json({ cleared: await ComputeJobs.clear() })
+        }),
     )
     .get(
       "/jobs/:id/log",
@@ -519,10 +517,13 @@ export const ComputeSettingsRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ id: z.string() })),
+      validator("query", Directory),
       async (c) => {
-        const job = await ComputeJobs.get(c.req.valid("param").id)
-        if (!job) return c.json({ error: "Compute job not found" }, 404)
-        return c.json({ log: await ComputeJobs.log(job.id) })
+        return project(c, async () => {
+          const job = await ComputeJobs.get(c.req.valid("param").id)
+          if (!job) return c.json({ error: "Compute job not found" }, 404)
+          return c.json({ log: await ComputeJobs.log(job.id) })
+        })
       },
     )
     .post(
@@ -536,11 +537,14 @@ export const ComputeSettingsRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ id: z.string() })),
+      validator("query", Directory),
       async (c) => {
-        const settings = await ComputeSettings.get()
-        const job = await ComputeJobs.get(c.req.valid("param").id)
-        if (!job) return c.json({ error: "Compute job not found" }, 404)
-        return c.json(await ComputeJobs.cancel(job.id, { hosts: settings.ssh_hosts }))
+        return project(c, async () => {
+          const settings = await ComputeSettings.get()
+          const job = await ComputeJobs.get(c.req.valid("param").id)
+          if (!job) return c.json({ error: "Compute job not found" }, 404)
+          return c.json(await ComputeJobs.cancel(job.id, { hosts: settings.ssh_hosts }))
+        })
       },
     ),
 )

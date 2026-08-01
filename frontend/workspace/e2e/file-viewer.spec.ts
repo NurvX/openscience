@@ -1,19 +1,13 @@
 import { test, expect } from "./fixtures"
-test("smoke file viewer renders real file content", async ({ page, gotoSession }) => {
-  await gotoSession()
+import { openFilesSources, openWorkspaceFile } from "./utils"
 
-  await page.getByRole("tab", { name: "Files", exact: true }).click()
-  await expect(page.getByPlaceholder("/absolute/path")).toBeVisible()
-  await expect(page.getByRole("button", { name: /^artifacts$/i })).toHaveCount(0)
-  await page.getByPlaceholder("filter this folder…").fill("package.json")
+test("smoke file viewer renders real file content", async ({ page, openSession }) => {
+  await openSession()
 
-  const fileItem = page.getByRole("button", { name: /^package\.json\b/ }).first()
-  await expect(fileItem).toBeVisible()
-  await fileItem.click()
+  await openFilesSources(page)
+  await expect(page.getByRole("button", { name: "Open session files", exact: true })).toBeEnabled()
+  await expect(page.getByRole("button", { name: "Connect another location", exact: true })).toBeVisible()
 
-  const tab = page.locator('[role="tab"][title="package.json"]')
-  await expect(tab).toBeVisible()
-  await expect(tab).toHaveAttribute("aria-selected", "true")
-
+  await openWorkspaceFile(page, "package.json")
   await expect(page.getByText("@synsci/monorepo")).toBeVisible()
 })

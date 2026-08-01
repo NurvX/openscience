@@ -1,8 +1,8 @@
-import { For, Show, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { For, Show, createMemo, createResource, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { useParams } from "@solidjs/router"
 import { Markdown } from "@synsci/ui/markdown"
 import { Diff } from "@synsci/ui/diff"
 import { useSDK } from "@/context/sdk"
-import { usePlatform } from "@/context/platform"
 import { FONT_CODE, FONT_MONO, FONT_SANS } from "@/styles/tokens"
 import {
   clearOutputs,
@@ -21,9 +21,17 @@ import {
   type NotebookDocument,
   type NotebookOutput,
 } from "./model"
+import {
+  kernelCanInterrupt,
+  kernelStateLabel,
+  kernelStatusText,
+  kernelTone,
+  resolveNotebookSession,
+  type KernelState,
+  type KernelStatus,
+} from "./runtime"
 
 type Language = "python" | "r"
-type State = "idle" | "ready" | "running" | "error"
 
 type Execution = {
   ok: boolean
@@ -61,9 +69,9 @@ export function NotebookView(props: {
   onRaw: () => void
 }): JSX.Element {
   const sdk = useSDK()
-  const platform = usePlatform()
-  const [state, setState] = createSignal<State>("idle")
+  const params = useParams()
   const [running, setRunning] = createSignal<string[]>([])
+  const [owner, setOwner] = createSignal<string>()
   const [editing, setEditing] = createSignal<string>()
   const [error, setError] = createSignal("")
   const [diff, setDiff] = createSignal(false)
@@ -81,10 +89,24 @@ export function NotebookView(props: {
   })
   const notebook = () => parsed().notebook
   const language = () => (notebook() ? languageOf(notebook()!) : "python")
+  const session = () => (params.id && params.id !== "new" ? params.id : owner())
   const busy = () => running().length > 0
-  const endpoint = (path: string) =>
-    `${sdk.url.replace(/\/$/, "")}/notebook/${path}?directory=${encodeURIComponent(props.directory)}`
-  const send = platform.fetch ?? fetch
+  const source = () => {
+    const sessionID = session()
+    if (!sessionID || !notebook()) return
+    return { sessionID, id: props.path, language: language() }
+  }
+  const [runtime, api] = createResource(source, async (input) => {
+    const response = await sdk.request("/notebook/status", undefined, input)
+    if (!response.ok) throw new Error(`status failed (${response.status})`)
+    return response.json() as Promise<KernelStatus>
+  })
+  const status = (): KernelState => runtime()?.state ?? "stopped"
+  const tone = () => kernelTone(status())
+  const timer = setInterval(() => {
+    if (source()) void api.refetch()
+  }, 1_000)
+  onCleanup(() => clearInterval(timer))
 
   const apply = (next: NotebookDocument) => props.onChange(serializeNotebook(next))
   const replace = (index: number, next: NotebookCell) => {
@@ -96,15 +118,23 @@ export function NotebookView(props: {
     })
   }
 
+  const ensureSession = async () => {
+    const current = session()
+    const id = await resolveNotebookSession(current, () => sdk.client.session.create())
+    if (!current) setOwner(id)
+    return id
+  }
+
   const call = async (path: "restart" | "interrupt") => {
     setError("")
-    const response = await send(endpoint(path), {
+    if (!session()) throw new Error("Open a session before starting a kernel.")
+    const response = await sdk.request(`/notebook/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: props.path, language: language() }),
+      body: JSON.stringify({ sessionID: session(), id: props.path, language: language() }),
     })
     if (!response.ok) throw new Error(`${path} failed (${response.status})`)
-    setState("idle")
+    api.mutate((await response.json()) as KernelStatus)
   }
 
   const runCell = async (index: number) => {
@@ -113,13 +143,14 @@ export function NotebookView(props: {
     if (!current || !cell || cell.cell_type !== "code" || busy()) return
 
     setRunning([cell.id])
-    setState("running")
     setError("")
     try {
-      const response = await send(endpoint("execute"), {
+      const sessionID = await ensureSession()
+      const response = await sdk.request("/notebook/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          sessionID,
           id: props.path,
           language: language(),
           code: sourceText(cell),
@@ -145,7 +176,6 @@ export function NotebookView(props: {
         execution_count: result.execution_count,
         outputs: result.outputs,
       })
-      setState(result.ok ? "ready" : "error")
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
       replace(index, {
@@ -154,9 +184,9 @@ export function NotebookView(props: {
         outputs: [{ output_type: "error", ename: "ExecutionError", evalue: message, traceback: [] }],
       })
       setError(message)
-      setState("error")
     } finally {
       setRunning([])
+      void api.refetch()
     }
   }
 
@@ -233,11 +263,6 @@ export function NotebookView(props: {
     }
     window.addEventListener("keydown", onKey)
     onCleanup(() => window.removeEventListener("keydown", onKey))
-
-    void send(`${endpoint("status")}&id=${encodeURIComponent(props.path)}&language=${encodeURIComponent(language())}`)
-      .then((response) => response.json())
-      .then((result: { active?: boolean }) => setState(result.active ? "ready" : "idle"))
-      .catch(() => setState("idle"))
   })
 
   return (
@@ -298,25 +323,25 @@ export function NotebookView(props: {
                 <option value="r">R</option>
               </select>
               <span
-                aria-label={`Kernel ${state()}`}
+                aria-label={`Kernel ${kernelStateLabel(status())}`}
                 style={{
                   width: "6px",
                   height: "6px",
                   "border-radius": "50%",
                   background:
-                    state() === "running"
+                    tone() === "active"
                       ? "var(--color-warning, #d99b35)"
-                      : state() === "error"
+                      : tone() === "danger"
                         ? "var(--color-danger, #d85b5b)"
-                        : state() === "ready"
+                        : tone() === "ready"
                           ? "var(--color-success, #4a9b71)"
                           : "var(--color-text-faint)",
                   "box-shadow":
-                    state() === "running" ? "0 0 0 4px color-mix(in srgb, #d99b35 18%, transparent)" : "none",
+                    status() === "running" ? "0 0 0 4px color-mix(in srgb, #d99b35 18%, transparent)" : "none",
                 }}
               />
               <span style={{ "font-family": FONT_MONO, "font-size": "10px", color: "var(--color-text-faint)" }}>
-                {state()}
+                {kernelStatusText(runtime())}
               </span>
               <div style={{ flex: 1 }} />
               <button
@@ -381,7 +406,7 @@ export function NotebookView(props: {
               <button
                 type="button"
                 data-action="interrupt-kernel"
-                disabled={!busy()}
+                disabled={!kernelCanInterrupt(runtime())}
                 style={button()}
                 onClick={() => void call("interrupt").catch((cause) => setError(String(cause)))}
               >
@@ -390,6 +415,8 @@ export function NotebookView(props: {
               <button
                 type="button"
                 data-action="restart-kernel"
+                aria-label="Restart kernel and clear in-memory state"
+                title="Restart in a fresh runtime. All in-memory variables and queued cells will be lost."
                 style={button()}
                 onClick={() => void call("restart").catch((cause) => setError(String(cause)))}
               >

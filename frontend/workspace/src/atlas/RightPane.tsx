@@ -1,175 +1,273 @@
-import { createSignal, createMemo, createEffect, onCleanup, onMount, type JSX, For, Show, Suspense } from "solid-js"
-import { FONT_MONO, FONT_SANS, sectionTitle } from "@/styles/tokens"
-import { useSDK } from "@/context/sdk"
-import { useDialog } from "@synsci/ui/context/dialog"
-import { useTerminal } from "@/context/terminal"
-import { Terminal } from "@/components/terminal"
-import { uiStore, type RightPaneTab } from "@/atlas/store/ui"
-import { SkillLibraryDialog } from "@/atlas/SkillsBrowser"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Match,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+  Suspense,
+  Switch,
+  type JSX,
+} from "solid-js"
+import { uiStore, type ContextTab, type WorkTab } from "@/atlas/store/ui"
 import { AtlasCanvas } from "@/atlas/AtlasCanvas"
-import { ComputeJobs } from "@/atlas/ComputeJobs"
-import { EvidenceGraph } from "@/atlas/EvidenceGraph"
+import { ComputeSurface } from "@/atlas/ComputeSurface"
+import { ExternalFileAccess, FileExplorer } from "@/atlas/FileExplorer"
+import { FileView } from "@/atlas/FilePreview"
+import { TerminalSurface } from "@/atlas/TerminalSurface"
+import { SessionTraceSurface } from "@/atlas/SessionTraceSurface"
 import { artifactContext } from "@/artifacts/context"
 import { ArtifactInspector } from "@/artifacts/ArtifactInspector"
-import { toast } from "@/atlas/Toast"
+import { StoredArtifactView } from "@/artifacts/StoredArtifactView"
 import { AsciiSpinner } from "@/atlas/shared/AsciiSpinner"
+import { IconChevronLeft, IconX } from "@/atlas/shared/Icon"
 import {
-  IconAtom,
-  IconLayoutGrid,
-  IconBraces,
-  IconChevronRight,
-  IconChevronLeft,
-  IconSettings,
-  IconTerminal,
-  IconActivity,
-  IconNetwork,
-} from "@/atlas/shared/Icon"
+  DEFAULT_PANE_WIDTH,
+  MAX_PANE_WIDTH,
+  MIN_PANE_WIDTH,
+  INLINE_PANE_BREAKPOINT,
+  clampPaneWidth,
+  paneWidthForViewport,
+  paneWidthKey,
+  readPaneWidth,
+  savePaneWidth,
+} from "@/atlas/right-pane-layout"
 
-const RIGHT_PANE_WIDTH_KEY = "openscience-research-inspector-width-v2"
-const MIN_PANE_WIDTH = 280
-const MAX_PANE_WIDTH = 680
-
-function readSavedWidth(): number {
-  try {
-    const v = Number(localStorage.getItem(RIGHT_PANE_WIDTH_KEY))
-    if (Number.isFinite(v) && v >= MIN_PANE_WIDTH && v <= MAX_PANE_WIDTH) return v
-  } catch {}
-  return 360
+const RESIZE_STEP = 16
+const labels: Record<ContextTab, string> = {
+  artifact: "Artifact details",
+  files: "Files",
+  terminal: "Terminal",
+  canvas: "Atlas",
+  kernels: "Compute",
+  trace: "Trace",
 }
 
-export function RightPane(): JSX.Element {
-  const tab = uiStore.rightPaneTab
-  const setTab = uiStore.setRightPaneTab
-  const artifact = artifactContext.active
-  const artifactMode = () => Boolean(artifact()) && uiStore.rightPaneMode() === "artifact"
-  // Keep-alive: once a tab has been opened it stays mounted (hidden via CSS),
-  // so switching tabs never re-mounts/re-fetches/re-animates — no flash.
-  const [visited, setVisited] = createSignal<Set<RightPaneTab>>(new Set([tab()]))
+export function RightPaneGate(props: { children: JSX.Element }): JSX.Element {
+  createEffect(() => uiStore.syncArtifact(Boolean(artifactContext.active())))
+  return <Show when={uiStore.rightPaneOpen()}>{props.children}</Show>
+}
+
+const focusable =
+  'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
+
+export function RightPaneFrame(props: {
+  modal: boolean
+  mobile: boolean
+  stacked: boolean
+  width: number
+  onClose: () => void
+  children: JSX.Element
+}): JSX.Element {
+  const refs: {
+    pane?: HTMLElement
+    prior?: HTMLElement
+    modal: boolean
+  } = { modal: false }
+
   createEffect(() => {
-    const t = tab()
-    setVisited((prev) => (prev.has(t) ? prev : new Set(prev).add(t)))
+    if (!props.modal) {
+      refs.modal = false
+      refs.prior = undefined
+      return
+    }
+    if (refs.modal) return
+    refs.modal = true
+    const active = document.activeElement
+    refs.prior = active instanceof HTMLElement && !refs.pane?.contains(active) ? active : undefined
+    queueMicrotask(() => {
+      if (!refs.modal || !refs.pane) return
+      const initial =
+        refs.pane.querySelector<HTMLElement>("[data-modal-initial-focus]") ??
+        refs.pane.querySelector<HTMLElement>(focusable)
+      ;(initial ?? refs.pane).focus()
+    })
   })
-  const dialog = useDialog()
-  const [width, setWidth] = createSignal(readSavedWidth())
-  const [narrow, setNarrow] = createSignal(typeof window !== "undefined" && window.innerWidth < 1100)
-  const [panelMenu, setPanelMenu] = createSignal(false)
+
+  onCleanup(() => {
+    const prior = refs.modal ? refs.prior : undefined
+    refs.modal = false
+    if (!prior?.isConnected) return
+    prior.focus()
+  })
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!props.modal) return
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      props.onClose()
+      return
+    }
+    if (event.key !== "Tab" || !refs.pane) return
+    const items = Array.from(refs.pane.querySelectorAll<HTMLElement>(focusable)).filter(
+      (item) => item.getAttribute("aria-hidden") !== "true",
+    )
+    if (!items.length) {
+      event.preventDefault()
+      refs.pane.focus()
+      return
+    }
+    const active = document.activeElement
+    const first = items[0]
+    const last = items[items.length - 1]
+    if (event.shiftKey && (active === first || !refs.pane.contains(active))) {
+      event.preventDefault()
+      last.focus()
+      return
+    }
+    if (event.shiftKey || (active !== last && refs.pane.contains(active))) return
+    event.preventDefault()
+    first.focus()
+  }
+
+  return (
+    <>
+      <Show when={props.modal}>
+        <button
+          type="button"
+          class="session-right-pane-backdrop"
+          aria-label="Close inspector overlay"
+          aria-hidden="true"
+          tabindex={-1}
+          onClick={props.onClose}
+          style={{
+            all: "unset",
+            position: "fixed",
+            inset: 0,
+            "z-index": 69,
+            cursor: "default",
+            background: "color-mix(in srgb, var(--color-bg) 62%, transparent)",
+            "backdrop-filter": "blur(1px)",
+          }}
+        />
+      </Show>
+      <aside
+        ref={(element) => (refs.pane = element)}
+        class="session-right-pane"
+        aria-label="Research inspector"
+        role={props.modal ? "dialog" : undefined}
+        aria-modal={props.modal ? "true" : undefined}
+        tabindex={props.modal ? -1 : undefined}
+        data-overlay={props.modal ? "true" : "false"}
+        data-mobile={props.mobile ? "true" : "false"}
+        data-stacked={props.stacked ? "true" : "false"}
+        onKeyDown={onKeyDown}
+        style={{
+          flex: props.modal || props.stacked ? "none" : `0 0 ${props.width}px`,
+          width: props.mobile
+            ? "100vw"
+            : props.stacked
+              ? "100%"
+              : props.modal
+                ? "min(520px, calc(100vw - 48px))"
+                : `${props.width}px`,
+          height: props.stacked ? "100%" : undefined,
+          "min-width": props.mobile || props.stacked ? "0" : props.modal ? "360px" : `${MIN_PANE_WIDTH}px`,
+          position: props.modal ? "fixed" : "relative",
+          top: props.modal ? "0" : undefined,
+          right: props.modal ? "0" : undefined,
+          bottom: props.modal ? "0" : undefined,
+          "z-index": props.modal ? 70 : undefined,
+        }}
+      >
+        {props.children}
+      </aside>
+    </>
+  )
+}
+
+export function RightPane(props: { project?: string; session?: string; route?: string } = {}): JSX.Element {
+  const context = uiStore.context
+  const artifact = artifactContext.active
+  const project = () => props.project ?? props.route ?? window.location.pathname
+  const session = () => props.session ?? "new"
+  const key = createMemo(() => paneWidthKey(project(), session()))
+  const legacy = createMemo(() =>
+    props.project && props.session ? [paneWidthKey(`${props.project}/${props.session}`)] : [],
+  )
+  const initial = () => {
+    try {
+      return readPaneWidth(key(), localStorage, legacy())
+    } catch {
+      return DEFAULT_PANE_WIDTH
+    }
+  }
+  const [width, setWidth] = createSignal(initial())
+  const [viewport, setViewport] = createSignal(typeof window === "undefined" ? 1440 : window.innerWidth)
+  const [narrow, setNarrow] = createSignal(typeof window !== "undefined" && window.innerWidth < INLINE_PANE_BREAKPOINT)
+  const paneWidth = createMemo(() => paneWidthForViewport(width(), viewport()))
+  const drag = { start: null as { x: number; width: number } | null }
+
+  createEffect(on(key, () => setWidth(initial())))
+
   onMount(() => {
-    const resize = () => setNarrow(window.innerWidth < 1100)
+    const resize = () => {
+      setViewport(window.innerWidth)
+      setNarrow(window.innerWidth < INLINE_PANE_BREAKPOINT)
+    }
     window.addEventListener("resize", resize)
     onCleanup(() => window.removeEventListener("resize", resize))
   })
-  const openSkillLibrary = () =>
-    dialog.show(() => <SkillLibraryDialog onPick={(name) => uiStore.setPrefill(`/${name} `)} />)
-  const TABS: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[] =
-    [
-      { k: "canvas", label: "Atlas", Icon: IconLayoutGrid },
-      { k: "evidence", label: "Evidence", Icon: IconNetwork },
-      { k: "jobs", label: "Compute", Icon: IconActivity },
-      { k: "terminal", label: "Terminal", Icon: IconTerminal },
-    ]
-  const visibleTabs = createMemo(() => TABS.filter((t) => !uiStore.isTabHidden(t.k)))
-  // Keep the active tab pointed at a visible one.
-  createEffect(() => {
-    const vis = visibleTabs()
-    if (vis.length && !vis.some((t) => t.k === tab())) setTab(vis[0].k)
-  })
-  // Run a command requested from elsewhere (e.g. the Local models settings
-  // panel's "run in terminal") in a fresh terminal tab, then reveal it.
-  const terminal = useTerminal()
-  createEffect(() => {
-    const cmd = uiStore.terminalCommand()
-    if (!cmd) return
-    terminal.new({ command: cmd.command, args: cmd.args, title: cmd.title })
-    setTab("terminal")
-    uiStore.setRightPaneOpen(true)
-    uiStore.setTerminalCommand(undefined)
-  })
-  let dragStart: { x: number; w: number } | null = null
 
-  const onHandlePointerDown = (e: PointerEvent) => {
-    dragStart = { x: e.clientX, w: width() }
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  const onHandlePointerDown = (event: PointerEvent) => {
+    drag.start = { x: event.clientX, width: paneWidth() }
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
     document.body.style.cursor = "ew-resize"
-    e.preventDefault()
+    event.preventDefault()
   }
-  const onHandlePointerMove = (e: PointerEvent) => {
-    if (!dragStart) return
-    // Drag left = wider (handle is on left edge of right pane).
-    const next = Math.max(MIN_PANE_WIDTH, Math.min(MAX_PANE_WIDTH, dragStart.w + (dragStart.x - e.clientX)))
+  const onHandlePointerMove = (event: PointerEvent) => {
+    if (!drag.start) return
+    const next = clampPaneWidth(drag.start.width + (drag.start.x - event.clientX))
     setWidth(next)
   }
-  const onHandlePointerUp = (e: PointerEvent) => {
-    if (!dragStart) return
-    dragStart = null
-    ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
+  const onHandlePointerUp = (event: PointerEvent) => {
+    if (!drag.start) return
+    drag.start = null
+    ;(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId)
     document.body.style.cursor = ""
     try {
-      localStorage.setItem(RIGHT_PANE_WIDTH_KEY, String(width()))
+      savePaneWidth(key(), width())
+    } catch {}
+  }
+  const onHandleKeyDown = (event: KeyboardEvent) => {
+    const delta = event.key === "ArrowLeft" ? RESIZE_STEP : event.key === "ArrowRight" ? -RESIZE_STEP : 0
+    if (!delta) return
+    event.preventDefault()
+    const next = clampPaneWidth(paneWidth() + delta)
+    setWidth(next)
+    try {
+      savePaneWidth(key(), next)
     } catch {}
   }
 
   return (
-    <Show
-      when={uiStore.rightPaneOpen()}
-      fallback={
-        <CollapsedRail
-          artifact={Boolean(artifact())}
-          onInspect={() => {
-            uiStore.setRightPaneMode("artifact")
-            uiStore.setRightPaneOpen(true)
-          }}
-          tabs={visibleTabs()}
-          onOpen={(t) => {
-            if (t) {
-              setTab(t)
-              uiStore.setRightPaneMode("tools")
-            }
-            uiStore.setRightPaneOpen(true)
-          }}
-        />
-      }
-    >
-      <>
-        <Show when={narrow()}>
-          <button
-            type="button"
-            class="session-right-pane-backdrop"
-            aria-label="Close inspector overlay"
-            onClick={() => uiStore.setRightPaneOpen(false)}
-            style={{
-              all: "unset",
-              position: "fixed",
-              inset: 0,
-              "z-index": 69,
-              cursor: "default",
-              background: "color-mix(in srgb, var(--color-bg) 62%, transparent)",
-              "backdrop-filter": "blur(1px)",
-            }}
-          />
-        </Show>
-        <aside
-          class="session-right-pane"
-          data-overlay={narrow() ? "true" : "false"}
-          style={{
-            flex: narrow() ? "none" : `0 0 ${width()}px`,
-            width: narrow() ? "min(380px, calc(100vw - 44px))" : `${width()}px`,
-            "min-width": narrow() ? "280px" : `${MIN_PANE_WIDTH}px`,
-            position: narrow() ? "fixed" : "relative",
-            top: narrow() ? "0" : undefined,
-            right: narrow() ? "0" : undefined,
-            bottom: narrow() ? "0" : undefined,
-            "z-index": narrow() ? 70 : undefined,
-          }}
-        >
-          {/* Drag handle on the left edge of the right pane. 6px wide, full
-          height, invisible until hover. Cursor goes ew-resize. */}
+    <RightPaneGate>
+      <RightPaneFrame
+        modal={narrow()}
+        mobile={narrow()}
+        stacked={false}
+        width={paneWidth()}
+        onClose={uiStore.closeContext}
+      >
+        <>
           <div
             role="separator"
             aria-orientation="vertical"
+            aria-label="Resize research inspector"
+            aria-valuemin={MIN_PANE_WIDTH}
+            aria-valuemax={MAX_PANE_WIDTH}
+            aria-valuenow={paneWidth()}
+            tabindex={narrow() ? -1 : 0}
+            onKeyDown={onHandleKeyDown}
             on:pointerdown={onHandlePointerDown}
             on:pointermove={onHandlePointerMove}
             on:pointerup={onHandlePointerUp}
             on:pointercancel={onHandlePointerUp}
+            aria-hidden={narrow() ? "true" : undefined}
             style={{
               position: "absolute",
               left: "-3px",
@@ -180,449 +278,186 @@ export function RightPane(): JSX.Element {
               "z-index": 5,
               "touch-action": "none",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-accent-subtle)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            onMouseEnter={(event) => (event.currentTarget.style.background = "var(--color-accent-subtle)")}
+            onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
           />
-          <div class="research-inspector__tabs" role="tablist">
-            <div class="research-inspector__tab-list">
-              <Show when={artifact()}>
-                <TabBtn
-                  k="artifact"
-                  label="Details"
-                  Icon={IconAtom}
-                  active={artifactMode()}
-                  onClick={() => uiStore.setRightPaneMode("artifact")}
-                />
-              </Show>
-              <For each={visibleTabs()}>
-                {(t) => (
-                  <TabBtn
-                    k={t.k}
-                    label={t.label}
-                    Icon={t.Icon}
-                    active={!artifactMode() && tab() === t.k}
-                    onClick={() => {
-                      setTab(t.k)
-                      uiStore.setRightPaneMode("tools")
-                    }}
-                  />
-                )}
-              </For>
+          <div class="research-inspector__header">
+            <div class="research-inspector__context">
+              <span>Research</span>
+              <strong>
+                {context() === "files" && uiStore.file()
+                  ? uiStore.file()!.name
+                  : context() === "files" && uiStore.saved()
+                    ? uiStore.saved()!.title
+                    : labels[context()]}
+              </strong>
             </div>
             <div class="research-inspector__controls">
-              <button class="research-inspector__control" onClick={openSkillLibrary} title="skill library">
-                <IconBraces size={12} strokeWidth={1.5} />
-              </button>
               <button
+                type="button"
                 class="research-inspector__control"
-                data-active={panelMenu() ? "true" : "false"}
-                onClick={() => setPanelMenu((v) => !v)}
-                title="panel settings"
+                onClick={() => (narrow() ? uiStore.closeContext() : uiStore.closeWorkTab())}
+                title={narrow() ? "Back to conversation" : "Close context"}
+                aria-label={narrow() ? "Back to conversation" : "Close context"}
+                data-modal-initial-focus
               >
-                <IconSettings size={12} strokeWidth={1.5} />
-              </button>
-              <Show when={panelMenu()}>
-                <div
-                  onMouseLeave={() => setPanelMenu(false)}
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    right: "2px",
-                    "margin-top": "2px",
-                    background: "var(--color-surface-solid)",
-                    border: "1px solid var(--color-border-strong)",
-                    "border-radius": "4px",
-                    "box-shadow": "var(--shadow-md)",
-                    padding: "5px",
-                    "z-index": 40,
-                    "min-width": "150px",
-                  }}
-                >
-                  <div style={paneMenuLabel}>show in panel</div>
-                  <For each={TABS}>
-                    {(t) => (
-                      <button onClick={() => uiStore.toggleTabHidden(t.k)} style={paneMenuRow()}>
-                        <t.Icon size={12} strokeWidth={1.5} />
-                        <span style={{ flex: 1, "text-align": "left" }}>{t.label ?? t.k}</span>
-                        <span
-                          style={{
-                            "font-family": FONT_MONO,
-                            "font-size": "10px",
-                            color: uiStore.isTabHidden(t.k) ? "var(--color-text-faint)" : "var(--color-success)",
-                          }}
-                        >
-                          {uiStore.isTabHidden(t.k) ? "off" : "on"}
-                        </span>
-                      </button>
-                    )}
-                  </For>
-                  <div style={{ height: "1px", background: "var(--color-border)", margin: "4px 2px" }} />
-                  <button
-                    onClick={() => {
-                      uiStore.setRightPaneOpen(false)
-                      setPanelMenu(false)
-                    }}
-                    style={paneMenuRow()}
-                  >
-                    <IconChevronRight size={12} strokeWidth={1.5} />
-                    <span style={{ flex: 1, "text-align": "left" }}>hide panel</span>
-                  </button>
-                </div>
-              </Show>
-              <button
-                class="research-inspector__control"
-                onClick={() => uiStore.setRightPaneOpen(false)}
-                title="hide panel"
-              >
-                <IconChevronRight size={13} strokeWidth={1.5} />
+                <Show when={narrow()} fallback={<IconX size={17} strokeWidth={1.6} />}>
+                  <IconChevronLeft size={17} strokeWidth={1.6} />
+                </Show>
               </button>
             </div>
           </div>
-          <div style={{ flex: 1, "min-height": 0, position: "relative", display: "flex", "flex-direction": "column" }}>
-            <Show when={artifactMode() && artifact()}>
-              {(current) => <ArtifactInspector context={current()} onClose={() => uiStore.setRightPaneMode("tools")} />}
+          <Show when={uiStore.workTabs().length > 0}>
+            <WorkTabStrip
+              tabs={uiStore.workTabs()}
+              active={uiStore.activeWorkTab()}
+              onSelect={uiStore.activateWorkTab}
+              onClose={uiStore.closeWorkTab}
+              onReorder={uiStore.moveWorkTab}
+            />
+          </Show>
+          <Suspense fallback={<InspectorLoading label={labels[context()]} />}>
+            <Show when={uiStore.file()} keyed>
+              {(file) => (
+                <div
+                  aria-hidden={context() === "files" ? undefined : "true"}
+                  style={{
+                    flex: 1,
+                    "min-height": 0,
+                    "min-width": 0,
+                    display: context() === "files" ? "flex" : "none",
+                    "flex-direction": "column",
+                  }}
+                >
+                  <Show
+                    when={!file.external}
+                    fallback={
+                      <ExternalFileAccess
+                        file={file}
+                        active={context() === "files" || context() === "artifact"}
+                        onClose={() => uiStore.closeFile()}
+                      />
+                    }
+                  >
+                    <FileView
+                      directory={file.directory}
+                      path={file.path}
+                      subtitle="Session files"
+                      active={context() === "files" || context() === "artifact"}
+                      onClose={() => uiStore.closeFile()}
+                    />
+                  </Show>
+                </div>
+              )}
             </Show>
-            <div
-              style={{
-                display: artifactMode() ? "none" : "flex",
-                flex: artifactMode() ? undefined : 1,
-                "min-height": 0,
-                "flex-direction": "column",
-              }}
-            >
-              <KeepAlive show={tab() === "canvas"} mounted={visited().has("canvas")}>
-                <CanvasTab />
-              </KeepAlive>
-              <KeepAlive show={tab() === "jobs"} mounted={visited().has("jobs")}>
-                <ComputeJobs />
-              </KeepAlive>
-              <KeepAlive show={tab() === "evidence"} mounted={visited().has("evidence")}>
-                <Suspense fallback={<EvidenceLoading />}>
-                  <EvidenceGraph active={tab() === "evidence"} />
-                </Suspense>
-              </KeepAlive>
-              <KeepAlive show={tab() === "terminal"} mounted={visited().has("terminal")}>
-                <TerminalTab />
-              </KeepAlive>
-            </div>
-          </div>
-        </aside>
-      </>
-    </Show>
+            <Switch>
+              <Match when={context() === "artifact" && artifact()}>
+                {(current) => <ArtifactInspector context={current()} />}
+              </Match>
+              <Match when={context() === "files" && uiStore.saved()}>
+                {(current) => <StoredArtifactView artifact={current()} />}
+              </Match>
+              <Match when={context() === "files" && !uiStore.file() && !uiStore.saved()}>
+                <FileExplorer />
+              </Match>
+              <Match when={context() === "terminal"}>
+                <TerminalSurface />
+              </Match>
+              <Match when={context() === "canvas"}>
+                <AtlasCanvas />
+              </Match>
+              <Match when={context() === "kernels"}>
+                <ComputeSurface />
+              </Match>
+              <Match when={context() === "trace"}>
+                <SessionTraceSurface session={session()} />
+              </Match>
+            </Switch>
+          </Suspense>
+        </>
+      </RightPaneFrame>
+    </RightPaneGate>
   )
 }
 
-function TerminalTab(): JSX.Element {
-  const terminal = useTerminal()
-  const sdk = useSDK()
-  const loopback = () => {
-    try {
-      const host = new URL(sdk.url).hostname
-      return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]"
-    } catch {
-      return false
-    }
-  }
+const WORK_TAB_DRAG = "text/openscience-work-tab"
 
-  return (
-    <div style={{ flex: 1, "min-height": 0, display: "flex", "flex-direction": "column" }}>
-      <div
-        style={{
-          display: "flex",
-          "align-items": "center",
-          gap: "6px",
-          padding: "8px 10px",
-          "border-bottom": "1px solid var(--color-border)",
-          background: "var(--color-bg)",
-          "flex-shrink": 0,
-        }}
-      >
-        <IconTerminal size={13} strokeWidth={1.5} />
-        <span style={{ "font-family": FONT_MONO, "font-size": "11px", color: "var(--color-text-muted)" }}>
-          terminal
-        </span>
-        <span style={{ flex: 1 }} />
-        <Show when={loopback()}>
-          <button type="button" onClick={() => terminal.new()} style={smallAction()}>
-            new
-          </button>
-        </Show>
-      </div>
-      <Show
-        when={loopback()}
-        fallback={
-          <div
-            style={{
-              padding: "18px",
-              "font-family": FONT_SANS,
-              "font-size": "12px",
-              color: "var(--color-text-muted)",
-              "line-height": 1.5,
-            }}
-          >
-            Terminal access is available only when <code>openscience web</code> is connected to a loopback server.
-          </div>
-        }
-      >
-        <Show
-          when={terminal.all().length > 0}
-          fallback={
-            <div
-              style={{
-                flex: 1,
-                display: "grid",
-                "place-items": "center",
-                padding: "22px",
-                color: "var(--color-text-faint)",
-                "font-family": FONT_SANS,
-                "font-size": "12px",
-              }}
-            >
-              <button type="button" onClick={() => terminal.new()} style={emptyAction()}>
-                start terminal
-              </button>
-            </div>
-          }
-        >
-          <div
-            style={{
-              display: "flex",
-              gap: "4px",
-              padding: "6px",
-              "border-bottom": "1px solid var(--color-border)",
-              "overflow-x": "auto",
-              "flex-shrink": 0,
-            }}
-          >
-            <For each={terminal.all()}>
-              {(pty) => (
-                <button
-                  type="button"
-                  onClick={() => terminal.open(pty.id)}
-                  style={{
-                    all: "unset",
-                    cursor: "pointer",
-                    padding: "5px 8px",
-                    "border-radius": "4px",
-                    border: "1px solid var(--color-border)",
-                    background: terminal.active() === pty.id ? "var(--color-accent-subtle)" : "var(--color-bg)",
-                    "font-family": FONT_MONO,
-                    "font-size": "11px",
-                    color: "var(--color-text)",
-                    display: "inline-flex",
-                    "align-items": "center",
-                    gap: "6px",
-                  }}
-                >
-                  <span>{pty.title}</span>
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void terminal.close(pty.id)
-                    }}
-                    style={{ color: "var(--color-text-faint)" }}
-                  >
-                    ×
-                  </span>
-                </button>
-              )}
-            </For>
-          </div>
-          <div style={{ flex: 1, "min-height": 0, position: "relative" }}>
-            <For each={terminal.all()}>
-              {(pty) => (
-                <div
-                  id={`terminal-wrapper-${pty.id}`}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: terminal.active() === pty.id ? "block" : "none",
-                  }}
-                >
-                  <Terminal
-                    pty={pty}
-                    onCleanup={(next) => terminal.update(next)}
-                    onConnectError={(e) => toast.error("terminal disconnected", e.message)}
-                  />
-                </div>
-              )}
-            </For>
-          </div>
-        </Show>
-      </Show>
-    </div>
-  )
+function workTabLabel(tab: WorkTab) {
+  if (tab.kind === "file") return tab.file.name
+  if (tab.kind === "saved") return tab.artifact.title
+  return labels[tab.context]
 }
 
-function CollapsedRail(props: {
-  artifact: boolean
-  onInspect: () => void
-  tabs: { k: RightPaneTab; label?: string; Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element }[]
-  onOpen: (t?: RightPaneTab) => void
+function WorkTabStrip(props: {
+  tabs: WorkTab[]
+  active: string | undefined
+  onSelect: (id: string) => void
+  onClose: (id: string) => void
+  onReorder: (id: string, to: number) => void
 }): JSX.Element {
   return (
-    <aside class="research-tool-rail">
-      <button
-        class="research-tool-rail__button"
-        onClick={() => props.onOpen()}
-        title="show panel"
-        aria-label="show panel"
-      >
-        <IconChevronLeft size={14} strokeWidth={1.5} />
-      </button>
-      <span class="research-tool-rail__divider" />
-      <Show when={props.artifact}>
-        <button
-          class="research-tool-rail__button"
-          onClick={props.onInspect}
-          title="file details"
-          aria-label="file details"
-        >
-          <IconAtom size={15} strokeWidth={1.5} />
-        </button>
-      </Show>
+    <nav class="inspector-tabs" aria-label="Contextual work tabs">
       <For each={props.tabs}>
-        {(t) => (
-          <button
-            class="research-tool-rail__button"
-            onClick={() => props.onOpen(t.k)}
-            title={t.label ?? t.k}
-            aria-label={t.label ?? t.k}
+        {(tab, index) => (
+          <div
+            class="inspector-tab"
+            role="tab"
+            tabindex={0}
+            title={tab.kind === "file" ? tab.file.path : tab.kind === "saved" ? tab.artifact.title : workTabLabel(tab)}
+            aria-selected={props.active === tab.id}
+            data-active={props.active === tab.id ? "true" : undefined}
+            draggable="true"
+            onDragStart={(event) => {
+              event.dataTransfer?.setData(WORK_TAB_DRAG, tab.id)
+              if (event.dataTransfer) event.dataTransfer.effectAllowed = "move"
+            }}
+            onDragOver={(event) => {
+              if (event.dataTransfer?.types.includes(WORK_TAB_DRAG)) event.preventDefault()
+            }}
+            onDrop={(event) => {
+              const dragged = event.dataTransfer?.getData(WORK_TAB_DRAG)
+              if (!dragged || dragged === tab.id) return
+              event.preventDefault()
+              props.onReorder(dragged, index())
+            }}
+            onClick={() => props.onSelect(tab.id)}
+            onKeyDown={(event) => {
+              if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+                event.preventDefault()
+                props.onReorder(tab.id, index() + (event.key === "ArrowRight" ? 1 : -1))
+                return
+              }
+              if (event.key !== "Enter" && event.key !== " ") return
+              event.preventDefault()
+              props.onSelect(tab.id)
+            }}
           >
-            <t.Icon size={15} strokeWidth={1.5} />
-          </button>
+            <span class="inspector-tab__name">{workTabLabel(tab)}</span>
+            <button
+              type="button"
+              class="inspector-tab__close"
+              aria-label={`Close ${workTabLabel(tab)}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                props.onClose(tab.id)
+              }}
+            >
+              <IconX size={11} strokeWidth={1.5} />
+            </button>
+          </div>
         )}
       </For>
-    </aside>
+    </nav>
   )
 }
 
-const paneMenuLabel: JSX.CSSProperties = {
-  ...sectionTitle,
-  padding: "4px 8px 3px",
-}
-
-function paneMenuRow(): JSX.CSSProperties {
-  return {
-    all: "unset",
-    cursor: "pointer",
-    display: "flex",
-    "align-items": "center",
-    gap: "7px",
-    width: "100%",
-    "box-sizing": "border-box",
-    padding: "6px 8px",
-    "border-radius": "4px",
-    "font-family": FONT_MONO,
-    "font-size": "11px",
-    color: "var(--color-text-muted)",
-  } as JSX.CSSProperties
-}
-
-function smallAction(): JSX.CSSProperties {
-  return {
-    all: "unset",
-    cursor: "pointer",
-    padding: "4px 8px",
-    "border-radius": "4px",
-    border: "1px solid var(--color-border)",
-    background: "var(--color-bg-elevated)",
-    "font-family": FONT_MONO,
-    "font-size": "10px",
-    color: "var(--color-text)",
-  } as JSX.CSSProperties
-}
-
-function emptyAction(): JSX.CSSProperties {
-  return {
-    ...smallAction(),
-    padding: "7px 12px",
-    "font-size": "11px",
-  } as JSX.CSSProperties
-}
-
-function TabBtn(props: {
-  k: string
-  label?: string
-  Icon: (p: { size?: number; strokeWidth?: number }) => JSX.Element
-  active: boolean
-  onClick: () => void
-  badge?: number
-}): JSX.Element {
-  return (
-    <button
-      class="research-inspector__tab"
-      data-active={props.active ? "true" : "false"}
-      role="tab"
-      aria-selected={props.active}
-      onClick={props.onClick}
-    >
-      <span class="research-inspector__tab-icon">
-        <props.Icon size={12} strokeWidth={1.6} />
-      </span>
-      <span>{props.label ?? props.k}</span>
-      <Show when={(props.badge ?? 0) > 0}>
-        <span
-          style={{
-            "min-width": "15px",
-            height: "15px",
-            padding: "0 4px",
-            "border-radius": "4px",
-            background: "var(--color-accent)",
-            color: "var(--color-on-accent)",
-            "font-family": FONT_MONO,
-            "font-size": "10px",
-            "font-weight": 700,
-            display: "inline-flex",
-            "align-items": "center",
-            "justify-content": "center",
-            "line-height": 1,
-          }}
-        >
-          {props.badge}
-        </span>
-      </Show>
-    </button>
-  )
-}
-
-// ── Canvas ─────────────────────────────────────────────────────────
-// Real Atlas graph: see AtlasCanvas.tsx. The selected OpenScience server owns
-// the /api/atlas bridge in both bundled and separately hosted deployments.
-
-function KeepAlive(props: { show: boolean; mounted: boolean; children: JSX.Element }): JSX.Element {
-  // Mounts children on first reveal and never unmounts them (mounted only
-  // flips false→true). Visibility is pure CSS, so re-showing is instant and
-  // never re-runs effects/fetches/animations.
-  return (
-    <Show when={props.mounted}>
-      <div
-        style={{
-          display: props.show ? "flex" : "none",
-          flex: props.show ? 1 : undefined,
-          "min-height": 0,
-          "min-width": 0,
-          "flex-direction": "column",
-          overflow: "hidden",
-        }}
-      >
-        {props.children}
-      </div>
-    </Show>
-  )
-}
-
-function EvidenceLoading(): JSX.Element {
+function InspectorLoading(props: { label: string }): JSX.Element {
   return (
     <div
-      data-component="evidence-loading"
+      data-component="inspector-loading"
       style={{ flex: 1, display: "flex", "align-items": "center", "justify-content": "center" }}
     >
-      <AsciiSpinner size={10} label="loading evidence…" color="var(--color-text-faint)" />
+      <AsciiSpinner size={10} label={`loading ${props.label.toLowerCase()}…`} color="var(--color-text-faint)" />
     </div>
   )
-}
-
-function CanvasTab(): JSX.Element {
-  return <AtlasCanvas />
 }

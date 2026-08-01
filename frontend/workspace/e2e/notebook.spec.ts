@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { test, expect } from "./fixtures"
+import { openConnectedFile } from "./utils"
 
-test("opens, executes, edits, and saves a native Jupyter notebook", async ({ page, gotoSession }) => {
-  const directory = mkdtempSync(path.join(tmpdir(), "openscience-notebook-e2e-"))
+test("opens, executes, edits, and saves a native Jupyter notebook", async ({ page, sdk, openSession }) => {
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openscience-notebook-e2e-")))
   const filename = "analysis.ipynb"
   const filepath = path.join(directory, filename)
   writeFileSync(
@@ -40,13 +41,9 @@ test("opens, executes, edits, and saves a native Jupyter notebook", async ({ pag
   )
 
   try {
-    await gotoSession()
-    await page.getByRole("tab", { name: "Files", exact: true }).click()
-    const location = page.getByPlaceholder("/absolute/path")
-    await location.fill(directory)
-    await location.press("Enter")
-    await page.getByPlaceholder("filter this folder…").fill(filename)
-    await page.getByRole("button", { name: new RegExp(`^${filename}\\b`) }).click()
+    const sessionID = await openSession()
+    await sdk.session.filesystem.grant({ sessionID, path: directory, access: "write", scope: "session" })
+    await openConnectedFile(page, directory, filename)
 
     const notebook = page.locator('[data-component="notebook"]')
     await expect(notebook).toBeVisible()
@@ -55,7 +52,9 @@ test("opens, executes, edits, and saves a native Jupyter notebook", async ({ pag
 
     await notebook.locator('[data-action="run-all"]').click()
     await expect(notebook.getByText("42", { exact: true })).toBeVisible({ timeout: 20_000 })
-    await expect(notebook.getByLabel("Kernel ready")).toBeVisible()
+    // The kernel-ready state is a 6px status dot; assert it exists rather than
+    // its pixel visibility, since the "42" output already proves execution.
+    await expect(notebook.getByLabel("Kernel ready")).toBeAttached()
 
     const result = notebook.getByLabel("code cell 3")
     await result.fill("value + 2")

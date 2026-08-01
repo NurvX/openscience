@@ -23,7 +23,7 @@ export namespace PublicationFile {
       context.addIssue({
         code: "custom",
         path: ["review_id"],
-        message: "A reviewed publication export requires a finalized review report",
+        message: "Exporting preflight-checked bytes requires a finalized publication preflight report",
       })
     })
   export type Input = z.input<typeof Input>

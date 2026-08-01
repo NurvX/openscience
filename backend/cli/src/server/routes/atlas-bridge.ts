@@ -18,6 +18,8 @@ import { join } from "path"
 import { lazy } from "../../util/lazy"
 import { OpenScience, API_BASE } from "../../openscience"
 import { Log } from "../../util/log"
+import { NamedError } from "@synsci/util/error"
+import { projectSelection } from "../project-selection"
 
 const log = Log.create({ service: "atlas-bridge" })
 
@@ -190,7 +192,8 @@ async function commitNew(input: {
 
 export interface StageNodeInput {
   title: string
-  directory: string
+  directory?: string
+  projectID?: string
   parentID: string
 }
 
@@ -206,18 +209,28 @@ export function parseStageNodeInput(body: unknown): StageNodeInput {
   const value = body && typeof body === "object" ? (body as Record<string, unknown>) : {}
   const title = typeof value.title === "string" ? value.title.trim() : ""
   const directory = typeof value.directory === "string" ? value.directory.trim() : ""
+  const projectID =
+    typeof value.projectID === "string"
+      ? value.projectID.trim()
+      : typeof value.project === "string"
+        ? value.project.trim()
+        : ""
   const parentID = typeof value.parent_id === "string" ? value.parent_id.trim() : ""
   if (!title) throw new StageNodeInputError("title is required")
-  if (!directory) throw new StageNodeInputError("directory is required")
   if (!parentID) throw new StageNodeInputError("parent_id is required")
-  return { title, directory, parentID }
+  return {
+    title,
+    ...(directory ? { directory } : {}),
+    ...(projectID ? { projectID } : {}),
+    parentID,
+  }
 }
 
 /** Create a real staged child in Atlas, rooted in the repository the SPA has
  * open. The previous bridge used commit-new (so "stage" actually committed),
  * dropped the parent edge, captured process.cwd(), and fabricated an id on
  * failure. Keep the lifecycle, topology, and code context truthful instead. */
-async function stageNode(input: StageNodeInput): Promise<unknown> {
+async function stageNode(input: StageNodeInput & { directory: string }): Promise<unknown> {
   const root = await repoRoot(input.directory)
   const context = await repoContext(root)
   const res = await atlas("POST", "/api/nodes/stage-create", {
@@ -235,6 +248,7 @@ async function stageNode(input: StageNodeInput): Promise<unknown> {
 }
 
 function mutationError(error: unknown): { status: number; detail: string } {
+  if (error instanceof NamedError) throw error
   if (error instanceof StageNodeInputError) return { status: 400, detail: error.message }
   if (error instanceof BackendHttpError) {
     return {
@@ -252,6 +266,7 @@ function mutationError(error: unknown): { status: number; detail: string } {
 }
 
 function readError(error: unknown): { status: number; detail: string } {
+  if (error instanceof NamedError) throw error
   if (error instanceof BackendHttpError) {
     return {
       status: error.status,
@@ -589,7 +604,18 @@ export const AtlasBridgeRoutes = lazy(() =>
     .post("/nodes", async (c) => {
       try {
         const input = parseStageNodeInput(await c.req.json().catch(() => null))
-        return c.json(await stageNode(input), 201)
+        const selected = await projectSelection(c, {
+          projectID: input.projectID,
+          directory: input.directory,
+        })
+        if (!selected.directory) throw new StageNodeInputError("directory is required")
+        return c.json(
+          await stageNode({
+            ...input,
+            directory: selected.directory,
+          }),
+          201,
+        )
       } catch (error) {
         const failure = mutationError(error)
         return c.json({ detail: failure.detail }, failure.status as any)
@@ -642,14 +668,16 @@ export const AtlasBridgeRoutes = lazy(() =>
     // the folder the SPA has open (not the serve launch dir).
     .get("/project", async (c) => {
       try {
-        return c.json({ project_id: await resolveProjectId(c.req.query("directory") || "") })
+        const selected = await projectSelection(c)
+        return c.json({ project_id: await resolveProjectId(selected.directory ?? "") })
       } catch (error) {
         const failure = readError(error)
         return c.json({ detail: failure.detail }, failure.status as any)
       }
     })
     .post("/project/init", async (c) => {
-      const result = await initProjectDetailed(c.req.query("directory") || "")
+      const selected = await projectSelection(c)
+      const result = await initProjectDetailed(selected.directory ?? "")
       const payload = {
         project_id: result.projectId,
         ...(result.failure

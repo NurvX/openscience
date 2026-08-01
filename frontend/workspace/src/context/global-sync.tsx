@@ -46,6 +46,8 @@ import { getFilename } from "@synsci/util/path"
 import { usePlatform } from "./platform"
 import { useLanguage } from "@/context/language"
 import { Persist, persisted } from "@/utils/persist"
+import { projectScope } from "@/utils/project-route"
+import { checksum } from "@synsci/util/encode"
 
 type ProjectMeta = {
   name?: string
@@ -129,6 +131,7 @@ type IconCache = {
 
 type ChildOptions = {
   bootstrap?: boolean
+  projectID?: string
 }
 
 function normalizeProviderList(input: ProviderListResponse): ProviderListResponse {
@@ -152,17 +155,34 @@ function createGlobalSync() {
   const iconCache = new Map<string, IconCache>()
 
   const sdkCache = new Map<string, ReturnType<typeof createOpenScienceClient>>()
-  const sdkFor = (directory: string) => {
-    const cached = sdkCache.get(directory)
+  const projectFor = (directory: string, projectID?: string) => {
+    if (projectID) return projectID
+    return globalStore.project.find(
+      (project) => project.worktree === directory || (project.sandboxes ?? []).includes(directory),
+    )?.id
+  }
+  const scopeFor = (directory: string, projectID?: string) =>
+    `${projectFor(directory, projectID) ?? directory}\n${directory}`
+  const persistenceFor = (directory: string, projectID?: string) => {
+    const scope = projectScope(globalStore.project, directory)
+    if (scope !== directory) return scope
+    if (projectID) return `${projectID}~${checksum(directory) ?? "worktree"}`
+    return directory
+  }
+  const sdkFor = (directory: string, projectID?: string) => {
+    const project = projectFor(directory, projectID)
+    const key = scopeFor(directory, projectID)
+    const cached = sdkCache.get(key)
     if (cached) return cached
 
     const sdk = createOpenScienceClient({
       baseUrl: globalSDK.url,
       fetch: platform.fetch,
       directory,
+      projectID: project,
       throwOnError: true,
     })
-    sdkCache.set(directory, sdk)
+    sdkCache.set(key, sdk)
     return sdk
   }
 
@@ -170,21 +190,22 @@ function createGlobalSync() {
   // few milliseconds apart. Share only that bootstrap burst; expire entries
   // promptly so project config/provider changes are never held stale here.
   const providerLoads = new Map<string, Promise<ProviderListResponse>>()
-  const loadProvider = (directory: string) => {
-    const pending = providerLoads.get(directory)
+  const loadProvider = (directory: string, projectID?: string) => {
+    const key = scopeFor(directory, projectID)
+    const pending = providerLoads.get(key)
     if (pending) return pending
-    const promise = sdkFor(directory)
+    const promise = sdkFor(directory, projectID)
       .provider.list()
       .then((x) => normalizeProviderList(x.data!))
-    providerLoads.set(directory, promise)
+    providerLoads.set(key, promise)
     promise.then(
       () => {
         setTimeout(() => {
-          if (providerLoads.get(directory) === promise) providerLoads.delete(directory)
+          if (providerLoads.get(key) === promise) providerLoads.delete(key)
         }, 1_000)
       },
       () => {
-        if (providerLoads.get(directory) === promise) providerLoads.delete(directory)
+        if (providerLoads.get(key) === promise) providerLoads.delete(key)
       },
     )
     return promise
@@ -381,12 +402,13 @@ function createGlobalSync() {
     return [...keepRoots, ...keepChildren].sort((a, b) => a.id.localeCompare(b.id))
   }
 
-  function ensureChild(directory: string) {
+  function ensureChild(directory: string, projectID?: string) {
     if (!directory) console.error("No directory provided")
     if (!children[directory]) {
+      const scope = persistenceFor(directory, projectID)
       const vcs = runWithOwner(owner, () =>
         persisted(
-          Persist.workspace(directory, "vcs", ["vcs.v1"]),
+          Persist.workspace(scope, "vcs", ["vcs.v1"]),
           createStore({ value: undefined as VcsInfo | undefined }),
         ),
       )
@@ -397,7 +419,7 @@ function createGlobalSync() {
 
       const meta = runWithOwner(owner, () =>
         persisted(
-          Persist.workspace(directory, "project", ["project.v1"]),
+          Persist.workspace(scope, "project", ["project.v1"]),
           createStore({ value: undefined as ProjectMeta | undefined }),
         ),
       )
@@ -406,7 +428,7 @@ function createGlobalSync() {
 
       const icon = runWithOwner(owner, () =>
         persisted(
-          Persist.workspace(directory, "icon", ["icon.v1"]),
+          Persist.workspace(scope, "icon", ["icon.v1"]),
           createStore({ value: undefined as string | undefined }),
         ),
       )
@@ -466,20 +488,21 @@ function createGlobalSync() {
   }
 
   function child(directory: string, options: ChildOptions = {}) {
-    const childStore = ensureChild(directory)
+    const childStore = ensureChild(directory, options.projectID)
     const shouldBootstrap = options.bootstrap ?? true
     if (shouldBootstrap && childStore[0].status === "loading") {
-      void bootstrapInstance(directory)
+      void bootstrapInstance(directory, options.projectID)
     }
     return childStore
   }
 
-  async function loadSessions(directory: string) {
-    const pending = sessionLoads.get(directory)
+  async function loadSessions(directory: string, projectID?: string) {
+    const key = scopeFor(directory, projectID)
+    const pending = sessionLoads.get(key)
     if (pending) return pending
 
-    const [store, setStore] = child(directory, { bootstrap: false })
-    const meta = sessionMeta.get(directory)
+    const [store, setStore] = child(directory, { bootstrap: false, projectID })
+    const meta = sessionMeta.get(key)
     if (meta && meta.limit >= store.limit) {
       const next = trimSessions(store.session, { limit: store.limit, permission: store.permission })
       if (next.length !== store.session.length) {
@@ -488,8 +511,8 @@ function createGlobalSync() {
       return
     }
 
-    const promise = globalSDK.client.session
-      .list({ directory })
+    const promise = sdkFor(directory, projectID)
+      .session.list()
       .then((x) => {
         const nonArchived = (x.data ?? [])
           .filter((s) => !!s?.id)
@@ -506,7 +529,7 @@ function createGlobalSync() {
         // Store total session count (used for "load more" pagination)
         setStore("sessionTotal", nonArchived.length)
         setStore("session", reconcile(sessions, { key: "id" }))
-        sessionMeta.set(directory, { limit })
+        sessionMeta.set(key, { limit })
       })
       .catch((err) => {
         console.error("Failed to load sessions", err)
@@ -519,25 +542,26 @@ function createGlobalSync() {
         showToast({ title: language.t("toast.session.listFailed.title", { project }), description: err.message })
       })
 
-    sessionLoads.set(directory, promise)
+    sessionLoads.set(key, promise)
     promise.finally(() => {
-      sessionLoads.delete(directory)
+      sessionLoads.delete(key)
     })
     return promise
   }
 
-  async function bootstrapInstance(directory: string) {
+  async function bootstrapInstance(directory: string, projectID?: string) {
     if (!directory) return
-    const pending = booting.get(directory)
+    const key = scopeFor(directory, projectID)
+    const pending = booting.get(key)
     if (pending) return pending
 
     const promise = (async () => {
-      const [store, setStore] = ensureChild(directory)
+      const [store, setStore] = ensureChild(directory, projectID)
       const cache = vcsCache.get(directory)
       if (!cache) return
       const meta = metaCache.get(directory)
       if (!meta) return
-      const sdk = sdkFor(directory)
+      const sdk = sdkFor(directory, projectID)
 
       setStore("status", "loading")
 
@@ -546,7 +570,7 @@ function createGlobalSync() {
 
       const blockingRequests = {
         project: () => sdk.project.current().then((x) => setStore("project", x.data!.id)),
-        provider: () => loadProvider(directory).then((value) => setStore("provider", reconcile(value))),
+        provider: () => loadProvider(directory, projectID).then((value) => setStore("provider", reconcile(value))),
         agent: () => sdk.app.agents().then((x) => setStore("agent", x.data ?? [])),
         config: () => sdk.config.get().then((x) => setStore("config", x.data!)),
       }
@@ -572,7 +596,7 @@ function createGlobalSync() {
           .then((x) => setStore("skill", x.data ?? []))
           .catch(() => {}),
         sdk.session.status().then((x) => setStore("session_status", x.data!)),
-        loadSessions(directory),
+        loadSessions(directory, projectID),
         sdk.mcp.status().then((x) => setStore("mcp", x.data!)),
         sdk.lsp.status().then((x) => setStore("lsp", x.data!)),
         sdk.vcs.get().then((x) => {
@@ -643,9 +667,9 @@ function createGlobalSync() {
       })
     })()
 
-    booting.set(directory, promise)
+    booting.set(key, promise)
     promise.finally(() => {
-      booting.delete(directory)
+      booting.delete(key)
     })
     return promise
   }
@@ -1078,6 +1102,35 @@ function createGlobalSync() {
     setStore("icon", value)
   }
 
+  function rememberProject(project: Project) {
+    const result = Binary.search(globalStore.project, project.id, (item) => item.id)
+    if (result.found) {
+      setGlobalStore("project", result.index, reconcile(project))
+      return project
+    }
+    setGlobalStore(
+      "project",
+      produce((draft) => {
+        draft.splice(result.index, 0, project)
+      }),
+    )
+    return project
+  }
+
+  async function resolveProject(directory: string) {
+    const response = await sdkFor(directory).project.current()
+    const project = response.data
+    if (!project) throw new Error(`No project found for ${getFilename(directory)}`)
+    return rememberProject(project)
+  }
+
+  async function resolveProjectID(projectID: string) {
+    const response = await sdkFor("", projectID).project.current()
+    const project = response.data
+    if (!project) throw new Error(`No project found for ${projectID}`)
+    return rememberProject(project)
+  }
+
   return {
     data: globalStore,
     set: setGlobalStore,
@@ -1099,6 +1152,8 @@ function createGlobalSync() {
     },
     project: {
       loadSessions,
+      resolve: resolveProject,
+      resolveID: resolveProjectID,
       meta: projectMeta,
       icon: projectIcon,
     },

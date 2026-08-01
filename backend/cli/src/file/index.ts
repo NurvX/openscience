@@ -20,6 +20,8 @@ import { ArtifactFile } from "./artifacts"
 import { StarterFile } from "./starters"
 import { PublicationFile } from "./publication"
 import { PublicationReview } from "./review"
+import { SessionFilesystem } from "../session/filesystem"
+import { Filesystem } from "../util/filesystem"
 
 export namespace File {
   const log = Log.create({ service: "file" })
@@ -220,9 +222,21 @@ export namespace File {
     state()
   }
 
-  async function contained(file: string): Promise<string> {
-    const full = path.join(Instance.directory, file)
-    if (await Instance.containsCanonicalPath(full)) return full
+  type AccessOptions = {
+    sessionID?: string
+  }
+
+  async function contained(file: string, access: SessionFilesystem.Access, options?: AccessOptions): Promise<string> {
+    if (options?.sessionID) {
+      return SessionFilesystem.authorize({
+        sessionID: options.sessionID,
+        path: file,
+        access,
+      }).then((result) => result.path)
+    }
+    const full = path.isAbsolute(file) ? file : path.resolve(Instance.directory, file)
+    const canonical = await Filesystem.canonical(full)
+    if (canonical && (await Instance.containsCanonicalPath(canonical))) return canonical
     throw new Error(`Access denied: path escapes project directory`)
   }
 
@@ -300,10 +314,9 @@ export namespace File {
     }))
   }
 
-  export async function read(file: string): Promise<Content> {
+  async function readPath(file: string, full: string): Promise<Content> {
     using _ = log.time("read", { file })
     const project = Instance.project
-    const full = await contained(file)
 
     const bunFile = Bun.file(full)
 
@@ -343,12 +356,13 @@ export namespace File {
       }
     }
 
-    if (project.vcs === "git") {
-      let diff = await $`git diff ${file}`.cwd(Instance.directory).quiet().nothrow().text()
-      if (!diff.trim()) diff = await $`git diff --staged ${file}`.cwd(Instance.directory).quiet().nothrow().text()
+    if (project.vcs === "git" && (await Instance.containsCanonicalPath(full))) {
+      const relative = path.relative(Instance.directory, full)
+      let diff = await $`git diff ${relative}`.cwd(Instance.directory).quiet().nothrow().text()
+      if (!diff.trim()) diff = await $`git diff --staged ${relative}`.cwd(Instance.directory).quiet().nothrow().text()
       if (diff.trim()) {
-        const original = await $`git show HEAD:${file}`.cwd(Instance.directory).quiet().nothrow().text()
-        const patch = structuredPatch(file, file, original, content, "old", "new", {
+        const original = await $`git show HEAD:${relative}`.cwd(Instance.directory).quiet().nothrow().text()
+        const patch = structuredPatch(relative, relative, original, content, "old", "new", {
           context: Infinity,
           ignoreWhitespace: true,
         })
@@ -359,24 +373,30 @@ export namespace File {
     return { type: "text", content }
   }
 
-  export async function inspect(file: string): Promise<ScienceFile.Inspection> {
-    const full = await contained(file)
+  export async function read(file: string, options?: AccessOptions): Promise<Content> {
+    const full = await contained(file, "read", options)
+    return readPath(file, full)
+  }
+
+  export async function inspect(file: string, options?: AccessOptions): Promise<ScienceFile.Inspection> {
+    const full = await contained(file, "read", options)
     return ScienceFile.inspect(full, file)
   }
 
-  export async function raw(file: string): Promise<BunFile> {
-    const full = await contained(file)
+  export async function raw(file: string, options?: AccessOptions): Promise<BunFile> {
+    const full = await contained(file, "read", options)
     const content = Bun.file(full)
     if (!(await content.exists())) throw new HTTPException(404, { message: `File not found: ${file}` })
     return content
   }
 
-  export async function artifacts(): Promise<ArtifactFile.Info[]> {
-    return ArtifactFile.scan(Instance.directory)
+  export async function artifacts(options?: AccessOptions): Promise<ArtifactFile.Info[]> {
+    const root = options?.sessionID ? await SessionFilesystem.workspace(options.sessionID) : Instance.directory
+    return ArtifactFile.scan(root)
   }
 
-  export async function provenance(file: string): Promise<ArtifactFile.Provenance> {
-    await contained(file)
+  export async function provenance(file: string, options?: AccessOptions): Promise<ArtifactFile.Provenance> {
+    await contained(file, "read", options)
     return ArtifactFile.provenance(Instance.directory, file)
   }
 
@@ -427,9 +447,9 @@ export namespace File {
     return PublicationReview.finalize(id, input)
   }
 
-  export async function write(file: string, content: string): Promise<Content> {
+  export async function write(file: string, content: string, options?: AccessOptions): Promise<Content> {
     using _ = log.time("write", { file })
-    const full = await contained(file)
+    const full = await contained(file, "write", options)
 
     const exists = await Bun.file(full).exists()
     await Bun.write(full, content)
@@ -440,10 +460,10 @@ export namespace File {
       file: full,
       event: exists ? "change" : "add",
     })
-    return read(file)
+    return readPath(file, full)
   }
 
-  export async function list(dir?: string) {
+  export async function list(dir?: string, options?: AccessOptions) {
     const exclude = [".git", ".DS_Store"]
     const project = Instance.project
     let ignored = (_: string) => false
@@ -459,10 +479,9 @@ export namespace File {
       }
       ignored = ig.ignores.bind(ig)
     }
-    const resolved = dir ? path.join(Instance.directory, dir) : Instance.directory
-    if (!(await Instance.containsCanonicalPath(resolved))) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    const root = options?.sessionID ? await SessionFilesystem.workspace(options.sessionID) : Instance.directory
+    const resolved = await contained(dir || root, "read", options)
+    const local = Filesystem.contains(root, resolved)
 
     const nodes: Node[] = []
     const entries: fs.Dirent[] = await fs.promises
@@ -492,17 +511,18 @@ export namespace File {
     for (const entry of entries) {
       if (exclude.includes(entry.name)) continue
       const fullPath = path.join(resolved, entry.name)
-      const relativePath = path.relative(Instance.directory, fullPath)
+      const relativePath = path.relative(root, fullPath)
+      const nodePath = local ? relativePath : fullPath
       const type = entry.isDirectory() ? "directory" : "file"
       // Stat each entry for the file-explorer size / modified columns. Failures
       // (broken symlink, races) degrade to undefined rather than dropping the row.
       const stat = await fs.promises.stat(fullPath).catch(() => undefined)
       nodes.push({
         name: entry.name,
-        path: relativePath,
+        path: nodePath,
         absolute: fullPath,
         type,
-        ignored: ignored(type === "directory" ? relativePath + "/" : relativePath),
+        ignored: local ? ignored(type === "directory" ? relativePath + "/" : relativePath) : false,
         size: stat && type === "file" ? stat.size : undefined,
         mtime: stat ? Math.round(stat.mtimeMs) : undefined,
       })

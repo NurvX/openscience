@@ -26,7 +26,10 @@ export default defineConfig({
   },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  // One retry keeps flake tolerance while capping the worst case: a genuine
+  // failure costs 2 × 60s instead of 3 × 60s, which is what pushed the
+  // packaged job past its 60-minute budget when many specs went stale at once.
+  retries: process.env.CI ? 1 : 0,
   reporter: [["html", { outputFolder: "e2e/playwright-report", open: "never" }], ["line"]],
   ...(target.startWebServer
     ? {
@@ -50,7 +53,10 @@ export default defineConfig({
     baseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    // Recording every attempt and discarding the passing footage costs real
+    // wall-clock time under a single worker. The retry attempt still records,
+    // so every persistent failure keeps a video plus the first-retry trace.
+    video: "on-first-retry",
     // Inject Basic-Auth on every browser request. The frontend's
     // openscience-fetch.ts wraps fetch() with the same header, but its
     // dev-mode gate + port-match check is fragile under windows-latest

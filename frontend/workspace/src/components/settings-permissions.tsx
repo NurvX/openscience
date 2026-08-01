@@ -195,6 +195,7 @@ export const PermissionToolDefaults: Component = () => {
           {(item) => (
             <SettingsRow title={language.t(item.title)} description={language.t(item.description)}>
               <Select
+                aria-label={`${language.t(item.title)} permission`}
                 options={actions()}
                 current={actions().find((o) => o.value === actionFor(item.id))}
                 value={(o) => o.value}

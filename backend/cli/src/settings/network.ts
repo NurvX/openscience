@@ -177,4 +177,34 @@ export namespace Network {
     if (domainAllowed(url.hostname, allowed)) return
     throw new Error(`Network access to ${url.hostname} is not in the configured allow-list`)
   }
+
+  /** The hostname the allow-list would block for this URL, or undefined when
+   *  the URL is allowed (or enforcement is off). Still throws on invalid URLs
+   *  so callers cannot smuggle malformed input past the gate. */
+  export async function blocked(raw: string): Promise<string | undefined> {
+    const state = await get()
+    let url: URL
+    try {
+      url = new URL(raw)
+    } catch {
+      throw new Error(`Invalid network URL: ${raw}`)
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error(`Network URL must use http or https: ${raw}`)
+    }
+    if (!state.allowlistEnabled) return undefined
+    if (domainAllowed(url.hostname, domains(state))) return undefined
+    return normalize(url.hostname)
+  }
+
+  /** Add one domain to the persisted custom allow-list — the durable half of
+   *  an "always allow" answer to a blocked-domain prompt, so the Network
+   *  settings panel reflects exactly what was granted. */
+  export async function allow(domain: string): Promise<State> {
+    const state = await get()
+    const host = normalize(domain)
+    if (!host) return state
+    if (domains(state).includes(host)) return state
+    return set({ ...state, custom: [...state.custom, host] })
+  }
 }

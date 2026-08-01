@@ -15,6 +15,7 @@ import type { Provider } from "@/provider/provider"
 import { correctImageMimeFromBase64 } from "@/util/image"
 import { Lock } from "@/util/lock"
 import { Token } from "@/util/token"
+import { Inference } from "@/provider/inference"
 
 export namespace MessageV2 {
   export const OutputLengthError = NamedError.create("MessageOutputLengthError", z.object({}))
@@ -333,6 +334,7 @@ export namespace MessageV2 {
     tools: z.record(z.string(), z.boolean()).optional(),
     variant: z.string().optional(),
     tier: z.string().optional(),
+    inference: Inference.Info.optional(),
   }).meta({
     ref: "UserMessage",
   })
@@ -467,6 +469,20 @@ export namespace MessageV2 {
   // so treat it as done. Used only by the loop; compaction keeps isContinuing.
   export function isContinuingTurn(finish: string | undefined, hasToolCall: boolean): boolean {
     return isContinuing(finish) && (finish !== "unknown" || hasToolCall)
+  }
+
+  function replayableOpenRouterMetadata(metadata: Record<string, unknown> | undefined) {
+    const openrouter = metadata?.openrouter
+    if (!openrouter || typeof openrouter !== "object") return false
+    const details = (openrouter as { reasoning_details?: unknown }).reasoning_details
+    if (!Array.isArray(details) || details.length === 0) return false
+    return details.every((detail) => {
+      if (!detail || typeof detail !== "object") return false
+      const item = detail as Record<string, unknown>
+      if (item.type !== "reasoning.text") return true
+      if (typeof item.format !== "string" || !item.format.toLowerCase().includes("anthropic")) return true
+      return typeof item.signature === "string" && item.signature.length > 0
+    })
   }
 
   export function toModelMessages(
@@ -617,6 +633,29 @@ export namespace MessageV2 {
           role: "assistant",
           parts: [],
         }
+        // OpenRouter can route consecutive turns through different Anthropic
+        // backends. Its stream puts an incomplete reasoning detail on the
+        // reasoning part, then the complete signed detail on every tool call.
+        // Forwarding all of those duplicates makes the next backend reject the
+        // first unsigned thinking block. Preserve one canonical, signed copy.
+        const openrouter =
+          model.providerID === "openrouter" && !differentModel
+            ? iife(() => {
+                const tool = msg.parts.findLast(
+                  (part) => part.type === "tool" && replayableOpenRouterMetadata(part.metadata),
+                )
+                if (tool?.type === "tool") return tool.metadata
+                const reasoning = msg.parts.findLast(
+                  (part) => part.type === "reasoning" && replayableOpenRouterMetadata(part.metadata),
+                )
+                if (reasoning?.type === "reasoning") return reasoning.metadata
+                return undefined
+              })
+            : undefined
+        const carrier = openrouter
+          ? (msg.parts.find((part) => part.type === "reasoning")?.id ??
+            msg.parts.find((part) => part.type === "tool")?.id)
+          : undefined
         for (const part of msg.parts) {
           if (part.type === "text")
             assistantMessage.parts.push({
@@ -661,7 +700,16 @@ export namespace MessageV2 {
                 // input args are dead weight too — truncate them, same as a compacted call.
                 input: part.state.time.compacted || isDuplicate ? truncateArgs(part.state.input) : part.state.input,
                 output,
-                ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
+                ...(differentModel
+                  ? {}
+                  : {
+                      callProviderMetadata:
+                        model.providerID === "openrouter"
+                          ? part.id === carrier
+                            ? openrouter
+                            : undefined
+                          : part.metadata,
+                    }),
               })
             }
             if (part.state.status === "error")
@@ -671,7 +719,16 @@ export namespace MessageV2 {
                 toolCallId: part.callID,
                 input: part.state.input,
                 errorText: part.state.error,
-                ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
+                ...(differentModel
+                  ? {}
+                  : {
+                      callProviderMetadata:
+                        model.providerID === "openrouter"
+                          ? part.id === carrier
+                            ? openrouter
+                            : undefined
+                          : part.metadata,
+                    }),
               })
             // Handle pending/running tool calls to prevent dangling tool_use blocks
             // Anthropic/Claude APIs require every tool_use to have a corresponding tool_result
@@ -682,14 +739,32 @@ export namespace MessageV2 {
                 toolCallId: part.callID,
                 input: part.state.input,
                 errorText: "[Tool execution was interrupted]",
-                ...(differentModel ? {} : { callProviderMetadata: part.metadata }),
+                ...(differentModel
+                  ? {}
+                  : {
+                      callProviderMetadata:
+                        model.providerID === "openrouter"
+                          ? part.id === carrier
+                            ? openrouter
+                            : undefined
+                          : part.metadata,
+                    }),
               })
           }
           if (part.type === "reasoning") {
             assistantMessage.parts.push({
               type: "reasoning",
               text: part.text,
-              ...(differentModel ? {} : { providerMetadata: part.metadata }),
+              ...(differentModel
+                ? {}
+                : {
+                    providerMetadata:
+                      model.providerID === "openrouter"
+                        ? part.id === carrier
+                          ? openrouter
+                          : undefined
+                        : part.metadata,
+                  }),
             })
           }
         }

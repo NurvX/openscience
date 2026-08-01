@@ -33,6 +33,13 @@ describe("frontier model canonicalization", () => {
     )
   })
 
+  test("current Anthropic frontier models are reachable through native and managed routes", () => {
+    for (const id of ["claude-opus-5", "claude-sonnet-5"]) {
+      expect(canonicalKey("anthropic", id)).toBe(canonicalKey("openrouter", `anthropic/${id}`))
+      expect(FRONTIER_MODELS.has(canonicalKey("anthropic", id))).toBe(true)
+    }
+  })
+
   test("Muse Spark is part of the default frontier set", () => {
     expect(FRONTIER_MODELS.has(canonicalKey("meta", "muse-spark-1.1"))).toBe(true)
   })

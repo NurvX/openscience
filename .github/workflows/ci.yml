@@ -44,6 +44,18 @@ jobs:
           git config --global user.email "ci@openscience.dev"
           git config --global user.name "OpenScience CI"
           git config --global init.defaultBranch main
+      - name: Install and verify Linux sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          # Ubuntu 24.04's host-wide AppArmor policy blocks unprivileged user
+          # namespaces on the hosted runner before bubblewrap can apply our
+          # stricter per-process profile. This runner is disposable; enable
+          # user namespaces for the job, then prove the sandbox can start.
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --die-with-parent -- true
       - name: Build embedded web assets for server tests
         run: |
           bun run --cwd frontend/workspace build

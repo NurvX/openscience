@@ -1,6 +1,6 @@
 import { createSignal, Show, type JSX } from "solid-js"
 import { useDialog } from "@synsci/ui/context/dialog"
-import { FONT_MONO, FONT_SANS, FONT_SERIF } from "@/styles/tokens"
+import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
 
 type Dialog = ReturnType<typeof useDialog>
 
@@ -53,7 +53,7 @@ export function confirmDialog(
       () => (
         <div style={card()}>
           <div style={{ padding: "18px 20px 8px" }}>
-            <div style={{ "font-family": FONT_SERIF, "font-size": "19px", color: "var(--color-text)" }}>
+            <div style={{ "font-family": FONT_SANS, "font-size": "19px", color: "var(--color-text)" }}>
               {opts.title}
             </div>
             <Show when={opts.message}>
@@ -109,7 +109,7 @@ export function promptDialog(
       () => (
         <div style={card()}>
           <div style={{ padding: "18px 20px 8px" }}>
-            <div style={{ "font-family": FONT_SERIF, "font-size": "19px", color: "var(--color-text)" }}>
+            <div style={{ "font-family": FONT_SANS, "font-size": "19px", color: "var(--color-text)" }}>
               {opts.title}
             </div>
             <Show when={opts.message}>
@@ -188,7 +188,7 @@ export function alertDialog(
           <div style={{ padding: "18px 20px 8px" }}>
             <div
               style={{
-                "font-family": FONT_SERIF,
+                "font-family": FONT_SANS,
                 "font-size": "19px",
                 color: opts.danger ? "var(--color-error, #ef4444)" : "var(--color-text)",
               }}

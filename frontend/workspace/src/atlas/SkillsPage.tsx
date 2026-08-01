@@ -1,18 +1,17 @@
-// Skills — the dedicated, full-pane catalog of expert playbooks agents load on
-// demand. Promoted out of the settings dialog into its own center-pane tab so
-// it reads as a first-class surface. Data + enable/disable + add flows are the
-// same real endpoints the old settings panel used (app.skills / app.skill.write
-// / permission.skill), presented as a browsable, category-shelved library.
+// Skills — the reusable catalog of expert playbooks agents load on demand.
+// Data + enable/disable + add flows use the real app.skills / app.skill.write /
+// permission.skill APIs. The embedded presentation fits the Customize frame
+// without adding a second page title or center-workspace chrome.
 import { For, Show, createMemo, createResource, createSignal, type JSX } from "solid-js"
 import { Switch } from "@synsci/ui/switch"
 import { Icon } from "@synsci/ui/icon"
 import { showToast } from "@synsci/ui/toast"
-import { currentDirectory } from "@/utils/base64"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { usePlatform } from "@/context/platform"
 import { useGlobalSync } from "@/context/global-sync"
 import { FONT_SANS } from "@/styles/tokens"
 import type { Config } from "@synsci/sdk/v2/client"
+import { installFromGit } from "./skills-settings"
 import {
   SearchInput,
   FilterMenu,
@@ -52,7 +51,7 @@ const SOURCE_DOT: Record<Source, string> = {
   installed: "var(--color-text-interactive-base, var(--color-text))",
 }
 
-export default function SkillsPage(): JSX.Element {
+export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
   const sdk = useGlobalSDK()
   const platform = usePlatform()
   const sync = useGlobalSync()
@@ -130,18 +129,26 @@ export default function SkillsPage(): JSX.Element {
   })
 
   return (
-    <div class="skills-workspace">
+    <div class="skills-workspace" data-layout={props.embedded ? "settings" : "workspace"}>
       <div class="skills-workspace__header">
-        <div class="skills-workspace__heading">
-          <div>
-            <h1>Skills</h1>
-            <p>Playbooks available to this workspace and its research agents.</p>
+        <Show when={!props.embedded}>
+          <div class="skills-workspace__heading">
+            <div>
+              <h1>Skills</h1>
+              <p>Playbooks available to this workspace and its research agents.</p>
+            </div>
+            <div class="skills-workspace__summary">
+              <span>{enabledCount()} enabled</span>
+              <span>{all().length} total</span>
+            </div>
           </div>
+        </Show>
+        <Show when={props.embedded}>
           <div class="skills-workspace__summary">
             <span>{enabledCount()} enabled</span>
             <span>{all().length} total</span>
           </div>
-        </div>
+        </Show>
 
         <Show when={view() === "list"}>
           <div class="skills-workspace__toolbar">
@@ -218,7 +225,7 @@ export default function SkillsPage(): JSX.Element {
               onInstall={async (url) => {
                 setBusy(true)
                 try {
-                  const res = await installFromGit(platform.fetch ?? fetch, sdk.url, currentDirectory(), url)
+                  const res = await installFromGit(platform.fetch ?? fetch, sdk.url, url)
                   await skillsCtl.refetch()
                   const n = res.installed.length
                   const r = res.rejected.length
@@ -412,25 +419,6 @@ function frontmatterName(content: string): string | undefined {
     .join(":")
     .trim()
     .replace(/^["']|["']$/g, "")
-}
-
-async function installFromGit(
-  fetchFn: typeof fetch,
-  baseUrl: string,
-  directory: string,
-  url: string,
-): Promise<{ installed: unknown[]; rejected: unknown[]; warnings: unknown[] }> {
-  const endpoint = `${baseUrl.replace(/\/$/, "")}/settings/skills/install?directory=${encodeURIComponent(directory)}`
-  const res = await fetchFn(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => "")
-    throw new Error(text || `Request failed (${res.status})`)
-  }
-  return res.json() as Promise<{ installed: unknown[]; rejected: unknown[]; warnings: unknown[] }>
 }
 
 function message(err: unknown) {

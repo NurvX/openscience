@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { test, expect } from "./fixtures"
+import { openConnectedFile } from "./utils"
 
-test("explores, filters, plots, sorts, and exports a scientific CSV", async ({ page, gotoSession }) => {
-  const directory = mkdtempSync(path.join(tmpdir(), "openscience-table-e2e-"))
+test("explores, filters, plots, sorts, and exports a scientific CSV", async ({ page, sdk, openSession }) => {
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openscience-table-e2e-")))
   const filename = "expression.csv"
   writeFileSync(
     path.join(directory, filename),
@@ -12,13 +13,9 @@ test("explores, filters, plots, sorts, and exports a scientific CSV", async ({ p
   )
 
   try {
-    await gotoSession()
-    await page.getByRole("tab", { name: "Files", exact: true }).click()
-    const location = page.getByPlaceholder("/absolute/path")
-    await location.fill(directory)
-    await location.press("Enter")
-    await page.getByPlaceholder("filter this folder…").fill(filename)
-    await page.getByRole("button", { name: new RegExp(`^${filename}\\b`) }).click()
+    const sessionID = await openSession()
+    await sdk.session.filesystem.grant({ sessionID, path: directory, access: "read", scope: "session" })
+    await openConnectedFile(page, directory, filename)
 
     const table = page.locator('[data-component="data-table"]')
     await expect(table).toBeVisible()

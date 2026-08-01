@@ -5,13 +5,10 @@ import { Platform, PlatformProvider } from "@/context/platform"
 import { dict as en } from "@/i18n/en"
 import { dict as zh } from "@/i18n/zh"
 import { openscienceFetch } from "@/utils/openscience-fetch"
-import { installStaleBuildRecovery } from "@/utils/stale-build-recovery"
 import { URLS } from "@/config/urls"
 import pkg from "../package.json"
 
 const DEFAULT_SERVER_URL_KEY = "openscience.settings.dat:defaultServerUrl"
-
-installStaleBuildRecovery()
 
 const root = document.getElementById("root")
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
@@ -31,7 +28,7 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 
 const platform: Platform = {
   platform: "web",
-  version: pkg.version,
+  version: import.meta.env.VITE_OPENSCIENCE_VERSION || pkg.version,
   openLink(url: string) {
     window.open(url, "_blank")
   },
@@ -69,6 +66,12 @@ const platform: Platform = {
         }
       })
       .catch(() => undefined)
+  },
+  checkUpdate: async () => {
+    const response = await openscienceFetch("/settings/updates", { headers: { Accept: "application/json" } })
+    if (!response.ok) throw new Error(`Update check failed (${response.status})`)
+    const result = (await response.json()) as { updateAvailable: boolean; latest?: string }
+    return { updateAvailable: result.updateAvailable, version: result.latest }
   },
   getDefaultServerUrl: () => {
     if (typeof localStorage === "undefined") return null

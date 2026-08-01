@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import katex from "katex"
-import { sanitize } from "./markdown"
+import { resolveImages, sanitize } from "./markdown"
 
 const tex = "\\delta\\omega/\\omega < 10^{-6}"
 
@@ -43,5 +43,35 @@ describe("sanitize (KaTeX MathML annotation)", () => {
     )
     expect(safe).not.toContain("onerror")
     expect(safe).not.toContain("<script")
+  })
+})
+
+describe("resolveImages (relative image rewriting)", () => {
+  const resolve = (src: string) =>
+    /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(src)
+      ? src
+      : `http://127.0.0.1:4096/file/raw?path=${encodeURIComponent(src)}`
+
+  test("rewrites relative sources on already-sanitized markup", () => {
+    const root = document.createElement("div")
+    root.innerHTML = sanitize('<p>fig</p><img src="figures/plot.png" onerror="alert(1)" alt="plot">')
+
+    resolveImages(root, resolve)
+
+    const img = root.querySelector("img")
+    expect(img?.getAttribute("src")).toBe("http://127.0.0.1:4096/file/raw?path=figures%2Fplot.png")
+    expect(img?.getAttribute("alt")).toBe("plot")
+    // sanitization already ran — script-injection attributes stay stripped
+    expect(img?.getAttribute("onerror")).toBeNull()
+  })
+
+  test("leaves absolute and data URLs untouched", () => {
+    const root = document.createElement("div")
+    root.innerHTML = sanitize('<img src="https://example.com/a.png"><img src="data:image/png;base64,AAAA">')
+
+    resolveImages(root, resolve)
+
+    const sources = Array.from(root.querySelectorAll("img")).map((img) => img.getAttribute("src"))
+    expect(sources).toEqual(["https://example.com/a.png", "data:image/png;base64,AAAA"])
   })
 })

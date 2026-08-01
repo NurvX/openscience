@@ -1,19 +1,21 @@
 import { test, expect } from "./fixtures"
-import { modelTierCycleSelector, promptSelector } from "./utils"
+import { effortChipSelector, modelRowValue, promptSelector, setModelSpeed } from "./utils"
 
-test("model Fast mode toggles and reaches the prompt request", async ({ page, sdk, gotoSession }) => {
+test.skip(
+  process.env.OPENSCIENCE_E2E_FAKE_MODEL !== "1",
+  "requires the deterministic model supplied by test:e2e:local (or the E2E CI harness)",
+)
+
+test("model speed toggles through the settings popover and reaches the prompt request", async ({
+  page,
+  sdk,
+  gotoSession,
+}) => {
   await gotoSession()
 
-  await page.addStyleTag({
-    content: `${modelTierCycleSelector} { display: inline-block !important; }`,
-  })
-
-  const toggle = page.locator(modelTierCycleSelector)
-  const input = toggle.locator('[data-slot="switch-input"]')
-  const control = toggle.locator('[data-slot="switch-control"]')
-  await expect(toggle).toBeVisible()
-  await expect(toggle).toHaveText("Fast")
-  await expect(input).toHaveAttribute("aria-checked", "false")
+  // Speed defaults to Standard; no effort chip while effort stays default.
+  await expect(modelRowValue(page, "speed")).resolves.toBe("Standard")
+  await expect(page.locator(effortChipSelector)).toHaveCount(0)
 
   const send = async (tier?: string) => {
     const request = page.waitForRequest((request) => {
@@ -31,49 +33,31 @@ test("model Fast mode toggles and reaches the prompt request", async ({ page, sd
     return token
   }
 
+  const output = async (sessionID: string) =>
+    sdk.session.messages({ sessionID, limit: 50 }).then((response) =>
+      (response.data ?? [])
+        .filter((message) => message.info.role === "assistant")
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n"),
+    )
+
   const standard = await send()
   await expect(page).toHaveURL(/\/session\/[^/?#]+/, { timeout: 30_000 })
   const sessionID = /\/session\/([^/?#]+)/.exec(page.url())?.[1]
   if (!sessionID) throw new Error(`Failed to parse session id from url: ${page.url()}`)
   try {
-    await expect
-      .poll(
-        async () => {
-          const messages = await sdk.session.messages({ sessionID, limit: 50 }).then((response) => response.data ?? [])
-          return messages
-            .filter((message) => message.info.role === "assistant")
-            .flatMap((message) => message.parts)
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n")
-        },
-        { timeout: 20_000 },
-      )
-      .toContain(standard)
+    await expect.poll(() => output(sessionID), { timeout: 20_000 }).toContain(standard)
 
-    await control.click()
-    await expect(toggle).toHaveText("Fast")
-    await expect(input).toHaveAttribute("aria-checked", "true")
+    await setModelSpeed(page, "fast")
+    await expect(modelRowValue(page, "speed")).resolves.toBe("Fast")
 
     await page.reload()
-    await expect(toggle).toHaveText("Fast")
-    await expect(input).toHaveAttribute("aria-checked", "true")
+    await expect(modelRowValue(page, "speed")).resolves.toBe("Fast")
 
     const fast = await send("fast")
-    await expect
-      .poll(
-        async () => {
-          const messages = await sdk.session.messages({ sessionID, limit: 50 }).then((response) => response.data ?? [])
-          return messages
-            .filter((message) => message.info.role === "assistant")
-            .flatMap((message) => message.parts)
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n")
-        },
-        { timeout: 20_000 },
-      )
-      .toContain(fast)
+    await expect.poll(() => output(sessionID), { timeout: 20_000 }).toContain(fast)
 
     const command = page.waitForRequest((request) => {
       const path = new URL(request.url()).pathname
@@ -88,20 +72,7 @@ test("model Fast mode toggles and reaches the prompt request", async ({ page, sd
     expect(body.model).toBe("e2e/echo")
     expect(body.tier).toBe("fast")
 
-    await expect
-      .poll(
-        async () => {
-          const messages = await sdk.session.messages({ sessionID, limit: 50 }).then((response) => response.data ?? [])
-          return messages
-            .filter((message) => message.info.role === "assistant")
-            .flatMap((message) => message.parts)
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n")
-        },
-        { timeout: 20_000 },
-      )
-      .toContain("E2E_TIER_COMMAND_echo-other_standard")
+    await expect.poll(() => output(sessionID), { timeout: 20_000 }).toContain("E2E_TIER_COMMAND_echo-other_standard")
   } finally {
     await sdk.session.delete({ sessionID }).catch(() => undefined)
   }

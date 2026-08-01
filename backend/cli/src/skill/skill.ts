@@ -19,6 +19,7 @@ import { BusEvent } from "@/bus/bus-event"
 import { Session } from "@/session"
 import { OpenScience } from "@/openscience"
 import { Installation } from "@/installation"
+import { ProjectTrust } from "@/project/trust"
 
 // System skills the product invokes directly (e.g. the canvas prefills
 // `/initialize-atlas-graph`) but which are not part of the server skill
@@ -124,13 +125,15 @@ export namespace Skill {
     }
 
     // Scan .claude/skills/ directories (project-level)
-    const claudeDirs = await Array.fromAsync(
-      Filesystem.up({
-        targets: [".claude"],
-        start: Instance.directory,
-        stop: Instance.worktree,
-      }),
-    )
+    const claudeDirs = (await ProjectTrust.allowed(Instance.project))
+      ? await Array.fromAsync(
+          Filesystem.up({
+            targets: [".claude"],
+            start: Instance.directory,
+            stop: Instance.worktree,
+          }),
+        )
+      : []
     // Also include global ~/.claude/skills/
     const globalClaude = `${Global.Path.home}/.claude`
     if (await Filesystem.isDir(globalClaude)) {
@@ -159,7 +162,7 @@ export namespace Skill {
     }
 
     // Scan .openscience/skill/ directories
-    for (const dir of await Config.directories()) {
+    for (const dir of await Config.executableDirectories()) {
       for await (const match of OPENSCIENCE_SKILL_GLOB.scan({
         cwd: dir,
         absolute: true,
@@ -431,7 +434,7 @@ export namespace Skill {
     }
 
     // Scan additional skill paths from config
-    const config = await Config.get()
+    const config = await Config.getExecution()
     for (const skillPath of config.skills?.paths ?? []) {
       const expanded = skillPath.startsWith("~/") ? path.join(os.homedir(), skillPath.slice(2)) : skillPath
       const resolved = path.isAbsolute(expanded) ? expanded : path.join(Instance.directory, expanded)

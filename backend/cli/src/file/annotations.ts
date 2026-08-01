@@ -2,6 +2,7 @@ import path from "node:path"
 import { ulid } from "ulid"
 import z from "zod"
 import { Instance } from "../project/instance"
+import { ProjectLegacy } from "../project/legacy"
 import { Storage } from "../storage/storage"
 
 export namespace ArtifactAnnotation {
@@ -70,6 +71,7 @@ export namespace ArtifactAnnotation {
   })
   export type Info = z.infer<typeof Info>
   const Legacy = Info.omit({ artifactHash: true, version: true, revisions: true, deletedAt: true })
+  const Stored = z.object({ projectID: z.string() }).passthrough()
 
   export const Create = z.object({
     path: z.string().trim().min(1).max(10_000),
@@ -94,6 +96,13 @@ export namespace ArtifactAnnotation {
 
   const prefix = () => ["artifact_annotation", Instance.project.id]
   const key = (id: string) => [...prefix(), id]
+
+  async function migrate() {
+    await ProjectLegacy.adopt("artifact_annotation", Instance.project.id, (value, projectID) => ({
+      ...Stored.parse(value),
+      projectID,
+    }))
+  }
 
   async function target(value: string) {
     const absolute = path.resolve(Instance.directory, value)
@@ -138,6 +147,7 @@ export namespace ArtifactAnnotation {
   }
 
   async function read(id: string) {
+    await migrate()
     const stored = await Storage.read<unknown>(key(id))
     const current = Info.safeParse(stored)
     if (current.success) return current.data
@@ -158,6 +168,7 @@ export namespace ArtifactAnnotation {
   }
 
   export async function list(filepath: string) {
+    await migrate()
     const location = await target(filepath)
     const keys = await Storage.list(prefix())
     const records = await Promise.all(keys.map((item) => read(item.at(-1)!)))
@@ -167,6 +178,7 @@ export namespace ArtifactAnnotation {
   }
 
   export async function create(input: Create) {
+    await migrate()
     const now = Date.now()
     const id = `ann_${ulid()}`
     const location = await target(input.path)

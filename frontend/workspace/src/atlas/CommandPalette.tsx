@@ -1,13 +1,26 @@
-import { createSignal, createMemo, type JSX, Show, For, onMount, onCleanup } from "solid-js"
+import { createSignal, createMemo, createEffect, type JSX, Show, For, onMount, onCleanup } from "solid-js"
 import { Portal } from "solid-js/web"
-import { useNavigate } from "@solidjs/router"
+import { useNavigate, useParams } from "@solidjs/router"
 import { useDialog } from "@synsci/ui/context/dialog"
 import { FONT_MONO, FONT_SANS } from "@/styles/tokens"
-import { base64Encode } from "@synsci/util/encode"
+import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
+import { usePlatform } from "@/context/platform"
 import { DialogSettings } from "@/components/dialog-settings"
 import { FolderPicker } from "@/atlas/FolderPicker"
-import { IconFolder, IconSearch, IconPlus, IconHome, IconSettings } from "@/atlas/shared/Icon"
+import { uiStore } from "@/atlas/store/ui"
+import {
+  IconFile,
+  IconFolder,
+  IconMessageSquare,
+  IconSearch,
+  IconPlus,
+  IconHome,
+  IconSettings,
+} from "@/atlas/shared/Icon"
+import { projectHref, resolveProjectRoute } from "@/utils/project-route"
+import { projectHint, projectName } from "@/pages/home-projects"
+import { createProjectRequest } from "@/utils/openscience-fetch"
 
 interface CommandPaletteProps {
   open: boolean
@@ -23,15 +36,122 @@ interface Cmd {
   run: () => void
 }
 
+// Shape of GET /search — plain-text, case-insensitive substring matches
+// scoped to the active project (capped at 20 per group server-side).
+interface Hits {
+  sessions: Array<{ id: string; title: string }>
+  messages: Array<{ sessionID: string; messageID: string; role: string; snippet: string }>
+  artifacts: Array<{ path: string; name: string; kind: string }>
+}
+
+const EMPTY: Hits = { sessions: [], messages: [], artifacts: [] }
+const DEBOUNCE = 250
+const REVEAL_TIMEOUT = 2000
+
+// The transcript renders data-message-id anchors; after navigating to the
+// session the target may not be mounted yet, so retry for up to ~2s.
+function reveal(messageID: string) {
+  const deadline = Date.now() + REVEAL_TIMEOUT
+  const attempt = () => {
+    const node = document.querySelector(`[data-message-id="${CSS.escape(messageID)}"]`)
+    if (node) return node.scrollIntoView({ block: "center", behavior: "smooth" })
+    if (Date.now() > deadline) return
+    setTimeout(() => requestAnimationFrame(attempt), 100)
+  }
+  requestAnimationFrame(attempt)
+}
+
 export function CommandPalette(props: CommandPaletteProps): JSX.Element {
   const [query, setQuery] = createSignal("")
   const [highlighted, setHighlighted] = createSignal(0)
+  const [hits, setHits] = createSignal<Hits>()
+  const [searching, setSearching] = createSignal(false)
+  const [frame, setFrame] = createSignal({
+    left: 0,
+    top: 0,
+    width: typeof window === "undefined" ? 1280 : window.innerWidth,
+    height: typeof window === "undefined" ? 800 : window.innerHeight,
+  })
   const navigate = useNavigate()
+  const params = useParams()
   const dialog = useDialog()
   const sync = useGlobalSync()
+  const global = useGlobalSDK()
+  const platform = usePlatform()
   let inputRef: HTMLInputElement | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let inflight: AbortController | undefined
 
-  const goTo = (directory: string) => navigate(`/${base64Encode(directory)}/session`)
+  // Search belongs to the conversation, not the inspector. Re-measure while
+  // open so resizing either pane keeps the palette visually anchored to the
+  // main work area instead of making it appear to slide in from the right.
+  createEffect(() => {
+    if (!props.open) return
+    const update = () => {
+      const node = document.querySelector<HTMLElement>('[data-component="conversation-center"]')
+      const rect = node?.getBoundingClientRect()
+      if (!rect || rect.width < 320) {
+        setFrame({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight })
+        return
+      }
+      setFrame({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })
+    }
+    requestAnimationFrame(update)
+    window.addEventListener("resize", update)
+    onCleanup(() => window.removeEventListener("resize", update))
+  })
+
+  // The palette mounts on both the home page (no project) and project pages,
+  // so the active project comes from the route rather than the SDK context.
+  const active = createMemo(() => resolveProjectRoute(params.dir, sync.data.project))
+  const request = createProjectRequest({
+    baseUrl: () => global.url,
+    fetch: () => platform.fetch ?? fetch,
+    directory: () => active()?.directory ?? "",
+    projectID: () => active()?.projectID,
+  })
+
+  createEffect(() => {
+    const q = query().trim()
+    const scoped = props.open && q.length >= 2 && active() !== undefined
+    if (timer) clearTimeout(timer)
+    inflight?.abort()
+    if (!scoped) {
+      setHits(undefined)
+      setSearching(false)
+      return
+    }
+    setSearching(true)
+    timer = setTimeout(() => {
+      const controller = new AbortController()
+      inflight = controller
+      request("/search", { signal: controller.signal }, { q })
+        .then((res) => (res.ok ? (res.json() as Promise<Hits>) : EMPTY))
+        .then((data) => {
+          if (controller.signal.aborted) return
+          setHits(data)
+          setSearching(false)
+        })
+        .catch(() => {
+          if (controller.signal.aborted) return
+          setHits(EMPTY)
+          setSearching(false)
+        })
+    }, DEBOUNCE)
+  })
+
+  onCleanup(() => {
+    if (timer) clearTimeout(timer)
+    inflight?.abort()
+  })
+
+  const goTo = (project: (typeof sync.data.project)[number]) => navigate(projectHref(project))
+  const openDirectory = (directory: string) => {
+    void sync.project
+      .resolve(directory)
+      .then(goTo)
+      .catch(() => undefined)
+  }
 
   const showInAppPicker = () => {
     dialog.show(
@@ -40,7 +160,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
           onSelect={(result) => {
             const directory = Array.isArray(result) ? result[0] : result
             if (!directory) return
-            goTo(directory)
+            openDirectory(directory)
           }}
         />
       ),
@@ -90,17 +210,15 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
     })
 
     sync.data.project.forEach((p) => {
-      const segs = p.worktree.split("/").filter(Boolean)
-      const name = segs[segs.length - 1] ?? p.worktree
       list.push({
         id: `proj-${p.id}`,
-        label: name,
-        hint: p.worktree,
+        label: projectName(p),
+        hint: projectHint(p),
         icon: IconFolder,
         category: "projects",
         run: () => {
           props.onClose()
-          goTo(p.worktree)
+          goTo(p)
         },
       })
     })
@@ -108,10 +226,56 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
     return list
   })
 
+  // Search hits reuse the Cmd shape so the existing flat-list selection model
+  // (highlight index, arrow keys, enter) spans the new groups unchanged.
+  const results = createMemo<Cmd[]>(() => {
+    const data = hits()
+    const scope = active()
+    if (!data || !scope) return []
+    const titles = new Map(data.sessions.map((s) => [s.id, s.title]))
+    const list: Cmd[] = []
+    data.sessions.forEach((s) => {
+      list.push({
+        id: `session-${s.id}`,
+        label: s.title,
+        hint: "open session",
+        icon: IconMessageSquare,
+        category: "sessions",
+        run: () => navigate(projectHref(scope.project, scope.directory, s.id)),
+      })
+    })
+    data.messages.forEach((m) => {
+      list.push({
+        id: `message-${m.messageID}`,
+        label: m.snippet,
+        hint: `${m.role} · ${titles.get(m.sessionID) ?? m.sessionID}`,
+        icon: IconSearch,
+        category: "messages",
+        run: () => {
+          navigate(projectHref(scope.project, scope.directory, m.sessionID))
+          reveal(m.messageID)
+        },
+      })
+    })
+    data.artifacts.forEach((a) => {
+      list.push({
+        id: `artifact-${a.path}`,
+        label: a.name,
+        hint: a.kind,
+        icon: IconFile,
+        category: "artifacts",
+        run: () => uiStore.openFile(scope.directory, a.path),
+      })
+    })
+    return list
+  })
+
   const filtered = createMemo(() => {
     const q = query().toLowerCase().trim()
-    if (!q) return cmds()
-    return cmds().filter((c) => c.label.toLowerCase().includes(q) || c.hint?.toLowerCase().includes(q))
+    const base = q
+      ? cmds().filter((c) => c.label.toLowerCase().includes(q) || c.hint?.toLowerCase().includes(q))
+      : cmds()
+    return [...base, ...results()]
   })
 
   const grouped = createMemo(() => {
@@ -163,11 +327,11 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
           aria-modal="true"
           aria-label="command palette"
           style={{
-            top: "12vh",
-            left: "50%",
+            top: `${Math.max(frame().top + 24, frame().top + frame().height * 0.1)}px`,
+            left: `${frame().left + frame().width / 2}px`,
             transform: "translateX(-50%)",
-            width: "560px",
-            "max-width": "92vw",
+            width: `${Math.min(640, Math.max(320, frame().width - 32))}px`,
+            "max-width": "calc(100vw - 24px)",
             "max-height": "70vh",
           }}
           onClick={(e) => e.stopPropagation()}
@@ -180,7 +344,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
               display: "flex",
               "align-items": "center",
               gap: "10px",
-              padding: "12px 16px",
+              padding: "13px 16px",
               "border-bottom": "1px solid var(--color-border)",
             }}
           >
@@ -189,13 +353,13 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
             </span>
             <input
               ref={inputRef}
-              aria-label="search commands and projects"
+              aria-label="search projects, sessions, messages, and artifacts"
               value={query()}
               onInput={(e) => {
                 setQuery(e.currentTarget.value)
                 setHighlighted(0)
               }}
-              placeholder="search projects, sessions, actions…"
+              placeholder={active() ? "search projects, sessions, messages, artifacts…" : "search projects, actions…"}
               autofocus
               style={{
                 all: "unset",
@@ -208,7 +372,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
             <span
               style={{
                 "font-family": FONT_MONO,
-                "font-size": "10px",
+                "font-size": "11px",
                 color: "var(--color-text-faint)",
                 "text-transform": "uppercase",
                 "letter-spacing": "0.08em",
@@ -220,7 +384,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
 
           <div class="atlas-scroll" style={{ "overflow-y": "auto", "max-height": "52vh", padding: "6px 0" }}>
             <Show
-              when={filtered().length > 0}
+              when={filtered().length > 0 || searching()}
               fallback={
                 <div
                   style={{
@@ -240,9 +404,9 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                   <div>
                     <div
                       style={{
-                        padding: "6px 16px",
+                        padding: "7px 16px 5px",
                         "font-family": FONT_MONO,
-                        "font-size": "10px",
+                        "font-size": "11px",
                         "letter-spacing": "0.08em",
                         "text-transform": "uppercase",
                         color: "var(--color-text-faint)",
@@ -270,7 +434,8 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                               gap: "10px",
                               width: "100%",
                               "box-sizing": "border-box",
-                              padding: "8px 16px",
+                              "min-height": "40px",
+                              padding: "9px 16px",
                               background: highlighted() === idx() ? "var(--color-accent-subtle)" : "transparent",
                               transition: "background 120ms ease",
                             }}
@@ -288,7 +453,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                             <span
                               style={{
                                 "font-family": FONT_MONO,
-                                "font-size": "12px",
+                                "font-size": "13px",
                                 color: "var(--color-text)",
                                 overflow: "hidden",
                                 "text-overflow": "ellipsis",
@@ -302,7 +467,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                               <span
                                 style={{
                                   "font-family": FONT_SANS,
-                                  "font-size": "11px",
+                                  "font-size": "12px",
                                   color: "var(--color-text-faint)",
                                   overflow: "hidden",
                                   "text-overflow": "ellipsis",
@@ -320,6 +485,19 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
                   </div>
                 )}
               </For>
+              <Show when={searching()}>
+                <div
+                  style={{
+                    padding: "10px 16px",
+                    "font-family": FONT_MONO,
+                    "font-size": "11px",
+                    "letter-spacing": "0.08em",
+                    color: "var(--color-text-faint)",
+                  }}
+                >
+                  searching…
+                </div>
+              </Show>
             </Show>
           </div>
 
@@ -332,7 +510,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
               "border-top": "1px solid var(--color-border)",
               background: "var(--color-bg-subtle)",
               "font-family": FONT_MONO,
-              "font-size": "10px",
+              "font-size": "11px",
               color: "var(--color-text-faint)",
             }}
           >
@@ -340,6 +518,7 @@ export function CommandPalette(props: CommandPaletteProps): JSX.Element {
             <Hint k="↵" l="select" />
             <Hint k="esc" l="close" />
             <span style={{ flex: 1 }} />
+            <span style={{ "letter-spacing": "0.04em" }}>local search</span>
             <span style={{ "letter-spacing": "0.04em" }}>⌘K</span>
           </div>
         </div>

@@ -1,16 +1,18 @@
 import { test, expect } from "./fixtures"
-import { promptSelector } from "./utils"
+import { modelPopoverSelector, modelTriggerSelector } from "./utils"
+
+async function openModelPicker(page: import("@playwright/test").Page) {
+  await page.locator(modelTriggerSelector).click()
+  await page.locator(`${modelPopoverSelector} [data-model-menu-row="model"]`).click()
+  const picker = page.getByRole("dialog", { name: "select model" })
+  await expect(picker).toBeVisible()
+  return picker
+}
 
 test("hiding a model removes it from the model picker", async ({ page, gotoSession }) => {
   await gotoSession()
 
-  const form = page.locator(promptSelector).locator("xpath=ancestor::form[1]")
-  const trigger = form.locator('button[aria-haspopup="dialog"]:has([data-component="provider-icon"])').first()
-  await expect(trigger).toBeVisible()
-  await trigger.click()
-
-  const picker = page.getByRole("dialog", { name: "select model" })
-  await expect(picker).toBeVisible()
+  const picker = await openModelPicker(page)
 
   const target = picker.locator('[data-slot="list-item"]').first()
   await expect(target).toBeVisible()
@@ -18,10 +20,10 @@ test("hiding a model removes it from the model picker", async ({ page, gotoSessi
   const key = await target.getAttribute("data-key")
   if (!key) throw new Error("Failed to resolve model key from list item")
 
-  const name = (await target.locator("span").first().innerText()).trim()
+  const name = (await target.locator("span.truncate").first().innerText()).trim()
   if (!name) throw new Error("Failed to resolve model name from list item")
 
-  await picker.getByRole("button", { name: "manage models" }).click()
+  await picker.getByRole("button", { name: "manage models" }).first().click()
 
   const manage = page.getByRole("dialog", { name: "manage models" })
   await expect(manage).toBeVisible()
@@ -40,10 +42,7 @@ test("hiding a model removes it from the model picker", async ({ page, gotoSessi
   await page.keyboard.press("Escape")
   await expect(manage).toHaveCount(0)
 
-  await trigger.click()
-
-  const pickerAgain = page.getByRole("dialog", { name: "select model" })
-  await expect(pickerAgain).toBeVisible()
+  const pickerAgain = await openModelPicker(page)
   await expect(pickerAgain.locator(`[data-slot="list-item"][data-key="${key}"]`)).toHaveCount(0)
 
   await page.keyboard.press("Escape")

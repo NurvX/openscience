@@ -1,29 +1,11 @@
-import path from "node:path"
-import type { Page } from "@playwright/test"
 import { test, expect } from "./fixtures"
+import { openWorkspaceFile } from "./utils"
 
-const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+const MANUSCRIPT = "frontend/workspace/e2e/science/manuscript.md"
 
-async function openFile(page: Page, directory: string, relativePath: string) {
-  await page.getByRole("tab", { name: "Files", exact: true }).click()
-  const folder = path.join(directory, path.dirname(relativePath))
-  const filename = path.basename(relativePath)
-  const location = page.getByPlaceholder("/absolute/path")
-  await location.fill(folder)
-  await location.press("Enter")
-  await page.getByPlaceholder("filter this folder…").fill(filename)
-  const file = page.getByRole("button", { name: new RegExp(`^${escapeRegex(filename)}\\b`) }).first()
-  await expect(file).toBeVisible()
-  await file.click()
-}
-
-test("authors Markdown with live preview, local citations, and local figures", async ({
-  page,
-  directory,
-  gotoSession,
-}) => {
-  await gotoSession()
-  await openFile(page, directory, "frontend/workspace/e2e/science/manuscript.md")
+test("authors Markdown with live preview, local citations, and local figures", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, MANUSCRIPT)
 
   const workbench = page.locator('[data-component="manuscript-workbench"]')
   const editor = workbench.getByLabel("Manuscript source")
@@ -49,13 +31,13 @@ test("authors Markdown with live preview, local citations, and local figures", a
   await expect(editor).toHaveValue(/!\[Primary endpoint\]\(manuscript-figure\.svg\)$/)
   await expect(preview.getByRole("img", { name: "Primary endpoint", exact: true })).toBeVisible()
 
-  await page.getByRole("button", { name: "reset", exact: true }).click()
+  await page.getByRole("button", { name: "Discard changes", exact: true }).click()
   await expect(editor).not.toHaveValue(/\[@smith2026\]/)
 })
 
-test("exposes exact-byte review and publication export controls", async ({ page, directory, gotoSession }) => {
+test("exposes exact-byte review and publication export controls", async ({ page, openSession }) => {
   const exports: Array<Record<string, unknown>> = []
-  await page.route("**/file/publication?**", async (route) => {
+  await page.route("**/file/publication", async (route) => {
     if (route.request().method() !== "POST") {
       await route.continue()
       return
@@ -75,25 +57,32 @@ test("exposes exact-byte review and publication export controls", async ({ page,
     })
   })
 
-  await gotoSession()
-  await openFile(page, directory, "frontend/workspace/e2e/science/manuscript.md")
+  await openSession()
+  await openWorkspaceFile(page, MANUSCRIPT)
   const workbench = page.locator('[data-component="manuscript-workbench"]')
 
-  await workbench.getByRole("button", { name: "Review", exact: true }).click()
-  const inspector = page.locator('[data-component="artifact-inspector"]')
-  await expect(inspector.getByRole("tab", { name: "Review", exact: true })).toHaveAttribute("aria-selected", "true")
-
+  // The reviewed export stays locked until the preflight is finalized; the
+  // draft export posts the manuscript's exact saved bytes.
   await workbench.getByRole("button", { name: "Publish", exact: true }).click()
   const publish = workbench.locator('[data-component="publication-controls"]')
-  await expect(publish.getByText("Reviewed export locked", { exact: true })).toBeVisible()
+  await expect(publish.getByText("Preflight export locked", { exact: true })).toBeVisible()
   await publish.getByRole("button", { name: "Export draft HTML", exact: true }).click()
-  await expect
-    .poll(() => exports)
-    .toEqual([
-      {
-        path: "manuscript.md",
-        format: "html",
-        readiness: "draft",
-      },
-    ])
+  await expect.poll(() => exports.length).toBe(1)
+  // Opened as a session-scoped file, the manuscript exports by its project
+  // relative path. Preflight readiness and format are the load-bearing bytes.
+  expect(exports[0]).toMatchObject({ format: "html", readiness: "draft" })
+  expect(exports[0].path).toMatch(/(^|\/)manuscript\.md$/)
+})
+
+test("routes manuscript review into the artifact inspector", async ({ page, openSession }) => {
+  await openSession()
+  await openWorkspaceFile(page, MANUSCRIPT)
+  const workbench = page.locator('[data-component="manuscript-workbench"]')
+
+  // Review stages the preflight into the artifact inspector's Review tab and
+  // points the author to Details; opening Details surfaces it there.
+  await workbench.getByRole("button", { name: "Review", exact: true }).click()
+  await page.getByRole("button", { name: "Open file details", exact: true }).click()
+  const inspector = page.locator('[data-component="artifact-inspector"]')
+  await expect(inspector.getByRole("tab", { name: "Review", exact: true })).toHaveAttribute("aria-selected", "true")
 })

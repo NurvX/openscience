@@ -11,6 +11,7 @@ import { NamedError } from "@synsci/util/error"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
+import { ProjectTrust } from "../project/trust"
 import { Flag } from "../flag/flag"
 import { iife } from "@/util/iife"
 import { OpenScience } from "../openscience"
@@ -1221,6 +1222,7 @@ export namespace Provider {
     modelLoaders: { [providerID: string]: CustomModelLoader }
   }> | null = null
   let _stateCacheDirectory: string | undefined
+  let _stateCacheTrust: boolean | undefined
 
   async function _loadState() {
     using _ = log.time("state")
@@ -1429,7 +1431,7 @@ export namespace Provider {
       database["openai-codex"] = {
         ...baseOpenai,
         id: "openai-codex",
-        name: "OpenAI (ChatGPT subscription)",
+        name: "OpenAI (Codex subscription)",
         env: [],
         options: {},
         models: codexModels,
@@ -1616,11 +1618,13 @@ export namespace Provider {
   }
 
   // Returns the memoised state, creating it on first call or after invalidate().
-  function state() {
+  async function state() {
     const directory = Instance.directory
-    if (_stateCacheDirectory !== directory) {
+    const trusted = await ProjectTrust.allowed(Instance.project)
+    if (_stateCacheDirectory !== directory || _stateCacheTrust !== trusted) {
       _stateCache = null
       _stateCacheDirectory = directory
+      _stateCacheTrust = trusted
     }
     if (_stateCache === null) {
       _stateCache = _loadState()
@@ -1637,6 +1641,7 @@ export namespace Provider {
   export function invalidate(): void {
     _stateCache = null
     _stateCacheDirectory = undefined
+    _stateCacheTrust = undefined
   }
 
   function resolveOpenRouterAlias(s: Awaited<ReturnType<typeof state>>, providerID: string, modelID: string) {
@@ -1665,6 +1670,24 @@ export namespace Provider {
   // (memoized) SDK instances rather than re-run per request.
   const tokenCache = new Map<string, { token: string; expires: number }>()
   const tokenInflight = new Map<string, Promise<string>>()
+
+  async function projectToken(model: Model, command: string) {
+    const config = await Config.get()
+    const declared = config.provider?.[model.providerID]?.options?.tokenCommand
+    if (declared !== command) return false
+    const executable = await Config.getExecution()
+    return executable.provider?.[model.providerID]?.options?.tokenCommand !== command
+  }
+
+  async function projectModule(model: Model) {
+    const configured = (config: Config.Info) => {
+      const provider = config.provider?.[model.providerID]
+      return provider?.models?.[model.id]?.provider?.npm ?? provider?.npm
+    }
+    const declared = configured(await Config.get())
+    if (declared !== model.api.npm) return false
+    return configured(await Config.getExecution()) !== model.api.npm
+  }
 
   async function mintToken(command: string): Promise<string> {
     const cached = tokenCache.get(command)
@@ -1771,6 +1794,9 @@ export namespace Provider {
         // Headers.set is case-insensitive, so it replaces the placeholder key the
         // SDK attached at construction.
         if (tokenCommand) {
+          if (await projectToken(model, tokenCommand)) {
+            await ProjectTrust.require(Instance.project, "provider_token_command")
+          }
           const token = await mintToken(tokenCommand)
           const headers = new Headers(opts.headers as HeadersInit | undefined)
           headers.set("authorization", `Bearer ${token}`)
@@ -1798,6 +1824,9 @@ export namespace Provider {
         return loaded as SDK
       }
 
+      if (await projectModule(model)) {
+        await ProjectTrust.require(Instance.project, "provider_module")
+      }
       let installedPath: string
       if (!model.api.npm.startsWith("file://")) {
         installedPath = await BunProc.install(model.api.npm, "latest")

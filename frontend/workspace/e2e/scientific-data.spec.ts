@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { test, expect } from "./fixtures"
+import { openConnectedFile } from "./utils"
 
-test("inspects and searches genomics and sequencing files", async ({ page, gotoSession }) => {
-  const directory = mkdtempSync(path.join(tmpdir(), "openscience-bio-e2e-"))
+test("inspects and searches genomics and sequencing files", async ({ page, sdk, openSession }) => {
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openscience-bio-e2e-")))
   writeFileSync(
     path.join(directory, "cohort.vcf"),
     [
@@ -22,14 +23,10 @@ test("inspects and searches genomics and sequencing files", async ({ page, gotoS
   )
 
   try {
-    await gotoSession()
-    await page.getByRole("tab", { name: "Files", exact: true }).click()
-    const location = page.getByPlaceholder("/absolute/path")
-    await location.fill(directory)
-    await location.press("Enter")
+    const sessionID = await openSession()
+    await sdk.session.filesystem.grant({ sessionID, path: directory, access: "read", scope: "session" })
 
-    await page.getByPlaceholder("filter this folder…").fill("cohort.vcf")
-    await page.getByRole("button", { name: /^cohort\.vcf\b/ }).click()
+    await openConnectedFile(page, directory, "cohort.vcf")
     const vcf = page.locator('[data-component="scientific-data"][data-format="vcf"]')
     await expect(vcf).toBeVisible()
     await expect(vcf.getByText("3 variants", { exact: true })).toBeVisible()
@@ -42,9 +39,7 @@ test("inspects and searches genomics and sequencing files", async ({ page, gotoS
     await expect(vcf.getByText("chr2:30", { exact: true })).toBeVisible()
     await expect(vcf.getByText("chr1:10", { exact: true })).toHaveCount(0)
 
-    await page.getByRole("tab", { name: "Files", exact: true }).click()
-    await page.getByPlaceholder("filter this folder…").fill("reads.fastq")
-    await page.getByRole("button", { name: /^reads\.fastq\b/ }).click()
+    await openConnectedFile(page, directory, "reads.fastq")
     const fastq = page.locator('[data-component="scientific-data"][data-format="fastq"]')
     await expect(fastq).toBeVisible()
     await expect(fastq.getByText("2 reads", { exact: true })).toBeVisible()
