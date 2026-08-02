@@ -48,7 +48,7 @@
       "post": {
         "operationId": "global.project.create",
         "summary": "Create project",
-        "description": "Create an app-managed project with an opaque identity. The server owns its local root; clients provide a display name, never a host path.",
+        "description": "Create an app-managed project with an opaque identity and optional project-scoped access to source locations explicitly selected by the user. Source paths never become the project identity.",
         "responses": {
           "201": {
             "description": "Created project information",
@@ -79,6 +79,31 @@
                 "properties": {
                   "name": {
                     "type": "string"
+                  },
+                  "sources": {
+                    "default": [],
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "access": {
+                          "default": "write",
+                          "type": "string",
+                          "enum": [
+                            "read",
+                            "write"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path"
+                      ]
+                    }
                   }
                 },
                 "required": [
@@ -1378,7 +1403,7 @@
       "delete": {
         "operationId": "settings.storage.resetLocation",
         "summary": "Reset data location",
-        "description": "Remove the data-location pointer so the default location is used on next launch.",
+        "description": "Remove the data-location pointer so ~/.openscience is used on next launch.",
         "responses": {
           "200": {
             "description": "Reset",
@@ -8155,6 +8180,29 @@
                   "properties": {
                     "auto": {
                       "type": "boolean"
+                    },
+                    "model": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "providerID": {
+                              "type": "string"
+                            },
+                            "modelID": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "providerID",
+                            "modelID"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -8185,6 +8233,29 @@
                   "properties": {
                     "auto": {
                       "type": "boolean"
+                    },
+                    "model": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "providerID": {
+                              "type": "string"
+                            },
+                            "modelID": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "providerID",
+                            "modelID"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -8203,6 +8274,29 @@
                 "properties": {
                   "auto": {
                     "type": "boolean"
+                  },
+                  "model": {
+                    "default": null,
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "providerID": {
+                            "type": "string"
+                          },
+                          "modelID": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "providerID",
+                          "modelID"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -8254,6 +8348,29 @@
                       "default": 0,
                       "type": "number",
                       "minimum": 0
+                    },
+                    "show_trace": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "atlas_enabled": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "delegation_enabled": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "delegation_specialist": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   }
                 }
@@ -8301,6 +8418,29 @@
                       "default": 0,
                       "type": "number",
                       "minimum": 0
+                    },
+                    "show_trace": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "atlas_enabled": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "delegation_enabled": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "delegation_specialist": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   }
                 }
@@ -8336,6 +8476,29 @@
                     "default": 0,
                     "type": "number",
                     "minimum": 0
+                  },
+                  "show_trace": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "atlas_enabled": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "delegation_enabled": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "delegation_specialist": {
+                    "default": null,
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 }
               }
@@ -8770,6 +8933,59 @@
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.wallet.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/settings/updates": {
+      "get": {
+        "operationId": "settings.updates.check",
+        "summary": "Check for an OpenScience update",
+        "responses": {
+          "200": {
+            "description": "Current and latest package versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "string"
+                    },
+                    "latest": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "updateAvailable": {
+                      "type": "boolean"
+                    },
+                    "releaseNotes": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "current",
+                    "latest",
+                    "channel",
+                    "method",
+                    "updateAvailable",
+                    "releaseNotes"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.updates.check({\n  ...\n})"
           }
         ]
       }
@@ -10827,6 +11043,9 @@
                     "type": "object",
                     "properties": {
                       "archived": {
+                        "type": "number"
+                      },
+                      "pinned": {
                         "type": "number"
                       }
                     }
@@ -13361,6 +13580,9 @@
                       "type": "boolean"
                     }
                   },
+                  "delegation": {
+                    "type": "boolean"
+                  },
                   "system": {
                     "type": "string"
                   },
@@ -13747,6 +13969,9 @@
                     "additionalProperties": {
                       "type": "boolean"
                     }
+                  },
+                  "delegation": {
+                    "type": "boolean"
                   },
                   "system": {
                     "type": "string"
@@ -28822,6 +29047,9 @@
               "type": "boolean"
             }
           },
+          "delegation": {
+            "type": "boolean"
+          },
           "variant": {
             "type": "string"
           },
@@ -30986,6 +31214,9 @@
                 "type": "number"
               },
               "archived": {
+                "type": "number"
+              },
+              "pinned": {
                 "type": "number"
               }
             },

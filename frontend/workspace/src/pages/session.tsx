@@ -22,7 +22,6 @@ import { useLayout } from "@/context/layout"
 import { usePrompt } from "@/context/prompt"
 import { useServer } from "@/context/server"
 import { usePlatform } from "@/context/platform"
-import { useTheme } from "@synsci/ui/theme"
 import { useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { NewSessionView } from "@/components/session/session-new-view"
@@ -37,12 +36,7 @@ import { useCommand, type CommandOption } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { confirmDialog } from "@/atlas/dialogs"
 import { DialogSettings } from "@/components/dialog-settings"
-import {
-  CompactContextActions,
-  SessionSidebarActions,
-  SidebarAction,
-  type SessionContext,
-} from "@/pages/session-sidebar-action"
+import { SessionSidebarActions, SidebarAction, type SessionContext } from "@/pages/session-sidebar-action"
 import { DisconnectedPanel } from "@/atlas/DisconnectedPanel"
 import { CommandPalette } from "@/atlas/CommandPalette"
 import { HelpOverlay } from "@/atlas/HelpOverlay"
@@ -52,13 +46,12 @@ import {
   IconChevronLeft,
   IconPlus,
   IconSearch,
-  IconBookOpen,
   IconCheckCircle,
   IconSettings,
-  IconSun,
-  IconMoon,
   IconMessageSquare,
   IconMoreH,
+  IconPin,
+  IconPinFilled,
   IconX,
 } from "@/atlas/shared/Icon"
 import { StatusDot } from "@/atlas/shared/StatusDot"
@@ -70,6 +63,7 @@ import { createSessionTabs } from "@/atlas/store/sessionTabs"
 import { ProjectTrustControl } from "@/atlas/ProjectTrust"
 import { projectTrustApi, type ProjectTrustApi } from "@/atlas/project-trust"
 import { terminalEndpointAvailable } from "@/atlas/terminal-endpoint"
+import { productPreferences, type ProductPreferences } from "@/context/product-preferences"
 
 type SyncSession = ReturnType<typeof useSync>["data"]["session"][number]
 
@@ -79,6 +73,23 @@ type SyncSession = ReturnType<typeof useSync>["data"]["session"][number]
  * the unchanged openscience backend chat (SessionTurn rendering, PromptInput,
  * real SSE streaming, sub-task delegation, tool calls, TODOs, diff cards).
  */
+const sessionSidebarKey = "openscience-session-sidebar-v1"
+
+function readSessionSidebar() {
+  if (typeof localStorage === "undefined") return false
+  try {
+    return localStorage.getItem(sessionSidebarKey) === "collapsed"
+  } catch {
+    return false
+  }
+}
+
+function writeSessionSidebar(collapsed: boolean) {
+  try {
+    localStorage.setItem(sessionSidebarKey, collapsed ? "collapsed" : "expanded")
+  } catch {}
+}
+
 export default function Page(): JSX.Element {
   const params = useParams()
   const navigate = useNavigate()
@@ -89,11 +100,12 @@ export default function Page(): JSX.Element {
   const terminal = useTerminal()
   const server = useServer()
   const platform = usePlatform()
-  const theme = useTheme()
   const dialog = useDialog()
   const trust = projectTrustApi(sdk.client)
   const [creating, setCreating] = createSignal(false)
+  const pending: { value?: Promise<string | undefined>; context?: SessionContext } = {}
   const [mobileSessionsOpen, setMobileSessionsOpen] = createSignal(false)
+  const [sessionsCollapsed, setSessionsCollapsed] = createSignal(readSessionSidebar())
   const [atlasConnected, setAtlasConnected] = createSignal(false)
   const sessionTabs = createSessionTabs()
 
@@ -110,6 +122,21 @@ export default function Page(): JSX.Element {
     ),
   )
 
+  createEffect(
+    on(
+      () => server.url,
+      (url) => {
+        productPreferences.sync({ show_trace: false, atlas_enabled: true })
+        if (!url) return
+        const endpoint = `${url.replace(/\/$/, "")}/settings/preferences`
+        void (platform.fetch ?? fetch)(endpoint)
+          .then((response) => (response.ok ? response.json() : Promise.reject(new Error("Preferences unavailable"))))
+          .then((preferences) => productPreferences.sync(preferences as ProductPreferences))
+          .catch(() => productPreferences.sync({ show_trace: false, atlas_enabled: true }))
+      },
+    ),
+  )
+
   function newSession() {
     if (!params.id || params.id === "new") {
       prompt.reset()
@@ -119,32 +146,60 @@ export default function Page(): JSX.Element {
   }
 
   async function ensureSession() {
-    if (creating()) return
-    setCreating(true)
-    try {
-      const res: any = await sdk.client.session.create()
-      const data = res?.data ?? res
-      const id = data?.id ?? data?.sessionID
-      if (id) {
-        navigate(`/${params.dir}/session/${id}`)
-        return id as string
-      } else {
-        navigate(`/${params.dir}/session/new`)
-      }
-    } catch {
-      navigate(`/${params.dir}/session/new`)
-    } finally {
-      setCreating(false)
+    if (params.id && params.id !== "new") return params.id
+    const context = uiStore.context()
+    if ((["terminal", "files", "kernels"] as SessionContext[]).includes(context as SessionContext)) {
+      pending.context = context as SessionContext
     }
+    if (pending.value) return pending.value
+    setCreating(true)
+    const task = sdk.client.session
+      .create()
+      .then((res) => {
+        const data = res.data
+        const id = data?.id
+        if (!id) return
+        const context = pending.context
+        if (context) {
+          uiStore.activateScope(sdk.scope, id)
+          uiStore.openContext(context)
+        }
+        navigate(`/${params.dir}/session/${id}`)
+        return id
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        pending.value = undefined
+        pending.context = undefined
+        setCreating(false)
+      })
+    pending.value = task
+    return task
   }
 
+  const atlasAvailable = () => atlasConnected() && productPreferences.atlas()
+
+  createEffect(() => {
+    if (productPreferences.atlas()) return
+    if (uiStore.context() !== "canvas" || !uiStore.open()) return
+    uiStore.closeContext()
+  })
+
   const openContext = (context: SessionContext) => {
+    if (context === "canvas" && !atlasAvailable()) return
     uiStore.openContext(context)
-    if ((context !== "terminal" && context !== "files") || (params.id && params.id !== "new")) return
+    if (!(["terminal", "files", "kernels"] as SessionContext[]).includes(context)) return
     void ensureSession()
   }
 
   async function deleteSession(sessionID: string) {
+    const ok = await confirmDialog(dialog, {
+      title: "Delete this session?",
+      message: "This removes the conversation and its session-owned workspace. Saved artifacts stay available.",
+      confirmLabel: "delete session",
+      danger: true,
+    })
+    if (!ok) return
     // Capture the next-active id BEFORE the optimistic splice so we
     // know where to navigate.
     const active = params.id === sessionID
@@ -170,6 +225,18 @@ export default function Page(): JSX.Element {
       console.error("session.rename failed", e)
       toast.error("could not rename", e?.message ?? String(e))
     }
+  }
+
+  async function pinSession(sessionID: string, pinned: boolean) {
+    await sync.session.pin(sessionID, pinned).catch((error: unknown) => {
+      toast.error("could not update pin", error instanceof Error ? error.message : String(error))
+    })
+  }
+
+  function toggleSessions() {
+    const next = !sessionsCollapsed()
+    setSessionsCollapsed(next)
+    writeSessionSidebar(next)
   }
 
   // Force-load the session list into the sync store every time we land
@@ -231,7 +298,14 @@ export default function Page(): JSX.Element {
   }
   const projectPath = () => sdk.directory
   const sessions = createMemo<SyncSession[]>(() =>
-    [...sync.data.session].filter((s) => !s.parentID).sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0)),
+    [...sync.data.session]
+      .filter((s) => !s.parentID)
+      .sort(
+        (a, b) =>
+          Number(Boolean(b.time?.pinned)) - Number(Boolean(a.time?.pinned)) ||
+          (b.time?.pinned ?? 0) - (a.time?.pinned ?? 0) ||
+          (b.time?.updated ?? 0) - (a.time?.updated ?? 0),
+      ),
   )
 
   createComputed(
@@ -308,7 +382,19 @@ export default function Page(): JSX.Element {
       uiStore.openFile(projectPath(), path)
     }
     document.addEventListener("openscience:open-file", onOpenFile)
-    onCleanup(() => document.removeEventListener("openscience:open-file", onOpenFile))
+    const onOpenContext = (event: Event) => {
+      const context = (event as CustomEvent).detail?.context
+      if (!(["files", "terminal", "canvas", "kernels", "trace"] as SessionContext[]).includes(context)) return
+      openContext(context)
+    }
+    const onReview = () => void runReview()
+    document.addEventListener("openscience:open-context", onOpenContext)
+    document.addEventListener("openscience:run-review", onReview)
+    onCleanup(() => {
+      document.removeEventListener("openscience:open-file", onOpenFile)
+      document.removeEventListener("openscience:open-context", onOpenContext)
+      document.removeEventListener("openscience:run-review", onReview)
+    })
   })
   const turnMessages = createMemo(() => {
     const revertID = revertInfo()?.messageID
@@ -468,7 +554,6 @@ export default function Page(): JSX.Element {
   const [stepsExpanded, setStepsExpanded] = createSignal<Record<string, boolean>>({})
   const toggleSteps = (id: string) => setStepsExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
 
-  const isDark = () => theme.mode() === "dark"
   useGlobalKeys({ onNew: newSession })
 
   // The center belongs to the conversation for the lifetime of the route.
@@ -619,12 +704,14 @@ export default function Page(): JSX.Element {
           activeId={params.id}
           dirParam={params.dir ?? ""}
           creating={creating()}
+          collapsed={sessionsCollapsed()}
           mobileOpen={mobileSessionsOpen()}
           onNew={() => {
             setMobileSessionsOpen(false)
             newSession()
           }}
           onBack={() => navigate("/")}
+          onCollapse={toggleSessions}
           onSearch={() => {
             setMobileSessionsOpen(false)
             uiStore.setPaletteOpen(true)
@@ -640,7 +727,8 @@ export default function Page(): JSX.Element {
           context={uiStore.context()}
           contextOpen={uiStore.open()}
           artifact={Boolean(artifactContext.active())}
-          atlas={atlasConnected()}
+          atlas={atlasAvailable()}
+          trace={productPreferences.trace()}
           onSelect={(id) => {
             setMobileSessionsOpen(false)
             sessionTabs.open(id)
@@ -648,6 +736,7 @@ export default function Page(): JSX.Element {
           }}
           onDelete={(id) => void deleteSession(id)}
           onRename={(id, title) => void renameSession(id, title)}
+          onPin={(id, pinned) => void pinSession(id, pinned)}
         />
 
         <div
@@ -668,19 +757,10 @@ export default function Page(): JSX.Element {
             projectName={projectName()}
             directory={projectPath()}
             trust={trust}
-            isDark={isDark()}
             onBack={() => navigate("/")}
-            onOpenPalette={() => uiStore.setPaletteOpen(true)}
-            onOpenHelp={() => uiStore.setHelpOpen(true)}
-            onOpenSettings={() => dialog.show(() => <DialogSettings />)}
             onRunReview={() => void runReview()}
             reviewDisabled={reviewDisabled()}
-            onToggleTheme={() => theme.setColorScheme(isDark() ? "light" : "dark")}
             onToggleSessions={() => setMobileSessionsOpen((open) => !open)}
-            onContext={openContext}
-            context={uiStore.context()}
-            contextOpen={uiStore.open()}
-            atlas={atlasConnected()}
           />
           <SessionTabStrip
             tabs={openSessions()}
@@ -954,7 +1034,7 @@ export default function Page(): JSX.Element {
           </div>
         </div>
 
-        <RightPane project={sdk.scope} session={params.id ?? "new"} />
+        <RightPane project={sdk.scope} session={params.id ?? "new"} onEnsureSession={ensureSession} />
       </div>
     </div>
   )
@@ -1096,21 +1176,11 @@ function Header(props: {
   projectName: string
   directory: string
   trust: ProjectTrustApi
-  isDark: boolean
   onBack: () => void
-  onOpenPalette: () => void
-  onOpenHelp: () => void
-  onOpenSettings: () => void
   onRunReview: () => void
   reviewDisabled: boolean
-  onToggleTheme: () => void
   onToggleSessions: () => void
-  onContext: (context: SessionContext) => void
-  context: SessionContext
-  contextOpen: boolean
-  atlas: boolean
 }): JSX.Element {
-  const [menu, setMenu] = createSignal(false)
   return (
     <AppHeader class="workspace-header">
       <HeaderIconButton class="session-sidebar-toggle" onClick={props.onToggleSessions} title="Show sessions">
@@ -1136,84 +1206,14 @@ function Header(props: {
         api={props.trust}
       />
       <span class="workspace-header__spacer" />
-      <HeaderIconButton class="workspace-header__search" onClick={props.onOpenPalette} title="Search and commands">
-        <IconSearch size={13} strokeWidth={1.5} />
+      <HeaderIconButton
+        class="workspace-header__review"
+        disabled={props.reviewDisabled}
+        onClick={props.onRunReview}
+        title={props.reviewDisabled ? "Open an idle session to run review" : "Run review"}
+      >
+        <IconCheckCircle size={14} strokeWidth={1.5} />
       </HeaderIconButton>
-      <div class="workspace-header__menu-wrap" onMouseLeave={() => setMenu(false)}>
-        <HeaderIconButton
-          class="workspace-header__menu"
-          onClick={() => setMenu((open) => !open)}
-          title="Workspace controls"
-        >
-          <IconSettings size={14} strokeWidth={1.7} />
-        </HeaderIconButton>
-        <Show when={menu()}>
-          <div class="workspace-header__popover" role="menu">
-            <CompactContextActions
-              context={props.context}
-              contextOpen={props.contextOpen}
-              atlas={props.atlas}
-              onContext={(context) => {
-                setMenu(false)
-                props.onContext(context)
-              }}
-            />
-            <button
-              type="button"
-              role="menuitem"
-              disabled={props.reviewDisabled}
-              title={
-                props.reviewDisabled
-                  ? "Open an idle session to run the reviewer"
-                  : "Launch an independent reviewer pass on this session"
-              }
-              style={{ opacity: props.reviewDisabled ? 0.45 : 1 }}
-              onClick={() => {
-                setMenu(false)
-                props.onRunReview()
-              }}
-            >
-              <IconCheckCircle size={13} strokeWidth={1.5} />
-              Run review
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setMenu(false)
-                props.onOpenHelp()
-              }}
-            >
-              <IconBookOpen size={13} strokeWidth={1.5} />
-              Help and shortcuts
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setMenu(false)
-                props.onOpenSettings()
-              }}
-            >
-              <IconSettings size={13} strokeWidth={1.5} />
-              Settings
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setMenu(false)
-                props.onToggleTheme()
-              }}
-            >
-              <Show when={props.isDark} fallback={<IconMoon size={13} strokeWidth={1.5} />}>
-                <IconSun size={13} strokeWidth={1.5} />
-              </Show>
-              {props.isDark ? "Use light theme" : "Use dark theme"}
-            </button>
-          </div>
-        </Show>
-      </div>
     </AppHeader>
   )
 }
@@ -1294,9 +1294,11 @@ function SessionsSidebar(props: {
   activeId: string | undefined
   dirParam: string
   creating: boolean
+  collapsed: boolean
   mobileOpen: boolean
   onNew: () => void
   onBack: () => void
+  onCollapse: () => void
   onSearch: () => void
   onCustomize: () => void
   onContext: (context: SessionContext) => void
@@ -1304,20 +1306,32 @@ function SessionsSidebar(props: {
   contextOpen: boolean
   artifact: boolean
   atlas: boolean
+  trace: boolean
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onRename: (id: string, title: string) => void
+  onPin: (id: string, pinned: boolean) => void
 }): JSX.Element {
   return (
     <aside
       class="atlas-scroll session-sidebar"
       data-mobile-open={props.mobileOpen ? "true" : "false"}
+      data-collapsed={props.collapsed ? "true" : "false"}
       aria-label="Research sessions"
     >
       <div class="session-sidebar__top">
         <button type="button" class="session-sidebar__project" aria-label="Back to projects" onClick={props.onBack}>
           <IconChevronLeft size={13} strokeWidth={1.6} />
           <strong>{props.projectName}</strong>
+        </button>
+        <button
+          type="button"
+          class="session-sidebar__collapse"
+          aria-label={props.collapsed ? "Expand sessions sidebar" : "Collapse sessions sidebar"}
+          title={props.collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={props.onCollapse}
+        >
+          <IconChevronLeft size={13} strokeWidth={1.6} />
         </button>
       </div>
 
@@ -1359,6 +1373,7 @@ function SessionsSidebar(props: {
           contextOpen={props.contextOpen}
           artifact={props.artifact}
           atlas={props.atlas}
+          trace={props.trace}
           onContext={props.onContext}
         />
       </nav>
@@ -1377,6 +1392,7 @@ function SessionsSidebar(props: {
               onSelect={() => props.onSelect(s.id)}
               onDelete={() => props.onDelete(s.id)}
               onRename={(title) => props.onRename(s.id, title)}
+              onPin={(pinned) => props.onPin(s.id, pinned)}
             />
           )}
         </For>
@@ -1394,8 +1410,10 @@ function SessionRow(props: {
   onSelect: () => void
   onDelete: () => void
   onRename: (title: string) => void
+  onPin: (pinned: boolean) => void
 }): JSX.Element {
   const [hover, setHover] = createSignal(false)
+  const [menu, setMenu] = createSignal(false)
   const [editing, setEditing] = createSignal(false)
   const [draft, setDraft] = createSignal("")
   const startEdit = () => {
@@ -1417,7 +1435,9 @@ function SessionRow(props: {
       class="session-sidebar__session"
       role="button"
       tabindex="0"
+      aria-label={props.session.title || "session"}
       data-active={props.active ? "true" : undefined}
+      data-pinned={props.session.time?.pinned ? "true" : undefined}
       data-actions={hover() && !editing() ? "true" : undefined}
       onClick={() => {
         if (editing()) return
@@ -1438,11 +1458,18 @@ function SessionRow(props: {
       onMouseLeave={() => setHover(false)}
       onFocusIn={() => setHover(true)}
       onFocusOut={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHover(false)
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+        setHover(false)
+        setMenu(false)
       }}
       style={{ cursor: editing() ? "text" : "pointer" }}
     >
-      <StatusDot status={props.active ? "active" : "muted"} size={7} />
+      <Show
+        when={props.session.time?.pinned}
+        fallback={<StatusDot status={props.active ? "active" : "muted"} size={7} />}
+      >
+        <IconPinFilled size={10} strokeWidth={1.4} />
+      </Show>
       <Show
         when={editing()}
         fallback={
@@ -1478,12 +1505,14 @@ function SessionRow(props: {
           autocomplete="off"
         />
       </Show>
-      <Show when={hover() && !editing()}>
+      <Show when={(hover() || menu()) && !editing()}>
         <button
           type="button"
-          class="session-sidebar__session-delete"
-          title="delete session"
-          aria-label="delete session"
+          class="session-sidebar__session-menu-button"
+          title="Session actions"
+          aria-label="Session actions"
+          aria-haspopup="menu"
+          aria-expanded={menu()}
           onPointerDown={(e) => {
             // Stop pointerdown on the parent row before its own click
             // can fire — Solid runs the row's onClick first otherwise.
@@ -1492,11 +1521,50 @@ function SessionRow(props: {
           onClick={(e) => {
             e.stopPropagation()
             e.preventDefault()
-            props.onDelete()
+            setMenu((open) => !open)
           }}
         >
-          <IconTrash size={11} strokeWidth={1.5} />
+          <IconMoreH size={12} strokeWidth={1.5} />
         </button>
+      </Show>
+      <Show when={menu()}>
+        <div class="session-sidebar__session-menu" role="menu" onClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              props.onPin(!props.session.time?.pinned)
+              setMenu(false)
+            }}
+          >
+            <Show when={props.session.time?.pinned} fallback={<IconPin size={12} strokeWidth={1.5} />}>
+              <IconPinFilled size={12} strokeWidth={1.5} />
+            </Show>
+            {props.session.time?.pinned ? "Unpin" : "Pin"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenu(false)
+              startEdit()
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            data-danger="true"
+            onClick={() => {
+              setMenu(false)
+              props.onDelete()
+            }}
+          >
+            <IconTrash size={12} strokeWidth={1.5} />
+            Delete
+          </button>
+        </div>
       </Show>
     </div>
   )

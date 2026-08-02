@@ -276,6 +276,7 @@ import type {
   SettingsStorageRelocateResponses,
   SettingsStorageResetLocationResponses,
   SettingsStorageUsageResponses,
+  SettingsUpdatesCheckResponses,
   SettingsUsageGetResponses,
   SettingsWalletGetResponses,
   SubtaskPartInput,
@@ -344,15 +345,29 @@ export class Project extends HeyApiClient {
   /**
    * Create project
    *
-   * Create an app-managed project with an opaque identity. The server owns its local root; clients provide a display name, never a host path.
+   * Create an app-managed project with an opaque identity and optional project-scoped access to source locations explicitly selected by the user. Source paths never become the project identity.
    */
   public create<ThrowOnError extends boolean = false>(
     parameters?: {
       name?: string
+      sources?: Array<{
+        path: string
+        access?: "read" | "write"
+      }>
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "name" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "name" },
+            { in: "body", key: "sources" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).post<GlobalProjectCreateResponses, GlobalProjectCreateErrors, ThrowOnError>(
       {
         url: "/global/project",
@@ -755,7 +770,7 @@ export class Storage extends HeyApiClient {
   /**
    * Reset data location
    *
-   * Remove the data-location pointer so the default location is used on next launch.
+   * Remove the data-location pointer so ~/.openscience is used on next launch.
    */
   public resetLocation<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).delete<SettingsStorageResetLocationResponses, unknown, ThrowOnError>({
@@ -1142,10 +1157,24 @@ export class Review extends HeyApiClient {
   public set<ThrowOnError extends boolean = false>(
     parameters?: {
       auto?: boolean
+      model?: {
+        providerID: string
+        modelID: string
+      } | null
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "auto" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "auto" },
+            { in: "body", key: "model" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).put<SettingsReviewSetResponses, unknown, ThrowOnError>({
       url: "/settings/review",
       ...options,
@@ -1178,6 +1207,10 @@ export class Preferences extends HeyApiClient {
       reasoning_effort?: "minimal" | "low" | "medium" | "high"
       intent?: "commercial" | "non-commercial"
       extra_budget_usd?: number
+      show_trace?: boolean
+      atlas_enabled?: boolean
+      delegation_enabled?: boolean
+      delegation_specialist?: string | null
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1189,6 +1222,10 @@ export class Preferences extends HeyApiClient {
             { in: "body", key: "reasoning_effort" },
             { in: "body", key: "intent" },
             { in: "body", key: "extra_budget_usd" },
+            { in: "body", key: "show_trace" },
+            { in: "body", key: "atlas_enabled" },
+            { in: "body", key: "delegation_enabled" },
+            { in: "body", key: "delegation_specialist" },
           ],
         },
       ],
@@ -1258,6 +1295,18 @@ export class Wallet extends HeyApiClient {
   public get<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).get<SettingsWalletGetResponses, unknown, ThrowOnError>({
       url: "/settings/wallet",
+      ...options,
+    })
+  }
+}
+
+export class Updates extends HeyApiClient {
+  /**
+   * Check for an OpenScience update
+   */
+  public check<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<SettingsUpdatesCheckResponses, unknown, ThrowOnError>({
+      url: "/settings/updates",
       ...options,
     })
   }
@@ -1534,6 +1583,11 @@ export class Settings extends HeyApiClient {
   private _wallet?: Wallet
   get wallet(): Wallet {
     return (this._wallet ??= new Wallet({ client: this.client }))
+  }
+
+  private _updates?: Updates
+  get updates(): Updates {
+    return (this._updates ??= new Updates({ client: this.client }))
   }
 
   private _skills?: Skills
@@ -2588,6 +2642,7 @@ export class Session extends HeyApiClient {
       title?: string
       time?: {
         archived?: number
+        pinned?: number
       }
     },
     options?: Options<never, ThrowOnError>,
@@ -3012,6 +3067,7 @@ export class Session extends HeyApiClient {
       tools?: {
         [key: string]: boolean
       }
+      delegation?: boolean
       system?: string
       variant?: string
       tier?: string
@@ -3031,6 +3087,7 @@ export class Session extends HeyApiClient {
             { in: "body", key: "agent" },
             { in: "body", key: "noReply" },
             { in: "body", key: "tools" },
+            { in: "body", key: "delegation" },
             { in: "body", key: "system" },
             { in: "body", key: "variant" },
             { in: "body", key: "tier" },
@@ -3102,6 +3159,7 @@ export class Session extends HeyApiClient {
       tools?: {
         [key: string]: boolean
       }
+      delegation?: boolean
       system?: string
       variant?: string
       tier?: string
@@ -3121,6 +3179,7 @@ export class Session extends HeyApiClient {
             { in: "body", key: "agent" },
             { in: "body", key: "noReply" },
             { in: "body", key: "tools" },
+            { in: "body", key: "delegation" },
             { in: "body", key: "system" },
             { in: "body", key: "variant" },
             { in: "body", key: "tier" },

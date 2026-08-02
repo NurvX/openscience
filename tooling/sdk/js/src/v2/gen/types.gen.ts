@@ -191,6 +191,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  delegation?: boolean
   variant?: string
   tier?: string
   inference?: {
@@ -826,6 +827,7 @@ export type Session = {
     updated: number
     compacting?: number
     archived?: number
+    pinned?: number
   }
   permission?: PermissionRuleset
   revert?: {
@@ -2416,6 +2418,10 @@ export type GlobalHealthResponse = GlobalHealthResponses[keyof GlobalHealthRespo
 export type GlobalProjectCreateData = {
   body?: {
     name: string
+    sources?: Array<{
+      path: string
+      access?: "read" | "write"
+    }>
   }
   path?: never
   query?: never
@@ -5002,6 +5008,10 @@ export type SettingsReviewGetResponses = {
    */
   200: {
     auto: boolean
+    model?: {
+      providerID: string
+      modelID: string
+    } | null
   }
 }
 
@@ -5010,6 +5020,10 @@ export type SettingsReviewGetResponse = SettingsReviewGetResponses[keyof Setting
 export type SettingsReviewSetData = {
   body?: {
     auto: boolean
+    model?: {
+      providerID: string
+      modelID: string
+    } | null
   }
   path?: never
   query?: never
@@ -5022,6 +5036,10 @@ export type SettingsReviewSetResponses = {
    */
   200: {
     auto: boolean
+    model?: {
+      providerID: string
+      modelID: string
+    } | null
   }
 }
 
@@ -5042,6 +5060,10 @@ export type SettingsPreferencesGetResponses = {
     reasoning_effort?: "minimal" | "low" | "medium" | "high"
     intent?: "commercial" | "non-commercial"
     extra_budget_usd?: number
+    show_trace?: boolean
+    atlas_enabled?: boolean
+    delegation_enabled?: boolean
+    delegation_specialist?: string | null
   }
 }
 
@@ -5052,6 +5074,10 @@ export type SettingsPreferencesUpdateData = {
     reasoning_effort?: "minimal" | "low" | "medium" | "high"
     intent?: "commercial" | "non-commercial"
     extra_budget_usd?: number
+    show_trace?: boolean
+    atlas_enabled?: boolean
+    delegation_enabled?: boolean
+    delegation_specialist?: string | null
   }
   path?: never
   query?: never
@@ -5066,6 +5092,10 @@ export type SettingsPreferencesUpdateResponses = {
     reasoning_effort?: "minimal" | "low" | "medium" | "high"
     intent?: "commercial" | "non-commercial"
     extra_budget_usd?: number
+    show_trace?: boolean
+    atlas_enabled?: boolean
+    delegation_enabled?: boolean
+    delegation_specialist?: string | null
   }
 }
 
@@ -5225,6 +5255,29 @@ export type SettingsWalletGetResponses = {
 }
 
 export type SettingsWalletGetResponse = SettingsWalletGetResponses[keyof SettingsWalletGetResponses]
+
+export type SettingsUpdatesCheckData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/settings/updates"
+}
+
+export type SettingsUpdatesCheckResponses = {
+  /**
+   * Current and latest package versions
+   */
+  200: {
+    current: string
+    latest: string
+    channel: string
+    method: string
+    updateAvailable: boolean
+    releaseNotes: string
+  }
+}
+
+export type SettingsUpdatesCheckResponse = SettingsUpdatesCheckResponses[keyof SettingsUpdatesCheckResponses]
 
 export type AuthRemoveData = {
   body?: never
@@ -6144,6 +6197,7 @@ export type SessionUpdateData = {
     title?: string
     time?: {
       archived?: number
+      pinned?: number
     }
   }
   path: {
@@ -6974,6 +7028,7 @@ export type SessionPromptData = {
     tools?: {
       [key: string]: boolean
     }
+    delegation?: boolean
     system?: string
     variant?: string
     tier?: string
@@ -7162,6 +7217,7 @@ export type SessionPromptAsyncData = {
     tools?: {
       [key: string]: boolean
     }
+    delegation?: boolean
     system?: string
     variant?: string
     tier?: string
