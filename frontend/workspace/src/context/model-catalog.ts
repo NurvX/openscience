@@ -130,10 +130,15 @@ export function isChatModel(model: CatalogModel): boolean {
 
 export function isUserProviderConnection(input: {
   providerID: string
-  source?: "env" | "config" | "custom" | "api"
+  source?: "env" | "config" | "custom" | "api" | "managed"
   billing?: "managed" | "byok" | null
 }): boolean {
   if (input.providerID !== "openrouter") return true
+  // "managed" means the Atlas proxy is carrying this route. That is not a
+  // connection the reader set up, so it has no place in a panel about their own
+  // keys — it falls through to the billing check and is filtered out. Which
+  // credential is paying is shown where it is actually useful: on the model
+  // itself, as the routing chip in the model picker.
   if (input.source === "api") return true
   return input.billing === "byok"
 }

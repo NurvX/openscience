@@ -1611,6 +1611,48 @@ export namespace Config {
     }, input)
   }
 
+  /**
+   * Dispose every open project instance after a GLOBAL config write and
+   * announce it. Awaited (not fire-and-forget): the per-directory
+   * Config.state cache (config.ts's `state`, backed by Instance.state) is
+   * only invalidated by Instance.dispose()/disposeAll() — resetting the
+   * `global` lazy singleton above is not enough on its own for an
+   * already-instantiated project directory. Callers of setMcp/setProvider/
+   * setSandbox/unsetGlobal/updateGlobal/replaceGlobal rely on the write
+   * being visible to the very next Config.get(), not eventually-after-a-
+   * fire-and-forget-settles visible.
+   *
+   * The provider cache is dropped here too, and specifically BEFORE the
+   * announcement. Provider memoises the resolved provider/SDK map at module
+   * scope keyed only by directory + trust, which Instance.disposeAll() does
+   * not touch and this write does not change — so it outlives the write. The
+   * SPA refetches GET /provider the instant it sees `global.disposed`, and a
+   * refetch that lands in the gap re-memoises the PRE-write map (the key just
+   * added still missing, billing still reading managed) with nothing left to
+   * invalidate it afterwards. Announcing a disposal that the provider map has
+   * not honoured yet is the bug; the two belong together.
+   */
+  async function disposeGlobalInstances() {
+    await Instance.disposeAll().catch(() => undefined)
+    // Lazy because provider.ts imports Config — the same cycle-break
+    // provider/models.ts and openscience/index.ts already use to reach it.
+    // Best-effort like the disposal above: the config file is already written
+    // by the time this runs, so a throw here (e.g. provider module init
+    // failing) must not turn a landed write into a rejected one.
+    await import("../provider/provider")
+      .then((m) => m.Provider.invalidate())
+      .catch((e) =>
+        log.warn("failed to invalidate provider cache", { error: e instanceof Error ? e.message : String(e) }),
+      )
+    GlobalBus.emit("event", {
+      directory: "global",
+      payload: {
+        type: Event.Disposed.type,
+        properties: {},
+      },
+    })
+  }
+
   async function patchConfigPath(scope: Scope, target: string[], value: unknown) {
     const filepath = scope === "global" ? globalConfigFile() : projectConfigFile()
     const before = await Bun.file(filepath)
@@ -1631,17 +1673,7 @@ export namespace Config {
     const parsed = parseConfig(updated, filepath)
     global.reset()
     if (scope === "global") {
-      void Instance.disposeAll()
-        .catch(() => undefined)
-        .finally(() => {
-          GlobalBus.emit("event", {
-            directory: "global",
-            payload: {
-              type: Event.Disposed.type,
-              properties: {},
-            },
-          })
-        })
+      await disposeGlobalInstances()
     } else {
       await Instance.dispose()
     }
@@ -1728,17 +1760,7 @@ export namespace Config {
     await fs.mkdir(path.dirname(filepath), { recursive: true })
     await Bun.write(filepath, content)
     global.reset()
-    void Instance.disposeAll()
-      .catch(() => undefined)
-      .finally(() => {
-        GlobalBus.emit("event", {
-          directory: "global",
-          payload: {
-            type: Event.Disposed.type,
-            properties: {},
-          },
-        })
-      })
+    await disposeGlobalInstances()
     return parsed
   }
 
@@ -1800,18 +1822,7 @@ export namespace Config {
     })()
 
     global.reset()
-
-    void Instance.disposeAll()
-      .catch(() => undefined)
-      .finally(() => {
-        GlobalBus.emit("event", {
-          directory: "global",
-          payload: {
-            type: Event.Disposed.type,
-            properties: {},
-          },
-        })
-      })
+    await disposeGlobalInstances()
 
     return next
   }

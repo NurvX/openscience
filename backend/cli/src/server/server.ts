@@ -92,6 +92,18 @@ export namespace Server {
     () =>
       // TODO: Break server.ts into smaller route files to fix type inference
       app
+        // 404/410 and friends are cacheable by default (RFC 7231 §6.1), and a
+        // JSON body with no Cache-Control is fair game for heuristic caching
+        // too. A browser that cached one stale-project 410 for /provider then
+        // answered every later request from its own cache — the server saw no
+        // traffic at all while the app stayed broken across restarts and
+        // reloads. Applied to JSON only, so the SPA's hashed assets keep their
+        // caching.
+        .use(async (c, next) => {
+          await next()
+          if (!c.res.headers.get("content-type")?.includes("application/json")) return
+          c.res.headers.set("cache-control", "no-store")
+        })
         .onError((err, c) => {
           log.error("failed", {
             error: err,
@@ -107,6 +119,7 @@ export namespace Server {
             else if (err.name === "ProjectUnknownError") status = 404
             else if (err.name === "ProjectStaleError") status = 410
             else if (err.name === "ProjectMismatchError") status = 409
+            else if (err.name === "ProjectDirectoryError") status = 400
             else if (err.name === "ProjectTrustDeniedError") status = 403
             else if (err.name === "ProjectTrustRootMismatchError") status = 409
             else if (err.name === "ExecutionAuthorityDeniedError") status = 403
@@ -214,6 +227,12 @@ export namespace Server {
             await Auth.set(providerID, info)
             // Don't depend on the client remembering to call global.sync —
             // stale provider state would keep serving the old credential.
+            // Auth.set writes the auth FILE, which no config write covers, so
+            // this call is still the one that makes the new key visible. (When
+            // it also flips billing.llm managed -> byok, Config's global write
+            // has already invalidated before announcing the disposal — see
+            // disposeGlobalInstances — so the SPA refetch that event triggers
+            // cannot beat us to a stale re-memoisation.)
             Provider.invalidate()
             return c.json(true)
           },
@@ -259,6 +278,7 @@ export namespace Server {
         .route("/api/repo", RepoRoutes())
         .use(async (c, next) => {
           const selected = await projectSelection(c)
+          if (selected.selector) await Project.assertDirectory(selected.selector)
           const directory = selected.directory ?? process.cwd()
           return Instance.provide({
             directory,

@@ -117,10 +117,6 @@ export namespace Provider {
     "@ai-sdk/github-copilot": createGitHubCopilotOpenAICompatible,
   }
 
-  function isAtlasApiKey(key: unknown): key is string {
-    return typeof key === "string" && key.startsWith("thk_")
-  }
-
   const REMOVED_MODEL_IDS = new Set(["mistralai/mistral-small-3.2-24b-instruct"])
 
   function isRemovedModel(modelID: string) {
@@ -211,7 +207,7 @@ export namespace Provider {
     // proxy routing for it hard-failed every call with advice (`connect
     // sync`) that re-delivers the same env and can never fix it.
     const effective = effectiveKey(provider, options)
-    if (!isAtlasApiKey(effective)) return
+    if (!Auth.isAtlasApiKey(effective)) return
     if (isAtlasProxyBaseURL(options["baseURL"])) return
     throw new Error(
       `${provider.id} is using a managed Atlas key without an Atlas proxy URL. ` +
@@ -222,7 +218,7 @@ export namespace Provider {
   /** A user-owned (BYOK) key: a real, non-managed credential. Excludes the
    *  "public" sentinel used for the zero-cost openscience demo models. */
   function isByokKey(key: unknown): key is string {
-    return typeof key === "string" && key.length > 0 && key !== "public" && !isAtlasApiKey(key)
+    return typeof key === "string" && key.length > 0 && key !== "public" && !Auth.isAtlasApiKey(key)
   }
 
   /** The credential that actually authenticates a provider: an explicit apiKey
@@ -310,7 +306,7 @@ export namespace Provider {
   function pinByokToPublicEndpoint(provider: Info, options: Record<string, any>, publicURL?: string) {
     const effective = effectiveKey(provider, options)
     // Managed (thk_*) keys must keep their Atlas proxy routing.
-    if (isAtlasApiKey(effective)) return
+    if (Auth.isAtlasApiKey(effective)) return
     if (!isByokKey(effective)) return
     if (hasManagedProxyPath(options["baseURL"])) {
       log.warn("refusing to route BYOK key through Atlas proxy — pinning to public endpoint", {
@@ -336,6 +332,11 @@ export namespace Provider {
     autoload: boolean
     getModel?: CustomModelLoader
     options?: Record<string, any>
+    // Overrides the reported `source` regardless of whether the provider was
+    // already registered by an earlier stage (env/api/plugin). Only the
+    // openrouter loader's managed-proxy branch sets this today — every other
+    // loader leaves it undefined and keeps the call site's default behavior.
+    source?: Info["source"]
   }>
 
   const CUSTOM_LOADERS: Record<string, CustomLoader> = {
@@ -597,16 +598,29 @@ export namespace Provider {
         "HTTP-Referer": "https://syntheticsciences.ai/",
         "X-Title": "synsci",
       }
-      // OpenRouter is the ONE provider with both a managed and a BYOK route, and
-      // resolution is deterministic by key presence (mirrors the Atlas server's
-      // BYOK-first rule): the user's OWN OpenRouter key wins and hits public
-      // OpenRouter directly; with no own key, a logged-in session falls back to
-      // the Atlas managed proxy (thk_* token → wallet-billed). Deleting the own
-      // key restores the managed route automatically — nothing is latched.
+      // OpenRouter is the ONE provider with both a managed and a BYOK route.
+      // Resolution is gated on the explicit `billing.llm` spend toggle: an
+      // explicit "managed" opt-in refuses to route on a stored own key, so it
+      // resolves the Atlas managed proxy (thk_* token → wallet-billed) even
+      // when an own key exists. The key is retained in auth (never
+      // deleted/rewritten) and simply loses this branch. When managed spend is
+      // on but NO managed credential can be found — a lapsed Atlas session,
+      // say — this returns no credential at all, and the availability guard in
+      // init() then drops the provider outright; it must, because the earlier
+      // "load apikeys" stage has already stamped provider.key from auth.json
+      // and getSDK would otherwise fall back to it against public OpenRouter,
+      // billing the user's own key under a toggle that reads "Managed".
+      // `byok` and auto-detect (unset / null) are unchanged from the old
+      // key-presence rule: the user's OWN OpenRouter key wins and hits public
+      // OpenRouter directly; with no own key, a logged-in session falls back
+      // to the Atlas managed proxy. Switching billing.llm back to
+      // byok/auto-detect (or deleting the own key under those modes) restores
+      // the previous resolution automatically — nothing is latched.
       const auth = await Auth.get("openrouter").catch(() => undefined)
       const authKey = auth?.type === "api" ? auth.key : undefined
       const envKey = Env.get("OPENROUTER_API_KEY")
-      const ownKey = isByokKey(authKey) ? authKey : isByokKey(envKey) ? envKey : undefined
+      const managed = (await Config.get().catch(() => undefined))?.billing?.llm === "managed"
+      const ownKey = managed ? undefined : isByokKey(authKey) ? authKey : isByokKey(envKey) ? envKey : undefined
       if (ownKey) {
         // Honour a user's own OpenRouter-compatible gateway (custom
         // OPENROUTER_BASE_URL); only the Atlas proxy is swapped for the public
@@ -623,10 +637,10 @@ export namespace Provider {
       // the session file is momentarily unreadable.
       const proxyBase = Env.get("OPENROUTER_BASE_URL")
       const session = await OpenScience.getSession().catch(() => null)
-      const managedKey = session?.api_key ?? (isAtlasApiKey(envKey) ? envKey : undefined)
+      const managedKey = session?.api_key ?? (Auth.isAtlasApiKey(envKey) ? envKey : undefined)
       if (managedKey) {
         const baseURL = isAtlasProxyBaseURL(proxyBase) ? proxyBase : managedOpenRouterBaseURL()
-        return { autoload: false, options: { apiKey: managedKey, baseURL, headers } }
+        return { autoload: false, options: { apiKey: managedKey, baseURL, headers }, source: "managed" }
       }
 
       // Neither an own key nor a managed route — nothing to route with.
@@ -949,7 +963,7 @@ export namespace Provider {
     .object({
       id: z.string(),
       name: z.string(),
-      source: z.enum(["env", "config", "custom", "api"]),
+      source: z.enum(["env", "config", "custom", "api", "managed"]),
       env: z.string().array(),
       key: z.string().optional(),
       options: z.record(z.string(), z.any()),
@@ -1519,14 +1533,33 @@ export namespace Provider {
       if (result && (result.autoload || providers[providerID])) {
         if (result.getModel) modelLoaders[providerID] = result.getModel
         const opts = result.options ?? {}
-        const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
+        // A loader-reported source (e.g. openrouter's managed-proxy branch)
+        // always wins, even when an earlier stage (env/api) already
+        // registered the provider under a different source — that earlier
+        // credential is exactly what the managed route is overriding.
+        // Absent an explicit source, keep the existing rule: "custom" only
+        // when this is the provider's first registration.
+        const patch: Partial<Info> = providers[providerID]
+          ? { options: opts, ...(result.source ? { source: result.source } : {}) }
+          : { source: result.source ?? "custom", options: opts }
         mergeProvider(providerID, patch)
       }
     }
 
     // load config
     for (const [providerID, provider] of configProviders) {
-      const partial: Partial<Info> = { source: "config" }
+      // A provider already registered by an earlier stage under a genuinely
+      // credential-derived source (env/api/managed) must not be relabeled —
+      // a `config.provider` entry that only supplies a `whitelist`, `name`,
+      // etc. is not where the credential came from. "custom" is excluded from
+      // this protection: it's loader-assigned (not credential-derived) and an
+      // autoloaded provider (AWS-profile Bedrock, google-vertex, synsci,
+      // cloudflare-ai-gateway, gitlab, sap-ai-core, ...) that also appears in
+      // config.provider for its whitelist has always been, and must stay,
+      // "config" here.
+      const credentialSource = providers[providerID]?.source
+      const claimed = credentialSource === "env" || credentialSource === "api" || credentialSource === "managed"
+      const partial: Partial<Info> = claimed ? {} : { source: "config" }
       if (provider.env) partial.env = provider.env
       if (provider.name) partial.name = provider.name
       if (provider.options) partial.options = provider.options
@@ -1547,7 +1580,30 @@ export namespace Provider {
       // credential the user never brought. BYOK must use the user's OWN keys
       // only; auto-detect (billing unset) is left alone so a thk_ key can still
       // resolve to managed there.
-      if (config.billing?.llm === "byok" && isAtlasApiKey(effectiveKey(provider))) {
+      if (config.billing?.llm === "byok" && Auth.isAtlasApiKey(effectiveKey(provider))) {
+        delete providers[providerID]
+        continue
+      }
+
+      // The managed mirror of the guard above. Under an EXPLICIT managed
+      // toggle the OpenRouter loader declines to route on a stored own key,
+      // but declining is not enough on its own: "load apikeys" already stamped
+      // provider.key from auth.json, and getSDK picks that up with baseURL
+      // falling back to public OpenRouter. A user whose Atlas session lapsed
+      // would keep chatting on their OWN key while the toggle still reads
+      // "Managed" and the wallet is never touched. Drop the provider instead —
+      // seeing no OpenRouter models is honest, silently spending a BYOK key is
+      // not. Exempt the two provider classes this file already treats as
+      // BYOK-by-design, since neither can debit the wallet and both are
+      // deliberately kept in managed mode: the user's own ChatGPT subscription
+      // (see isProviderAllowed) and anything served from their own machine
+      // (see isLocalBaseURL). Auto-detect (billing unset / null) and byok never
+      // reach this branch.
+      const exempt =
+        providerID === "openai-codex" ||
+        localProviderIds.has(providerID) ||
+        isLocalBaseURL(provider.options?.["baseURL"])
+      if (managedCuratedProvidersOnly && !exempt && isByokKey(effectiveKey(provider))) {
         delete providers[providerID]
         continue
       }

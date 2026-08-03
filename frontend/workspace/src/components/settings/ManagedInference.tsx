@@ -3,6 +3,7 @@ import { Button } from "@synsci/ui/button"
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js"
 import { URLS } from "@/config/urls"
 import { useGlobalSDK } from "@/context/global-sdk"
+import { useGlobalSync } from "@/context/global-sync"
 import { usePlatform } from "@/context/platform"
 import { settingsApi } from "./api"
 
@@ -34,15 +35,38 @@ const MODES: { value: Mode; title: string; body: string }[] = [
 
 const money = (value: number) => `$${value.toFixed(value >= 100 ? 0 : 2)}`
 
+/**
+ * The write-then-refresh ordering a mode switch depends on: the billing write
+ * must resolve and its data must be applied before the provider catalog is
+ * refreshed, and the refresh must not run at all when the write comes back
+ * without data (a failed save). Pulled out of `update()` and parameterized
+ * over `write`/`apply`/`refresh` so the ordering is unit-testable with plain
+ * async functions standing in for the SDK call and `refreshProviders()` —
+ * no live backend, no mocking `sdk`/`globalSync`.
+ */
+export async function commitBilling<T>(
+  write: () => Promise<{ data?: T }>,
+  apply: (data: T) => void,
+  refresh: () => Promise<void>,
+): Promise<boolean> {
+  const result = await write()
+  if (!result.data) return false
+  apply(result.data)
+  await refresh()
+  return true
+}
+
 export function ManagedInference(props: { onError?: (error: string | undefined) => void }) {
   const sdk = useGlobalSDK()
+  const globalSync = useGlobalSync()
   const platform = usePlatform()
   const [wallet, setWallet] = createSignal<Wallet>()
   const [billing, setBilling] = createSignal<SettingsBillingGetResponse>()
   const [busy, setBusy] = createSignal(false)
 
+  const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
   const fail = (error: unknown) => {
-    props.onError?.(error instanceof Error ? error.message : String(error))
+    props.onError?.(reason(error))
   }
   const loadWallet = () =>
     settingsApi<Wallet>(sdk.url, platform.fetch ?? fetch, "/settings/wallet")
@@ -64,21 +88,47 @@ export function ManagedInference(props: { onError?: (error: string | undefined) 
     if (busy()) return
     setBusy(true)
     props.onError?.(undefined)
-    void sdk.client.settings.billing
-      .update({ llm: value })
-      .then((result) => {
-        if (result.data) return setBilling(result.data)
-        fail("Couldn't save managed inference settings.")
+    // apply() only runs once the write has data, so a rejection past that
+    // point is the catalog refresh failing, not the save — the same split
+    // credentialChange draws for the other credential panels. A rejection
+    // before apply() is a genuine save failure and keeps the plain wording.
+    let saved = false
+    void commitBilling(
+      () => sdk.client.settings.billing.update({ llm: value }),
+      (data) => {
+        saved = true
+        setBilling(data)
+      },
+      () => globalSync.refreshProviders(),
+    )
+      .then((ok) => {
+        if (!ok) fail("Couldn't save managed inference settings.")
       })
-      .catch(fail)
+      .catch((error) => {
+        if (!saved) return fail(error)
+        props.onError?.(
+          `Managed inference settings saved, but the model list could not be reloaded (${reason(error)}). It will catch up on the next refresh.`,
+        )
+      })
       .finally(() => setBusy(false))
   }
+
+  // The mode can change without this panel touching it: saving an own provider
+  // key in Provider keys below makes the server flip billing.llm managed →
+  // byok (Auth.set). That happens in the same window, so no `focus` event ever
+  // fires and the toggle would keep showing Managed — highlighted, and
+  // contradicting the row underneath — until a reload. Every credential change
+  // already funnels through refreshProviders, so re-read the mode there.
+  const unsubscribe = globalSync.onProvidersRefreshed(() => void loadBilling())
 
   onMount(() => {
     refresh()
     window.addEventListener("focus", refresh)
   })
-  onCleanup(() => window.removeEventListener("focus", refresh))
+  onCleanup(() => {
+    window.removeEventListener("focus", refresh)
+    unsubscribe()
+  })
 
   const unsupported = (value: Mode) =>
     value === "managed" && wallet() !== undefined && (!wallet()!.signedIn || !wallet()!.managedSupported)

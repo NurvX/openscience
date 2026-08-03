@@ -2,14 +2,17 @@ import { Show, createMemo, createSignal, type Component } from "solid-js"
 import { Button } from "@synsci/ui/button"
 import { StatusDot } from "@/atlas/shared/StatusDot"
 import { useGlobalSDK } from "@/context/global-sdk"
+import { useGlobalSync } from "@/context/global-sync"
 import { usePlatform } from "@/context/platform"
 import { useProviders } from "@/hooks/use-providers"
+import { credentialChange } from "./credential-change"
 
 export const CodexConnection: Component<{
   onError?: (message: string | undefined) => void
   onConnected?: () => void
 }> = (props) => {
   const sdk = useGlobalSDK()
+  const globalSync = useGlobalSync()
   const platform = usePlatform()
   const providers = useProviders()
   const [busy, setBusy] = createSignal(false)
@@ -19,31 +22,39 @@ export const CodexConnection: Component<{
     if (busy()) return
     setBusy(true)
     props.onError?.(undefined)
-    try {
-      const result = await sdk.client.provider.oauth.authorize({ providerID: "openai-codex", method: 0 })
-      if (result.data?.url) platform.openLink(result.data.url)
-      await sdk.client.provider.oauth.callback({ providerID: "openai-codex", method: 0 })
-      await sdk.client.global.sync()
-      props.onConnected?.()
-    } catch (error) {
-      props.onError?.(error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(false)
-    }
+    // The sign-in only shows up once the catalog is re-read; waiting on the
+    // event stream to say so is how a completed sign-in looked like a failed
+    // one. The re-read can fail on its own though, and that is not the sign-in
+    // failing — credentialChange keeps the two outcomes apart.
+    const outcome = await credentialChange({
+      write: async () => {
+        const result = await sdk.client.provider.oauth.authorize({ providerID: "openai-codex", method: 0 })
+        if (result.data?.url) platform.openLink(result.data.url)
+        await sdk.client.provider.oauth.callback({ providerID: "openai-codex", method: 0 })
+        await sdk.client.global.sync()
+      },
+      refresh: () => globalSync.refreshProviders(),
+      done: "Signed in with ChatGPT",
+    })
+    setBusy(false)
+    props.onError?.(outcome.notice)
+    if (outcome.ok) props.onConnected?.()
   }
 
   const disconnect = async () => {
     if (!window.confirm("Disconnect ChatGPT / Codex from this machine?")) return
     setBusy(true)
     props.onError?.(undefined)
-    try {
-      await sdk.client.auth.remove({ providerID: "openai-codex" })
-      await sdk.client.global.dispose()
-    } catch (error) {
-      props.onError?.(error instanceof Error ? error.message : String(error))
-    } finally {
-      setBusy(false)
-    }
+    const outcome = await credentialChange({
+      write: async () => {
+        await sdk.client.auth.remove({ providerID: "openai-codex" })
+        await sdk.client.global.dispose()
+      },
+      refresh: () => globalSync.refreshProviders(),
+      done: "Disconnected",
+    })
+    setBusy(false)
+    props.onError?.(outcome.notice)
   }
 
   return (

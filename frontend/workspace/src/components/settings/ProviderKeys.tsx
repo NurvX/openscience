@@ -7,8 +7,16 @@ import { useGlobalSync } from "@/context/global-sync"
 import { useProviders } from "@/hooks/use-providers"
 import { isUserProviderConnection } from "@/context/model-catalog"
 import { MODEL_PROVIDERS, MODEL_PROVIDER_LABELS, modelProvider } from "./model-providers"
+import { credentialChange } from "./credential-change"
 
-const SOURCES: Record<Provider["source"], { label: string; removable: boolean; title: string }> = {
+/**
+ * `note` says where a key that this panel cannot delete actually lives, so the
+ * reader knows where to go and change it. Every non-removable source used to
+ * render one blanket "managed externally", which is wrong for a key the user
+ * set themselves in a .env or a config file — nobody else manages it, and the
+ * phrase suggests an administrator does.
+ */
+const SOURCES: Record<Provider["source"], { label: string; removable: boolean; title: string; note?: string }> = {
   api: {
     label: "local file",
     removable: true,
@@ -17,17 +25,31 @@ const SOURCES: Record<Provider["source"], { label: string; removable: boolean; t
   env: {
     label: "environment",
     removable: false,
+    note: "set in your .env or shell",
     title: "API key supplied by an environment variable; remove it where it is defined",
   },
   config: {
     label: "config",
     removable: false,
+    note: "set in openscience.json",
     title: "API key supplied by openscience.json; edit that file to remove it",
   },
   custom: {
     label: "custom",
     removable: false,
+    note: "set in openscience.json",
     title: "Custom provider supplied by openscience.json; edit that file to remove it",
+  },
+  // Unreachable while isUserProviderConnection filters an Atlas-carried route
+  // out of this list — it is not a connection the reader set up. Kept because
+  // Provider["source"] has to be covered exhaustively, and so the row would
+  // still describe itself honestly rather than fall through to "local file" if
+  // that filter is ever relaxed.
+  managed: {
+    label: "billed from wallet",
+    removable: false,
+    note: "routed through OpenScience credits",
+    title: "Routed through the Atlas managed proxy and billed to your OpenScience credits",
   },
 }
 
@@ -57,26 +79,36 @@ export function ProviderKeys(props: { onError?: (error: string | undefined) => v
     if (!value || saving()) return
     setSaving(true)
     props.onError?.(undefined)
-    try {
-      await sdk.client.auth.set({ providerID: provider(), auth: { type: "api", key: value } })
-      setKey("")
-      await sdk.client.global.dispose()
-    } catch (error) {
-      props.onError?.(error instanceof Error ? error.message : String(error))
-    } finally {
-      setSaving(false)
-    }
+    // Don't wait on the disposed event to come back round the event stream —
+    // if it is missed the key is saved but never appears, which reads as a
+    // failed save. A refresh that fails outright is not a failed save either:
+    // the input has already been cleared by then, so reporting it as one puts
+    // an error banner over an empty field for a key that is on disk.
+    const outcome = await credentialChange({
+      write: async () => {
+        await sdk.client.auth.set({ providerID: provider(), auth: { type: "api", key: value } })
+        setKey("")
+        await sdk.client.global.dispose()
+      },
+      refresh: () => sync.refreshProviders(),
+      done: "Key saved",
+    })
+    setSaving(false)
+    props.onError?.(outcome.notice)
   }
 
   const remove = async (providerID: string) => {
     if (!window.confirm(`Remove the ${MODEL_PROVIDER_LABELS[providerID] ?? providerID} key from this machine?`)) return
     props.onError?.(undefined)
-    try {
-      await sdk.client.auth.remove({ providerID })
-      await sdk.client.global.dispose()
-    } catch (error) {
-      props.onError?.(error instanceof Error ? error.message : String(error))
-    }
+    const outcome = await credentialChange({
+      write: async () => {
+        await sdk.client.auth.remove({ providerID })
+        await sdk.client.global.dispose()
+      },
+      refresh: () => sync.refreshProviders(),
+      done: "Key removed",
+    })
+    props.onError?.(outcome.notice)
   }
 
   return (
@@ -136,7 +168,7 @@ export function ProviderKeys(props: { onError?: (error: string | undefined) => v
                   when={source(item).removable}
                   fallback={
                     <span class="text-11-regular text-text-weak" title={source(item).title}>
-                      managed externally
+                      {source(item).note ?? "managed externally"}
                     </span>
                   }
                 >
