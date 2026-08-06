@@ -96,6 +96,11 @@ const setup = (
     trash?: StoredArtifact[]
     onRestoreArtifact?: (artifact: StoredArtifact) => void
     onChoose?: (kind: "folder" | "file") => Promise<string | undefined>
+    volumes?: { name: string }[]
+    modalAvailable?: boolean
+    volumesError?: string
+    onOpenVolume?: (volume: { name: string }) => void
+    onLoadVolumes?: () => void
   } = {},
 ) =>
   mount(() =>
@@ -103,6 +108,9 @@ const setup = (
       artifacts,
       trash: options.trash ?? [],
       grants,
+      volumes: options.volumes,
+      modalAvailable: options.modalAvailable,
+      volumesError: options.volumesError,
       projectRoot: "/Users/aayam/kras-speedrun",
       sessionReady: true,
       onOpenProject: () => {},
@@ -111,6 +119,8 @@ const setup = (
       onInspectArtifact: () => {},
       onRestoreArtifact: options.onRestoreArtifact ?? (() => {}),
       onOpenGrant: () => {},
+      onOpenVolume: options.onOpenVolume,
+      onLoadVolumes: options.onLoadVolumes,
       onRevoke: options.onRevoke ?? (() => {}),
       onConnect: options.onConnect ?? (() => {}),
       onChoose: options.onChoose,
@@ -118,6 +128,44 @@ const setup = (
   )
 
 describe("Files sources", () => {
+  test("loads Modal Volumes only after the user selects the cloud source", () => {
+    const loads: string[] = []
+    const host = setup({ modalAvailable: true, onLoadVolumes: () => loads.push("modal") })
+
+    expect(loads).toEqual([])
+    expect(host.textContent).toContain("Load on demand")
+    host.querySelector<HTMLButtonElement>('[aria-label="Browse Modal cloud files"]')?.click()
+    expect(loads).toEqual(["modal"])
+  })
+
+  test("opens a selected Modal Volume as a cloud file source", () => {
+    const opened: string[] = []
+    const host = setup({
+      modalAvailable: true,
+      volumes: [{ name: "openscience-job-results" }],
+      onOpenVolume: (volume) => opened.push(volume.name),
+    })
+
+    expect(host.querySelector("#modal-volumes-heading")?.textContent).toBe("Modal Volumes")
+    const button = host.querySelector('[aria-label="Open Modal Volume openscience-job-results"]') as HTMLButtonElement
+    button.click()
+    expect(opened).toEqual(["openscience-job-results"])
+  })
+
+  test("shows a retryable error instead of treating failed Volume discovery as empty", () => {
+    const loads: string[] = []
+    const host = setup({
+      modalAvailable: true,
+      volumesError: "Modal credentials are unavailable",
+      onLoadVolumes: () => loads.push("retry"),
+    })
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Modal credentials are unavailable")
+    expect(host.textContent).toContain("Could not load Volumes")
+    host.querySelector<HTMLButtonElement>('[aria-label="Browse Modal cloud files"]')?.click()
+    expect(loads).toEqual(["retry"])
+  })
+
   test("renders accessible source groups without exposing host paths as product identity", () => {
     const host = setup()
 
@@ -136,6 +184,7 @@ describe("Files sources", () => {
     expect(host.textContent).not.toContain("/Volumes/lab")
     expect(host.textContent).not.toContain("private/results/results.csv")
     expect(host.textContent).not.toContain("This computer")
+    expect(host.textContent).not.toContain("Modal Volumes")
   })
 
   test("distinguishes read-only and read-write roles, exposes scope, and revokes the selected grant", () => {
