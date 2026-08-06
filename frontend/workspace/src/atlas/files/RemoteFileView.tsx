@@ -2,7 +2,7 @@ import { Match, Show, Switch, createEffect, createSignal, onCleanup, type JSX } 
 import { IconDownload, IconX } from "@/atlas/shared/Icon"
 import { bytes } from "./bytes"
 import { thumbLanguage } from "./artifact-thumb"
-import { remotePreview, type RemotePreview } from "./remote-preview"
+import { remoteMime, remotePreview, type RemotePreview } from "./remote-preview"
 
 export interface RemoteFile {
   name: string
@@ -24,6 +24,41 @@ export interface RemoteFileViewProps {
 
 const shared = (code: string, lang: string) =>
   import("@synsci/ui/context/marked").then((module) => module.highlightSnippet(code, lang))
+
+interface Cached {
+  bytes: number
+  text?: { body: string; html?: string }
+  /** Images keep their data: URL, which needs no revoking and can be reused. */
+  dataUrl?: string
+  /** PDFs keep the typed bytes; the object URL is remade per mount and revoked. */
+  blob?: Blob
+}
+
+/**
+ * Files already fetched out of a Volume.
+ *
+ * Switching tabs unmounts this viewer, so without it every switch went back to
+ * Modal -- seconds each time for bytes already in hand. Keyed by volume, path
+ * and size: a Volume file can change, unlike an artifact version, and the size
+ * is the cheapest signal of that a listing gives us. A file edited in place to
+ * exactly the same length serves the previous bytes until the pane reloads.
+ */
+const fetched = new Map<string, Cached>()
+const CACHE_BUDGET = 32 * 1024 * 1024
+
+const cacheKey = (file: RemoteFile) => `${file.volume}\u0000${file.path}\u0000${file.size ?? "?"}`
+
+const keep = (key: string, entry: Cached) => {
+  let held = entry.bytes
+  for (const value of fetched.values()) held += value.bytes
+  // Oldest out first; a preview is worth re-fetching, a wedged tab is not.
+  for (const [oldest, value] of fetched) {
+    if (held <= CACHE_BUDGET) break
+    fetched.delete(oldest)
+    held -= value.bytes
+  }
+  fetched.set(key, entry)
+}
 
 export function RemoteFileView(props: RemoteFileViewProps): JSX.Element {
   const [text, setText] = createSignal<{ body: string; html?: string }>()
@@ -52,6 +87,18 @@ export function RemoteFileView(props: RemoteFileViewProps): JSX.Element {
       if (revoke) URL.revokeObjectURL(revoke)
     })
 
+    const key = cacheKey(file)
+    const hit = fetched.get(key)
+    if (hit) {
+      if (hit.text) setText(hit.text)
+      if (hit.dataUrl) setUrl(hit.dataUrl)
+      if (hit.blob) {
+        revoke = URL.createObjectURL(hit.blob)
+        setUrl(revoke)
+      }
+      return
+    }
+
     void (async () => {
       try {
         const blob = await props.read(file)
@@ -59,13 +106,35 @@ export function RemoteFileView(props: RemoteFileViewProps): JSX.Element {
         if (shape === "text") {
           const body = await blob.text()
           const html = await (props.highlight ?? shared)(body, thumbLanguage(file.name)).catch(() => undefined)
+          keep(key, { bytes: blob.size, text: { body, html } })
           if (live) setText({ body, html })
           return
         }
-        // Fetched to a blob rather than pointed at the route: the endpoint
-        // answers with Content-Disposition: attachment, which a browser may
-        // honour by downloading instead of rendering.
-        revoke = URL.createObjectURL(blob)
+        // The app's CSP is img-src 'self' data: https: and frame-src 'self' blob:
+        // (server.ts), so the two shapes need different carriers:
+        //
+        // An image cannot come from a blob: URL at all -- verified in the app,
+        // where a valid PNG decodes as data: and fails as blob: -- so its bytes
+        // become a data: URL.
+        //
+        // A PDF may use blob:, but only once it is re-typed: these bytes arrive
+        // as application/octet-stream, and an <iframe> handed that downloads the
+        // file instead of displaying it.
+        const mime = remoteMime(file.name)
+        const typed = mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob
+        if (shape === "image") {
+          const encoded = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(String(reader.result))
+            reader.onerror = () => reject(reader.error ?? new Error("could not decode the image"))
+            reader.readAsDataURL(typed)
+          })
+          keep(key, { bytes: typed.size, dataUrl: encoded })
+          if (live) setUrl(encoded)
+          return
+        }
+        keep(key, { bytes: typed.size, blob: typed })
+        revoke = URL.createObjectURL(typed)
         if (live) setUrl(revoke)
       } catch (error) {
         if (live) setFailed(error instanceof Error ? error.message : String(error))

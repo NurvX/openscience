@@ -33,8 +33,9 @@ const mount = (view: () => JSX.Element) => {
 
 const settle = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms))
 
+let unique = 0
 const props = (over: Record<string, unknown> = {}) => ({
-  file: { name: "notes.md", path: "notes.md", volume: "weights", size: 12 },
+  file: { name: "notes.md", path: `notes-${(unique += 1)}.md`, volume: "weights", size: 12 },
   read: async () => new Blob(["# Objective"], { type: "text/markdown" }),
   onDownload: () => {},
   onClose: () => {},
@@ -66,9 +67,10 @@ describe("remote file view", () => {
     expect(host.querySelector("[data-remote-text]")?.textContent).toContain("# Objective")
   })
 
-  // The route answers with Content-Disposition: attachment, which a browser may
-  // honour by downloading rather than rendering, so bytes go through a blob.
-  test("renders an image from a blob rather than the route", async () => {
+  // The app's CSP is img-src 'self' data: https: -- no blob: -- so an image
+  // rendered from a blob: URL never decodes. Verified in the running app: the
+  // same PNG loads as data: and fails as blob:.
+  test("renders an image from a data URL, which the CSP allows", async () => {
     const host = mount(() =>
       subject.RemoteFileView(
         props({
@@ -79,7 +81,35 @@ describe("remote file view", () => {
     )
     await settle()
 
-    expect(host.querySelector("[data-remote-image]")?.getAttribute("src")).toStartWith("blob:")
+    expect(host.querySelector("[data-remote-image]")?.getAttribute("src")).toStartWith("data:image/png")
+  })
+
+  // frame-src does allow blob:, so a PDF keeps it -- but the bytes arrive as
+  // application/octet-stream, and an <iframe> handed that downloads the file
+  // instead of displaying it.
+  test("renders a PDF from a blob typed as a PDF", async () => {
+    let seen: string | undefined
+    const create = URL.createObjectURL.bind(URL)
+    URL.createObjectURL = (blob: Blob) => {
+      seen = (blob as Blob).type
+      return create(blob)
+    }
+    try {
+      const host = mount(() =>
+        subject.RemoteFileView(
+          props({
+            file: { name: "paper.pdf", path: "paper.pdf", volume: "weights", size: 40 },
+            read: async () => new Blob([new Uint8Array([37, 80, 68, 70])], { type: "application/octet-stream" }),
+          }) as never,
+        ),
+      )
+      await settle()
+
+      expect(seen).toBe("application/pdf")
+      expect(host.querySelector("[data-remote-pdf]")?.getAttribute("src")).toStartWith("blob:")
+    } finally {
+      URL.createObjectURL = create
+    }
   })
 
   test("offers download instead of guessing at a format it cannot render", async () => {
@@ -151,5 +181,63 @@ describe("remote file view", () => {
     host.querySelector<HTMLButtonElement>('[aria-label="Close notes.md"]')!.click()
 
     expect(events).toEqual(["download", "close"])
+  })
+
+  // Switching tabs unmounts this viewer, so without a cache every switch went
+  // back to Modal for bytes already in hand.
+  test("does not re-fetch a file it has already pulled down", async () => {
+    let reads = 0
+    const file = { name: "shared.md", path: "shared.md", volume: "weights", size: 12 }
+    const view = () =>
+      subject.RemoteFileView(
+        props({
+          file,
+          read: async () => {
+            reads += 1
+            return new Blob(["# Objective"], { type: "text/markdown" })
+          },
+        }) as never,
+      )
+
+    const first = mount(view)
+    await settle()
+    expect(first.querySelector("[data-remote-text]")?.textContent).toContain("# Objective")
+    expect(reads).toBe(1)
+
+    cleanups.splice(0).forEach((fn) => fn())
+    document.body.replaceChildren()
+
+    const second = mount(view)
+    await settle()
+
+    expect(second.querySelector("[data-remote-text]")?.textContent).toContain("# Objective")
+    expect(reads).toBe(1)
+  })
+
+  // A Volume file can change, unlike an artifact version; the size a listing
+  // reports is the cheapest signal of that.
+  test("fetches again when the file has changed size", async () => {
+    let reads = 0
+    const read = async () => {
+      reads += 1
+      return new Blob(["# Objective"], { type: "text/markdown" })
+    }
+    mount(() =>
+      subject.RemoteFileView(
+        props({ file: { name: "grew.md", path: "grew.md", volume: "weights", size: 12 }, read }) as never,
+      ),
+    )
+    await settle()
+    cleanups.splice(0).forEach((fn) => fn())
+    document.body.replaceChildren()
+
+    mount(() =>
+      subject.RemoteFileView(
+        props({ file: { name: "grew.md", path: "grew.md", volume: "weights", size: 4096 }, read }) as never,
+      ),
+    )
+    await settle()
+
+    expect(reads).toBe(2)
   })
 })
