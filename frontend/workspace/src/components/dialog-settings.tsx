@@ -12,6 +12,26 @@ import { SettingsNavContext } from "./settings/nav"
 // Select) into the soft, rounded, iOS-style language settings uses — and widens
 // the modal when expanded — without touching global component CSS or tokens.
 const SETTINGS_STYLES = `
+.settings-dialog {
+  font-family: var(--font-family-sans);
+  font-feature-settings: var(--font-family-sans--font-feature-settings, normal);
+}
+.settings-dialog h2,
+.settings-dialog h3,
+.settings-dialog h4 {
+  font-family: inherit;
+  letter-spacing: -0.012em;
+}
+.settings-dialog .atlas-section-label,
+.settings-section-label {
+  color: var(--text-weak);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 16px;
+  text-transform: none;
+}
 .settings-dialog [data-component="switch"] [data-slot="switch-control"] {
   width: 38px;
   height: 22px;
@@ -71,8 +91,8 @@ const SETTINGS_STYLES = `
   height: 100%;
 }
 .settings-nav {
-  width: 184px;
-  flex: 0 0 184px;
+  width: 196px;
+  flex: 0 0 196px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -97,17 +117,22 @@ const SETTINGS_STYLES = `
   gap: 2px;
 }
 .settings-nav__label {
-  padding: 0 9px 4px;
+  padding: 0 9px 5px;
+  color: var(--text-weak);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 .settings-nav__item {
   min-width: 0;
-  height: 31px;
+  height: 34px;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 9px;
-  border-radius: 5px;
-  font-size: 12px;
+  border-radius: 8px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-weak);
   text-align: left;
@@ -120,6 +145,11 @@ const SETTINGS_STYLES = `
 .settings-nav__item[data-active="true"] {
   background: var(--surface-raised-base-active);
   color: var(--text-strong);
+  box-shadow: inset 2px 0 0 var(--text-strong);
+}
+.settings-nav__item:focus-visible {
+  outline: 1px solid var(--text-strong);
+  outline-offset: -2px;
 }
 .settings-nav__footer {
   display: flex;
@@ -233,7 +263,7 @@ export const DialogSettings: Component<{ initial?: SettingsPanelId }> = (props) 
             <For each={SETTINGS_SECTIONS}>
               {(section) => (
                 <div class="settings-nav__section">
-                  <span class="settings-nav__label atlas-section-label">{section.label}</span>
+                  <span class="settings-nav__label">{section.label}</span>
                   <For each={SETTINGS_PANELS.filter((p) => p.section === section.id)}>
                     {(panel) => (
                       <button
@@ -243,7 +273,7 @@ export const DialogSettings: Component<{ initial?: SettingsPanelId }> = (props) 
                         onClick={() => navigate(panel.id)}
                         aria-current={current().id === panel.id ? "page" : undefined}
                       >
-                        <Icon name={panel.icon} size="small" class="flex-shrink-0" />
+                        <Icon name={panel.icon} size="medium" class="flex-shrink-0" />
                         <span class="truncate">{panel.title}</span>
                       </button>
                     )}

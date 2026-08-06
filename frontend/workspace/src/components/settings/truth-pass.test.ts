@@ -87,12 +87,21 @@ describe("launch settings truth pass", () => {
     expect(compute).toContain("Connection check failed")
     expect(compute).toContain("Defaults saved")
     expect(compute).toContain("Unsaved default changes")
+    expect(compute).toContain('"Test connection"')
+    expect(compute).toContain('"Save defaults"')
+    expect(compute).toContain('"Add host"')
     expect(compute).toContain('aria-live="polite"')
   })
 
   test("keeps deferred cloud storage out of Storage", () => {
-    expect(source("Storage.tsx")).not.toContain("Cloud storage")
-    expect(source("Storage.tsx")).not.toContain("manage cloud credentials")
+    const storage = source("Storage.tsx")
+
+    expect(storage).not.toContain("Cloud storage")
+    expect(storage).not.toContain("manage cloud credentials")
+    expect(storage).not.toContain("window.prompt")
+    expect(storage).toContain('aria-label="New data directory"')
+    expect(storage).toContain("Copy data")
+    expect(storage).toContain("Reset location")
   })
 
   test("connectors persist enablement and inspect real server capabilities", () => {
@@ -108,6 +117,13 @@ describe("launch settings truth pass", () => {
     expect(connectors).toContain("restoreRecord")
     expect(connectors).toContain("Add remote server")
     expect(connectors).toContain("Add local command")
+    expect(connectors).toContain('label="Add connector"')
+    expect(connectors).toContain('label: "Remote URL"')
+    expect(connectors).toContain('label: "Local command"')
+    expect(connectors).toContain('"Save connector"')
+    expect(connectors).toContain('label="Cancel"')
+    expect(connectors).toContain("Refresh status")
+    expect(connectors).not.toContain('label="cancel"')
     expect(connectors).not.toContain("https://mcp.example.com/mcp or a local command")
     expect(connectors).not.toContain("window.prompt")
   })
