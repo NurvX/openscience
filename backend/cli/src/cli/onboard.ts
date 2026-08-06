@@ -231,13 +231,26 @@ export const DoctorCommand = cmd({
     prompts.log.info(`State root: ${Global.Path.state}`)
 
     if (Global.DataMigration.migrated) {
+      const done = Global.DataMigration.migrated
+      // Each count is a distinct kind of import, so name them separately
+      // rather than folding them into one "files" total that matches none of
+      // them. `deferred` is the one a user can act on: those files are still
+      // in the previous directory and the next launch will try again.
       prompts.log.success(
-        `Data copied to ~/.openscience and verified (${Global.DataMigration.migrated.files} files). The previous XDG directory remains as a safety copy.`,
+        `Legacy data imported into ~/.openscience and verified: ${done.files} file(s) copied, ` +
+          `${done.merged} credential store(s) merged, ${done.artifacts} artifact record(s) restored, ` +
+          `${done.skipped} already present. Existing OpenScience data was kept, and ${done.source} ` +
+          `remains as a safety copy.`,
       )
+      if (done.deferred > 0)
+        prompts.log.warn(`${done.deferred} file(s) could not be read this run; the next launch will retry them.`)
+    }
+    if (Global.DataMigration.warning) {
+      prompts.log.warn(Global.DataMigration.warning)
     }
     if (Global.DataMigration.error) {
       prompts.log.warn(
-        `Data migration to ~/.openscience did not complete; OpenScience is still using the previous directory. ${Global.DataMigration.error}`,
+        `Data migration to ~/.openscience did not complete; OpenScience is using ${Global.DataMigration.path}. ${Global.DataMigration.error}`,
       )
     }
 
