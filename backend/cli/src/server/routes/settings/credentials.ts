@@ -18,8 +18,8 @@
  * reads AWS_ACCESS_KEY_ID), the in-process literature connectors (Semantic
  * Scholar `x-api-key`, OpenAlex mailto/key), and — via OpenScience.subprocessEnv,
  * which forwards non-managed env vars — approved skill/bash subprocesses (aws,
- * gh, gcloud, …). Modal is a control-plane exception: existing values remain
- * redacted but are not injected; governed Modal runs use settings ▸ Compute.
+ * gh, gcloud, …). Governed Modal tokens remain in settings ▸ Compute and never
+ * enter agent-controlled shells.
  * It runs at CLI/server boot (index.ts middleware) and again
  * after each save/delete so changes apply live without a restart. Decrypted
  * secret values are registered for output redaction.
@@ -51,6 +51,7 @@ interface ServiceSpec {
   id: string
   label: string
   description: string
+  category: "compute" | "integration"
   fields: FieldSpec[]
 }
 
@@ -62,6 +63,7 @@ const CATALOG: ServiceSpec[] = [
     id: "aws",
     label: "AWS",
     description: "Access key for S3, Bedrock, and other AWS services.",
+    category: "compute",
     fields: [
       { name: "access_key_id", label: "Access key ID", type: "text", placeholder: "AKIA…" },
       { name: "secret_access_key", label: "Secret access key", type: "password" },
@@ -72,12 +74,14 @@ const CATALOG: ServiceSpec[] = [
     id: "github",
     label: "GitHub",
     description: "Personal access token for repositories and the GitHub API.",
+    category: "integration",
     fields: [{ name: "token", label: "Access token", type: "password", placeholder: "ghp_… / github_pat_…" }],
   },
   {
     id: "gcp",
     label: "Google Cloud",
     description: "Service-account credentials for GCP APIs and storage.",
+    category: "compute",
     fields: [
       { name: "project_id", label: "Project ID", type: "text", optional: true },
       { name: "service_account_json", label: "Service account JSON", type: "textarea", placeholder: "{ … }" },
@@ -86,41 +90,78 @@ const CATALOG: ServiceSpec[] = [
   {
     id: "literature",
     label: "Literature access",
-    description: "API key for full-text scientific literature retrieval.",
+    description: "Semantic Scholar API key for literature retrieval.",
+    category: "integration",
     fields: [{ name: "api_key", label: "API key", type: "password" }],
   },
   {
     id: "azure",
     label: "Microsoft Azure",
-    description: "Azure OpenAI / cognitive-services key and endpoint.",
+    description: "Service principal or API credentials for Azure workloads.",
+    category: "compute",
     fields: [
-      { name: "api_key", label: "API key", type: "password" },
+      { name: "tenant_id", label: "Tenant ID", type: "text", optional: true },
+      { name: "client_id", label: "Client ID", type: "text", optional: true },
+      { name: "client_secret", label: "Client secret", type: "password", optional: true },
+      { name: "subscription_id", label: "Subscription ID", type: "text", optional: true },
+      { name: "api_key", label: "API key", type: "password", optional: true },
       { name: "endpoint", label: "Endpoint", type: "text", optional: true, placeholder: "https://….openai.azure.com" },
-    ],
-  },
-  {
-    id: "modal",
-    label: "Modal",
-    description: "Token for running compute jobs on Modal.",
-    fields: [
-      { name: "token_id", label: "Token ID", type: "text", placeholder: "ak-…" },
-      { name: "token_secret", label: "Token secret", type: "password", placeholder: "as-…" },
     ],
   },
   {
     id: "nvidia",
     label: "NVIDIA API",
     description: "API key for NVIDIA NIM / build.nvidia.com models.",
+    category: "compute",
     fields: [{ name: "api_key", label: "API key", type: "password", placeholder: "nvapi-…" }],
   },
   {
     id: "openalex",
     label: "OpenAlex",
     description: "Polite-pool email (and optional key) for the OpenAlex API.",
+    category: "integration",
     fields: [
       { name: "email", label: "Contact email", type: "text", placeholder: "you@example.com" },
       { name: "api_key", label: "API key", type: "password", optional: true },
     ],
+  },
+  {
+    id: "huggingface",
+    label: "Hugging Face",
+    description: "Token for models, datasets, and the Hugging Face Hub.",
+    category: "integration",
+    fields: [{ name: "api_key", label: "Access token", type: "password", placeholder: "hf_…" }],
+  },
+  {
+    id: "tinker",
+    label: "Tinker",
+    description: "API key for Tinker training and inference.",
+    category: "integration",
+    fields: [
+      { name: "api_key", label: "API key", type: "password" },
+      { name: "base_url", label: "Base URL", type: "text", optional: true },
+    ],
+  },
+  {
+    id: "wandb",
+    label: "Weights & Biases",
+    description: "API key for experiment tracking and artifact logging.",
+    category: "integration",
+    fields: [{ name: "api_key", label: "API key", type: "password" }],
+  },
+  {
+    id: "pinecone",
+    label: "Pinecone",
+    description: "API key for vector indexes and retrieval.",
+    category: "integration",
+    fields: [{ name: "api_key", label: "API key", type: "password" }],
+  },
+  {
+    id: "langsmith",
+    label: "LangSmith",
+    description: "API key for tracing, evaluation, and observability.",
+    category: "integration",
+    fields: [{ name: "api_key", label: "API key", type: "password" }],
   },
 ]
 
@@ -182,7 +223,8 @@ function specFor(id: string): ServiceSpec | undefined {
 
 /** Field names whose values are NOT secret (endpoints, regions, project ids,
  *  contact emails, file paths) — excluded from output redaction. */
-const NON_SECRET_ENV = /(_ENDPOINT|_REGION|_PROJECT|_MAILTO)$|GOOGLE_APPLICATION_CREDENTIALS/
+const NON_SECRET_ENV =
+  /(_ENDPOINT|_REGION|_PROJECT|_MAILTO|_BASE_URL|_CLIENT_ID|_TENANT_ID|_SUBSCRIPTION_ID|_TRACING)$|GOOGLE_APPLICATION_CREDENTIALS/
 
 /** Map one service's decrypted fields to the canonical env var names its real
  *  consumers read. GCP's service-account JSON is handled separately (it needs a
@@ -211,13 +253,13 @@ function mapServiceEnv(id: string, f: Record<string, string>): Record<string, st
       put("SEMANTIC_SCHOLAR_API_KEY", f.api_key)
       return out
     case "azure":
+      put("AZURE_TENANT_ID", f.tenant_id)
+      put("AZURE_CLIENT_ID", f.client_id)
+      put("AZURE_CLIENT_SECRET", f.client_secret)
+      put("AZURE_SUBSCRIPTION_ID", f.subscription_id)
       put("AZURE_OPENAI_API_KEY", f.api_key)
       put("AZURE_API_KEY", f.api_key)
       put("AZURE_OPENAI_ENDPOINT", f.endpoint)
-      return out
-    case "modal":
-      put("MODAL_TOKEN_ID", f.token_id)
-      put("MODAL_TOKEN_SECRET", f.token_secret)
       return out
     case "nvidia":
       put("NVIDIA_API_KEY", f.api_key)
@@ -225,6 +267,25 @@ function mapServiceEnv(id: string, f: Record<string, string>): Record<string, st
     case "openalex":
       put("OPENALEX_MAILTO", f.email)
       put("OPENALEX_API_KEY", f.api_key)
+      return out
+    case "huggingface":
+      put("HF_TOKEN", f.api_key)
+      put("HUGGING_FACE_HUB_TOKEN", f.api_key)
+      return out
+    case "tinker":
+      put("TINKER_API_KEY", f.api_key)
+      put("TINKER_BASE_URL", f.base_url)
+      return out
+    case "wandb":
+      put("WANDB_API_KEY", f.api_key)
+      return out
+    case "pinecone":
+      put("PINECONE_API_KEY", f.api_key)
+      return out
+    case "langsmith":
+      put("LANGSMITH_API_KEY", f.api_key)
+      put("LANGCHAIN_API_KEY", f.api_key)
+      put("LANGSMITH_TRACING", f.api_key ? "true" : undefined)
       return out
     default:
       if (id.startsWith("custom:")) {
@@ -282,10 +343,6 @@ async function readDecryptedEnv(): Promise<CredentialEnv> {
       }
     }
     const mapped = mapServiceEnv(id, fields)
-    if (id === "modal") {
-      for (const value of Object.values(mapped)) secrets.push(value)
-      continue
-    }
     for (const [key, value] of Object.entries(mapped)) {
       env[key] = value
       if (!NON_SECRET_ENV.test(key)) secrets.push(value)
@@ -337,6 +394,7 @@ const ServiceView = z.object({
   id: z.string(),
   label: z.string(),
   description: z.string(),
+  category: z.enum(["compute", "integration"]),
   custom: z.boolean(),
   fields: z.array(
     z.object({
@@ -362,6 +420,7 @@ function view(store: Store) {
       id: spec.id,
       label: spec.label,
       description: spec.description,
+      category: spec.category,
       custom: false,
       fields: spec.fields.map((f) => ({
         name: f.name,
@@ -383,6 +442,7 @@ function view(store: Store) {
         id,
         label: entry.label ?? id,
         description: "Custom credential.",
+        category: "integration" as const,
         custom: true,
         fields: names.map((name) => ({ name, label: name, type: "password" as const, optional: false })),
         connected: names.length > 0,

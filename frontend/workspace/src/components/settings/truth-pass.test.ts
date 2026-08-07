@@ -62,8 +62,9 @@ describe("launch settings truth pass", () => {
     expect(compute).toContain('title="Local machine"')
     expect(compute).toContain('title="Remote compute"')
     expect(compute).toContain("Connect directly over SSH. Atlas is not required.")
-    expect(compute).toContain('title="Atlas Compute"')
-    expect(compute).toContain("<Badge>coming later</Badge>")
+    expect(compute).toContain('title="Cloud credentials"')
+    expect(compute).not.toContain('title="Atlas Compute"')
+    expect(compute).not.toContain("coming later")
   })
 
   test("prefers an active Modal CLI profile without exposing its credentials", () => {
