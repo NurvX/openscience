@@ -56,10 +56,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       // Planning is adaptive in the research agent, so the legacy read-only
       // plan agent is not exposed as a picker entry.
       const agents = () => (Array.isArray(sync.data.agent) ? sync.data.agent : [])
-      const list = createMemo(
-        () => agents().filter((x) => x.mode !== "subagent" && !x.hidden && x.name !== "plan"),
-        [],
-      )
+      const list = createMemo(() => agents().filter((x) => x.mode !== "subagent" && !x.hidden && x.name !== "plan"), [])
       const all = createMemo(() => agents().filter((x) => x.mode !== "subagent"), [])
       const [store, setStore] = createStore<{
         current?: string
