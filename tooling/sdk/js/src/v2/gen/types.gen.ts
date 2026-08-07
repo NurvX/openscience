@@ -2812,6 +2812,7 @@ export type SettingsCredentialsListResponses = {
       id: string
       label: string
       description: string
+      category: "compute" | "integration"
       custom: boolean
       fields: Array<{
         name: string
@@ -2847,6 +2848,7 @@ export type SettingsCredentialsRemoveResponses = {
       id: string
       label: string
       description: string
+      category: "compute" | "integration"
       custom: boolean
       fields: Array<{
         name: string
@@ -2888,6 +2890,7 @@ export type SettingsCredentialsSetResponses = {
       id: string
       label: string
       description: string
+      category: "compute" | "integration"
       custom: boolean
       fields: Array<{
         name: string
@@ -10258,32 +10261,6 @@ export type FileManifestResponses = {
 }
 
 export type FileManifestResponse = FileManifestResponses[keyof FileManifestResponses]
-
-export type FileStarterData = {
-  body?: {
-    template: "single-cell" | "dose-response" | "protein-structure"
-  }
-  path?: never
-  query?: {
-    directory?: string
-  }
-  url: "/file/starters"
-}
-
-export type FileStarterResponses = {
-  /**
-   * Created starter files
-   */
-  200: {
-    template: "single-cell" | "dose-response" | "protein-structure"
-    directory: string
-    files: Array<string>
-    notebook: string
-    readme: string
-  }
-}
-
-export type FileStarterResponse = FileStarterResponses[keyof FileStarterResponses]
 
 export type FilePublicationCapabilitiesData = {
   body?: never

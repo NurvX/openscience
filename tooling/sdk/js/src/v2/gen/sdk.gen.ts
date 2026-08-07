@@ -71,7 +71,6 @@ import type {
   FileReviewsResolveErrors,
   FileReviewsResolveResponses,
   FileReviewsRunResponses,
-  FileStarterResponses,
   FileStatusResponses,
   FileWriteResponses,
   FindFilesResponses,
@@ -5137,41 +5136,6 @@ export class File extends HeyApiClient {
       url: "/file/manifest",
       ...options,
       ...params,
-    })
-  }
-
-  /**
-   * Create a local scientific starter project
-   *
-   * Materialize a valid notebook, sample data, and README without external downloads.
-   */
-  public starter<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      template?: "single-cell" | "dose-response" | "protein-structure"
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "body", key: "template" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<FileStarterResponses, unknown, ThrowOnError>({
-      url: "/file/starters",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
     })
   }
 
