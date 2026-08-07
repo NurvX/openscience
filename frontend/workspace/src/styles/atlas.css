@@ -1897,132 +1897,6 @@ button.research-launchpad__status-item:hover {
   transform: translateY(1px);
 }
 
-.research-launchpad__starters {
-  display: grid;
-  gap: 13px;
-}
-
-.research-launchpad__local-badge {
-  flex: 0 0 auto;
-  padding: 4px 7px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-success) 6%, transparent);
-  font-family: var(--font-family-mono);
-  font-size: 8px;
-  letter-spacing: 0.05em;
-  color: var(--color-success);
-  text-transform: uppercase;
-}
-
-.research-launchpad__starter-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.research-launchpad__starter {
-  all: unset;
-  box-sizing: border-box;
-  min-width: 0;
-  display: grid;
-  grid-template-rows: 76px minmax(116px, auto) auto;
-  border: 1px solid var(--color-border);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--color-surface-solid) 82%, transparent);
-  overflow: hidden;
-  cursor: pointer;
-  transition:
-    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 180ms ease,
-    box-shadow 180ms ease;
-}
-
-.research-launchpad__starter:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--starter-accent) 52%, var(--color-border));
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--starter-accent) 10%, transparent);
-}
-
-.research-launchpad__starter:disabled {
-  opacity: 0.62;
-  cursor: wait;
-}
-
-.research-launchpad__starter-visual {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
-  padding: 18px 20px 13px;
-  border-bottom: 1px solid var(--color-border);
-  background:
-    radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--starter-accent) 16%, transparent), transparent 7rem),
-    color-mix(in srgb, var(--starter-accent) 6%, var(--color-bg-subtle));
-  overflow: hidden;
-}
-
-.research-launchpad__starter-visual::before {
-  position: absolute;
-  top: 10px;
-  left: 12px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--starter-accent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--starter-accent) 11%, transparent);
-  content: "";
-}
-
-.research-launchpad__starter-visual i {
-  flex: 1;
-  min-height: 5px;
-  border-radius: 2px 2px 0 0;
-  background: color-mix(in srgb, var(--starter-accent) 38%, transparent);
-}
-
-.research-launchpad__starter-copy {
-  min-width: 0;
-  display: grid;
-  align-content: start;
-  gap: 6px;
-  padding: 13px 13px 10px;
-}
-
-.research-launchpad__starter-copy strong {
-  font-family: var(--font-family-sans);
-  font-size: 12px;
-  font-weight: 620;
-  color: var(--color-text);
-}
-
-.research-launchpad__starter-copy > span {
-  font-family: var(--font-family-sans);
-  font-size: 10px;
-  line-height: 1.45;
-  color: var(--color-text-muted);
-}
-
-.research-launchpad__starter-copy small {
-  font-family: var(--font-family-mono);
-  font-size: 8px;
-  line-height: 1.45;
-  color: var(--color-text-faint);
-}
-
-.research-launchpad__starter-action {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 9px 13px;
-  border-top: 1px solid var(--color-border);
-  font-family: var(--font-family-sans);
-  font-size: 9px;
-  font-weight: 570;
-  color: var(--starter-accent);
-}
-
 .research-launchpad__workflows {
   display: grid;
   gap: 14px;
@@ -2284,10 +2158,6 @@ button.research-launchpad__status-item:hover {
     grid-template-columns: 1fr;
   }
 
-  .research-launchpad__starter-grid {
-    grid-template-columns: 1fr;
-  }
-
   .research-launchpad__workflow[data-featured="true"] {
     grid-column: auto;
   }
@@ -2530,62 +2400,6 @@ button.research-launchpad__status-item:hover {
   display: grid;
   gap: 32px;
   padding-top: 4px;
-}
-
-.research-launchpad__starters,
-.research-launchpad__workflows {
-  gap: 12px;
-}
-
-.research-launchpad__starter-list {
-  display: grid;
-  border-top: 1px solid var(--color-border);
-}
-
-.research-launchpad__starter {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto;
-  align-items: center;
-  gap: 16px;
-  padding: 13px 10px;
-  border: 0;
-  border-bottom: 1px solid var(--color-border);
-  border-radius: 0;
-  background: transparent;
-  overflow: visible;
-  transition: background 140ms ease;
-}
-
-.research-launchpad__starter:hover {
-  transform: none;
-  border-color: var(--color-border);
-  background: var(--color-bg-subtle);
-  box-shadow: none;
-}
-
-.research-launchpad__starter-copy {
-  padding: 0;
-  gap: 3px;
-}
-
-.research-launchpad__starter-copy strong {
-  font-size: 11px;
-}
-
-.research-launchpad__starter-copy > span {
-  font-size: 10px;
-}
-
-.research-launchpad__starter-copy small {
-  font-size: 8px;
-}
-
-.research-launchpad__starter-action {
-  justify-content: flex-start;
-  padding: 0;
-  border: 0;
-  color: var(--color-text-muted);
 }
 
 .research-launchpad__workflow-filters {
@@ -4886,62 +4700,6 @@ button.research-launchpad__status-item:hover {
   line-height: 1.5;
 }
 
-.research-launchpad__catalog .research-launchpad__starters,
-.research-launchpad__catalog .research-launchpad__workflows {
-  gap: 16px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-list {
-  gap: 10px;
-  border-top: 0;
-}
-
-.research-launchpad__catalog .research-launchpad__starter {
-  min-height: 104px;
-  gap: 18px;
-  padding: 17px 18px;
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  background: var(--color-bg);
-}
-
-.research-launchpad__catalog .research-launchpad__starter:hover {
-  border-color: var(--color-border-strong);
-  background: var(--surface-raised-base);
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy {
-  gap: 5px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy strong {
-  font-size: 15px;
-  line-height: 1.3;
-  font-weight: 550;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy > span {
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy small {
-  font-family: var(--font-family-sans);
-  font-size: 13px;
-  line-height: 1.45;
-  letter-spacing: normal;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-action {
-  min-height: 40px;
-  padding: 0 13px;
-  border: 0;
-  border-radius: 14px;
-  background: var(--surface-raised-base);
-  font-size: 13px;
-  font-weight: 550;
-}
-
 .research-launchpad__catalog .research-launchpad__workflow-filters {
   gap: 8px;
   padding-bottom: 10px;
@@ -5052,16 +4810,6 @@ button.research-launchpad__status-item:hover {
   .research-launchpad__catalog .research-launchpad__worktree select {
     width: 100%;
     max-width: none;
-  }
-
-  .research-launchpad__catalog .research-launchpad__starter {
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-
-  .research-launchpad__catalog .research-launchpad__starter-action {
-    width: 100%;
-    justify-content: space-between;
   }
 }
 
@@ -5315,11 +5063,8 @@ button.research-launchpad__status-item:hover {
   font-size: 12px;
 }
 
-/* Claude Science forensic reset */
-/* The live Example project keeps session chrome quiet: a narrow research rail,
-   compact work tabs, a mostly empty new-session canvas, and one grounded
-   composer. These final overrides intentionally supersede the older showcase
-   treatment while the expanded starter catalog stays available on demand. */
+/* Quiet research shell: a narrow rail, compact work tabs, an empty new-session
+   canvas, and one grounded composer. */
 
 :root {
   --workspace-composer-radius: 14px;
@@ -5668,55 +5413,12 @@ button.research-launchpad__status-item:hover {
   font-size: 12px;
 }
 
-.research-launchpad__catalog .research-launchpad__starters,
-.research-launchpad__catalog .research-launchpad__workflows {
-  gap: 10px;
-}
-
 .research-launchpad__catalog .research-launchpad__section-heading h2 {
   font-size: 14px;
 }
 
 .research-launchpad__catalog .research-launchpad__section-heading p {
   margin-top: 2px;
-  font-size: 12px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-list,
-.research-launchpad__catalog .research-launchpad__grid {
-  gap: 6px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter {
-  min-height: 78px;
-  gap: 12px;
-  padding: 12px 13px;
-  border-radius: 10px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy {
-  gap: 3px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy strong,
-.research-launchpad__catalog .research-launchpad__workflow-copy strong {
-  font-size: 14px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy > span,
-.research-launchpad__catalog .research-launchpad__workflow-copy > span {
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy small {
-  font-size: 11px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-action {
-  min-height: 32px;
-  padding-inline: 10px;
-  border-radius: 8px;
   font-size: 12px;
 }
 
@@ -5796,15 +5498,6 @@ button.research-launchpad__status-item:hover {
   .research-launchpad__catalog {
     max-height: calc(100dvh - var(--workspace-composer-reserve) - 72px);
     padding: 12px;
-  }
-
-  .research-launchpad__catalog .research-launchpad__starter {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
-  }
-
-  .research-launchpad__catalog .research-launchpad__starter-action {
-    width: auto;
   }
 }
 
@@ -6624,226 +6317,4 @@ button.research-launchpad__status-item:hover {
    Declared last so it wins over the wide-container four-column metrics rule. */
 .kernel-card__metrics--usage {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-/* Starter catalog — compact, contained, and always clear of the composer. */
-.research-launchpad {
-  box-sizing: border-box;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  padding: 12px 18px calc(var(--workspace-composer-reserve) + 10px);
-}
-
-.research-launchpad__inner {
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.research-launchpad__bar {
-  min-height: 30px;
-  flex: 0 0 auto;
-  font-size: 13px;
-}
-
-.research-launchpad__catalog {
-  box-sizing: border-box;
-  width: min(100%, 760px);
-  min-height: 0;
-  max-height: none;
-  flex: 1;
-  gap: 18px;
-  margin-inline: auto;
-  padding: 14px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scroll-padding-bottom: 18px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-surface-solid) 94%, var(--color-bg));
-  box-shadow: none;
-}
-
-.research-launchpad__catalog .research-launchpad__controls {
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 0 2px;
-}
-
-.research-launchpad__catalog .research-launchpad__worktree {
-  min-height: 30px;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-}
-
-.research-launchpad__worktree-label {
-  color: var(--color-text-faint);
-  font-size: 11px;
-}
-
-.research-launchpad__catalog .research-launchpad__starters,
-.research-launchpad__catalog .research-launchpad__workflows {
-  gap: 8px;
-}
-
-.research-launchpad__catalog .research-launchpad__section-heading h2 {
-  font-size: 13px;
-}
-
-.research-launchpad__catalog .research-launchpad__section-heading p {
-  margin-top: 1px;
-  font-size: 11px;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-list {
-  display: flex;
-  gap: 7px;
-  overflow-x: auto;
-  padding: 1px 1px 5px;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-}
-
-.research-launchpad__catalog .research-launchpad__starter {
-  min-width: min(228px, 76vw);
-  min-height: 100px;
-  flex: 1 0 0;
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 18px;
-  grid-template-rows: 1fr;
-  align-items: center;
-  gap: 9px;
-  padding: 10px;
-  overflow: hidden;
-  scroll-snap-align: start;
-  border: 1px solid color-mix(in srgb, var(--starter-accent) 16%, var(--color-border));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--starter-accent) 2%, var(--color-bg));
-  transition:
-    border-color 140ms ease,
-    background 140ms ease,
-    transform 140ms ease;
-}
-
-.research-launchpad__catalog .research-launchpad__starter:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--starter-accent) 34%, var(--color-border));
-  background: color-mix(in srgb, var(--starter-accent) 4%, var(--color-bg));
-}
-
-.research-launchpad__catalog .research-launchpad__starter-visual {
-  width: 28px;
-  height: 28px;
-  min-height: 0;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--starter-accent) 24%, var(--color-border));
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--starter-accent) 5%, transparent);
-}
-
-.research-launchpad__catalog .research-launchpad__starter-visual::before,
-.research-launchpad__starter-plot {
-  display: none;
-}
-
-.research-launchpad__starter-number {
-  color: color-mix(in srgb, var(--starter-accent) 68%, var(--color-text-muted));
-  font-family: var(--font-family-mono);
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy {
-  min-width: 0;
-  align-content: center;
-  gap: 3px;
-  padding: 0;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy strong {
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy > span {
-  display: -webkit-box;
-  overflow: hidden;
-  font-size: 10.5px;
-  line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-copy small {
-  display: none;
-}
-
-.research-launchpad__catalog .research-launchpad__starter-action {
-  width: 18px;
-  min-height: 28px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--starter-accent) 64%, var(--color-text));
-  font-size: 0;
-}
-
-.research-launchpad__catalog .research-launchpad__grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.research-launchpad__catalog .research-launchpad__workflow {
-  min-height: 60px;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-}
-
-.research-launchpad__catalog .research-launchpad__workflow-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-}
-
-.research-launchpad__catalog .research-launchpad__workflow-copy strong {
-  font-size: 12px;
-}
-
-.research-launchpad__catalog .research-launchpad__workflow-copy > span {
-  font-size: 10.5px;
-  line-height: 1.35;
-}
-
-@media (max-width: 640px) {
-  :root {
-    --workspace-composer-reserve: 128px;
-  }
-
-  .research-launchpad {
-    padding: 10px 10px calc(var(--workspace-composer-reserve) + 8px);
-  }
-
-  .research-launchpad__catalog {
-    padding: 11px;
-  }
-
-  .research-launchpad__catalog .research-launchpad__grid {
-    grid-template-columns: 1fr;
-  }
 }

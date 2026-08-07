@@ -8,7 +8,12 @@ import { Log } from "../util/log"
 import { Lock } from "../util/lock"
 import { Env } from "../env"
 import { Auth } from "../auth"
-import { isSyncedEnvAllowed, BYOK_LLM_ENV_KEYS, managedOpenRouterBaseURL } from "./synced-env-policy"
+import {
+  isSyncedEnvAllowed,
+  BYOK_LLM_ENV_KEYS,
+  SYNCED_SERVICE_ENV_KEYS,
+  managedOpenRouterBaseURL,
+} from "./synced-env-policy"
 import { resolveAtlasPackageDir } from "./atlas-package"
 import { DEFAULT_MANAGED_API_BASE, MANAGED_API_BASE } from "../endpoints"
 
@@ -74,6 +79,8 @@ function getSyncedConfigDir(): string {
   return path.join(xdg, "openscience")
 }
 
+const syncedGcpFilename = "atlas-gcp-service-account.json"
+
 // Seed the synced-secret set from the on-disk snapshot at import. preload-env.ts
 // replays synced-env.json into process.env at boot but never seeded this set, so
 // on a fresh process where no in-process sync runs (the common steady state, when
@@ -117,16 +124,7 @@ const KERNEL_RUNTIME_KEYS = new Set([
 ])
 const SAFE_SYNCED_KEYS = new Set([
   ...BYOK_LLM_ENV_KEYS,
-  // ML services
-  "TINKER_API_KEY",
-  "TINKER_BASE_URL",
-  "HF_TOKEN",
-  "HUGGING_FACE_HUB_TOKEN",
-  "WANDB_API_KEY",
-  "LANGSMITH_API_KEY",
-  "LANGCHAIN_API_KEY",
-  "LANGSMITH_TRACING",
-  "PINECONE_API_KEY",
+  ...SYNCED_SERVICE_ENV_KEYS,
   // Misc CLI runtime markers
   "OPENSCIENCE_RUNTIME",
 ])
@@ -563,7 +561,7 @@ export namespace OpenScience {
     // a fresh `logout` process has only the latter.
     const synced = await readSyncedSnapshot()
     for (const [key, value] of syncedSecretValues.entries()) synced.set(key, value)
-    for (const name of ["synced-env.json", "openscience-synced.json"]) {
+    for (const name of ["synced-env.json", "openscience-synced.json", syncedGcpFilename]) {
       try {
         await fs.unlink(path.join(getSyncedConfigDir(), name))
       } catch {}
@@ -774,6 +772,7 @@ export namespace OpenScience {
     // torn file or fail the rename.
     const tmp = `${filepath}.${process.pid}.${randomUUID()}.tmp`
     await Bun.write(tmp, content, options)
+    if (options?.mode !== undefined && process.platform !== "win32") await fs.chmod(tmp, options.mode)
     await fs.rename(tmp, filepath)
   }
 
@@ -835,6 +834,30 @@ export namespace OpenScience {
           }
         }
       }
+
+      // Atlas transfers a GCP service-account document as an in-memory secret.
+      // Materialize it to an owner-only file before persistence so Google SDKs
+      // receive their standard GOOGLE_APPLICATION_CREDENTIALS path and the JSON
+      // never enters an agent shell.
+      const gcp = fresh.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+      const gcpFile = path.join(getSyncedConfigDir(), syncedGcpFilename)
+      if (gcp) {
+        fresh.delete("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        const dir = getSyncedConfigDir()
+        const saved = await fs
+          .mkdir(dir, { recursive: true })
+          .then(() => atomicWrite(gcpFile, gcp, { mode: 0o600 }))
+          .then(() => true)
+          .catch((error) => {
+            log.warn("failed to materialize synced GCP credentials", {
+              error: error instanceof Error ? error.message : String(error),
+            })
+            return false
+          })
+        if (saved) fresh.set("GOOGLE_APPLICATION_CREDENTIALS", gcpFile)
+        if (!saved) await fs.unlink(gcpFile).catch(() => {})
+      }
+      if (!gcp) await fs.unlink(gcpFile).catch(() => {})
 
       // Keep user-owned provider keys and the narrow OpenRouter managed route.
       // The policy rejects direct-provider proxy tokens and untrusted provider

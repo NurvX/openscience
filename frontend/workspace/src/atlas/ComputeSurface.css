@@ -283,6 +283,8 @@
 
 .compute-surface .kernel-card__metric span {
   font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .compute-surface .kernel-card__metric strong {

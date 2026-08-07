@@ -115,8 +115,8 @@ export default function Network() {
 
   return (
     <div class="flex flex-col h-full overflow-y-auto no-scrollbar">
-      <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-raised-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
-        <div class="flex flex-col gap-1 px-4 py-8 sm:p-8 max-w-[760px]">
+      <div class="settings-page-header">
+        <div class="settings-page-header__inner">
           <h2 class="text-16-medium text-text-strong">Network</h2>
           <p class="text-13-regular text-text-weak">
             Control which domains the agent may reach. Enable curated science-connector groups or add your own domains.
@@ -124,7 +124,7 @@ export default function Network() {
         </div>
       </div>
 
-      <div class="flex flex-col gap-5 px-4 pb-10 sm:px-8 max-w-[760px]">
+      <div class="settings-page-body">
         <Show when={error()}>
           <div class="rounded-xs border border-border-weak-base bg-surface-base/40 px-3 py-2 text-12-regular text-text-danger">
             {error()}

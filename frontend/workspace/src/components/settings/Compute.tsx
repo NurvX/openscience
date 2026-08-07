@@ -9,6 +9,8 @@ import { useGlobalSDK } from "@/context/global-sdk"
 import { usePlatform } from "@/context/platform"
 import { confirmDialog } from "@/atlas/dialogs"
 import { settingsApi } from "./api"
+import { CredentialServices } from "./CredentialServices"
+import { ProviderLogo } from "./ProviderLogo"
 
 type Scheduler = "none" | "slurm" | "pbs"
 type Host = {
@@ -414,39 +416,48 @@ const Compute: Component = () => {
 
   return (
     <div class="flex flex-col h-full overflow-y-auto no-scrollbar">
-      <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-raised-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
-        <div class="flex flex-col gap-1 px-4 py-8 sm:p-8 max-w-[820px]">
+      <div class="settings-page-header">
+        <div class="settings-page-header__inner">
           <h2 class="text-16-medium text-text-strong">Compute</h2>
           <p class="text-13-regular text-text-weak">Choose where kernels and research jobs can run safely.</p>
         </div>
       </div>
 
-      <div class="flex flex-col gap-8 px-4 pb-12 sm:px-8 max-w-[820px]">
+      <div class="settings-page-body">
         <Section title="Local machine" subtitle="The default execution target for this OpenScience server.">
           <Panel>
             <Row title="This machine" subtitle="Persistent kernels and batch jobs use the active session sandbox.">
-              <Badge tone="ready">available</Badge>
+              <Badge tone="ready">Available</Badge>
             </Row>
           </Panel>
         </Section>
+
+        <CredentialServices
+          category="compute"
+          title="Cloud credentials"
+          description="AWS, Google Cloud, Azure, and NVIDIA credentials are encrypted locally and exposed only to the tools that use them."
+        />
 
         <Section title="Modal" subtitle="Run explicitly approved jobs in isolated Modal sandboxes using your account.">
           <Panel>
             <div class="flex flex-col gap-4 px-4 py-4">
               <div class="flex flex-wrap items-center justify-between gap-4">
-                <div class="flex flex-col gap-0.5">
-                  <span class="text-14-medium text-text-strong">Modal compute</span>
-                  <span class="text-12-regular text-text-weak">
-                    {modal()?.connected
-                      ? modal()?.source === "modal_toml"
-                        ? "Using the active profile in ~/.modal.toml."
-                        : "Token stored locally and encrypted."
-                      : data()?.modal_file.ready
-                        ? "Modal CLI configuration found at ~/.modal.toml."
-                        : data()?.modal_file.found
-                          ? "Modal config found, but its active profile has no usable token."
-                          : "Enter the token ID and secret from Modal."}
-                  </span>
+                <div class="flex min-w-0 items-center gap-2.5">
+                  <ProviderLogo id="modal" label="Modal" connected={modal()?.connected} />
+                  <div class="flex min-w-0 flex-col gap-0.5">
+                    <span class="text-14-medium text-text-strong">Modal compute</span>
+                    <span class="text-12-regular text-text-weak">
+                      {modal()?.connected
+                        ? modal()?.source === "modal_toml"
+                          ? "Using the active profile in ~/.modal.toml."
+                          : "Token stored locally and encrypted."
+                        : data()?.modal_file.ready
+                          ? "Modal CLI configuration found at ~/.modal.toml."
+                          : data()?.modal_file.found
+                            ? "Modal config found, but its active profile has no usable token."
+                            : "Enter the token ID and secret from Modal."}
+                    </span>
+                  </div>
                 </div>
                 <Show when={modal()?.connected}>
                   <Switch
@@ -466,7 +477,7 @@ const Compute: Component = () => {
                     Configure OpenScience to use this profile. Token values stay in the Modal config file.
                   </p>
                   <Button size="small" variant="primary" disabled={Boolean(busy())} onClick={() => void configure()}>
-                    {busy() === "modal:configure" ? "configuring…" : "configure"}
+                    {busy() === "modal:configure" ? "Configuring…" : "Configure"}
                   </Button>
                 </div>
               </Show>
@@ -489,7 +500,7 @@ const Compute: Component = () => {
                       disabled={!token().trim() || !secret().trim() || Boolean(busy())}
                       onClick={() => void connect()}
                     >
-                      {busy() === "modal:connect" ? "saving…" : "save token"}
+                      {busy() === "modal:connect" ? "Saving…" : "Save token"}
                     </Button>
                   </div>
                 </div>
@@ -564,7 +575,7 @@ const Compute: Component = () => {
               fallback={
                 <Panel>
                   <Row title="Loading SSH hosts" subtitle="Reading saved compute profiles.">
-                    <Badge>loading</Badge>
+                    <Badge>Loading</Badge>
                   </Row>
                 </Panel>
               }
@@ -624,7 +635,7 @@ const Compute: Component = () => {
                               disabled={Boolean(busy())}
                               onClick={() => void test(item)}
                             >
-                              {busy() === `test:${item.id}` ? "testing…" : "test"}
+                              {busy() === `test:${item.id}` ? "Testing…" : "Test"}
                             </Button>
                             <Button
                               size="small"
@@ -632,7 +643,7 @@ const Compute: Component = () => {
                               disabled={Boolean(busy())}
                               onClick={() => void remove(item)}
                             >
-                              remove
+                              Remove
                             </Button>
                           </div>
                         </div>
@@ -645,7 +656,7 @@ const Compute: Component = () => {
 
             <Show when={(data()?.ssh_hosts.length ?? 0) > 0 && !adding()}>
               <Button size="small" variant="secondary" onClick={() => setAdding(true)}>
-                add another host
+                Add another host
               </Button>
             </Show>
 
@@ -691,7 +702,7 @@ const Compute: Component = () => {
                 </div>
                 <div class="flex items-center justify-end gap-2">
                   <Button size="small" variant="ghost" disabled={busy() === "add"} onClick={reset}>
-                    cancel
+                    Cancel
                   </Button>
                   <Button
                     type="submit"
@@ -705,17 +716,6 @@ const Compute: Component = () => {
               </form>
             </Show>
           </div>
-        </Section>
-
-        <Section title="Atlas Compute" subtitle="Managed accelerators require the separate Atlas integration.">
-          <Panel>
-            <Row
-              title="Managed accelerators"
-              subtitle="Machine, provider, price, duration, and funding will be shown before any paid run starts."
-            >
-              <Badge>coming later</Badge>
-            </Row>
-          </Panel>
         </Section>
       </div>
     </div>

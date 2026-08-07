@@ -106,8 +106,8 @@ export default function Models() {
 
   return (
     <div class="flex h-full flex-col overflow-y-auto no-scrollbar">
-      <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-raised-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
-        <div class="flex max-w-[760px] flex-col gap-1 px-4 py-8 sm:px-8">
+      <div class="settings-page-header">
+        <div class="settings-page-header__inner">
           <h2 class="text-16-medium text-text-strong">Models</h2>
           <p class="text-13-regular text-text-weak">
             Choose the models used for research and which ones appear in the composer.
@@ -115,7 +115,7 @@ export default function Models() {
         </div>
       </div>
 
-      <div class="flex max-w-[760px] flex-col gap-8 px-4 pb-12 sm:px-8">
+      <div class="settings-page-body">
         <Show when={error()}>
           <div
             class="rounded-[4px] px-3 py-2 text-12-regular"
@@ -271,7 +271,7 @@ export default function Models() {
                           <span class="flex min-w-0 items-center gap-2">
                             <strong class="truncate text-13-medium text-text-strong">{model.label}</strong>
                             <Show when={model.latest}>
-                              <span class="shrink-0 text-10-medium text-text-weaker">latest</span>
+                              <span class="shrink-0 text-10-medium text-text-weaker">Latest</span>
                             </Show>
                           </span>
                           <span class="truncate text-11-regular text-text-weak">
