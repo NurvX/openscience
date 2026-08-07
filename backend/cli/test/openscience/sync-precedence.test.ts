@@ -131,6 +131,7 @@ test("synced compute and integration credentials reach approved agent subprocess
   expect(env.AWS_ACCESS_KEY_ID).toBe("AKIAUSER")
   expect(env.AWS_SECRET_ACCESS_KEY).toBe("aws-user-secret")
   expect(env.GITHUB_TOKEN).toBe("github-user-token")
+  expect(env.GH_TOKEN).toBe("github-user-token")
 })
 
 test("synced GCP JSON is materialized owner-only and exposed by standard path", async () => {
