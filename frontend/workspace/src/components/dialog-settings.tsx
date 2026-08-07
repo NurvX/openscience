@@ -307,7 +307,7 @@ const SETTINGS_STYLES = `
 .credential-form {
   display: grid;
   gap: 12px;
-  padding: 2px 14px 16px 39px;
+  padding: 2px 14px 16px 57px;
 }
 .credential-form--custom {
   padding: 16px;

@@ -10,6 +10,7 @@ import { usePlatform } from "@/context/platform"
 import { confirmDialog } from "@/atlas/dialogs"
 import { settingsApi } from "./api"
 import { CredentialServices } from "./CredentialServices"
+import { ProviderLogo } from "./ProviderLogo"
 
 type Scheduler = "none" | "slurm" | "pbs"
 type Host = {
@@ -441,19 +442,22 @@ const Compute: Component = () => {
           <Panel>
             <div class="flex flex-col gap-4 px-4 py-4">
               <div class="flex flex-wrap items-center justify-between gap-4">
-                <div class="flex flex-col gap-0.5">
-                  <span class="text-14-medium text-text-strong">Modal compute</span>
-                  <span class="text-12-regular text-text-weak">
-                    {modal()?.connected
-                      ? modal()?.source === "modal_toml"
-                        ? "Using the active profile in ~/.modal.toml."
-                        : "Token stored locally and encrypted."
-                      : data()?.modal_file.ready
-                        ? "Modal CLI configuration found at ~/.modal.toml."
-                        : data()?.modal_file.found
-                          ? "Modal config found, but its active profile has no usable token."
-                          : "Enter the token ID and secret from Modal."}
-                  </span>
+                <div class="flex min-w-0 items-center gap-2.5">
+                  <ProviderLogo id="modal" label="Modal" connected={modal()?.connected} />
+                  <div class="flex min-w-0 flex-col gap-0.5">
+                    <span class="text-14-medium text-text-strong">Modal compute</span>
+                    <span class="text-12-regular text-text-weak">
+                      {modal()?.connected
+                        ? modal()?.source === "modal_toml"
+                          ? "Using the active profile in ~/.modal.toml."
+                          : "Token stored locally and encrypted."
+                        : data()?.modal_file.ready
+                          ? "Modal CLI configuration found at ~/.modal.toml."
+                          : data()?.modal_file.found
+                            ? "Modal config found, but its active profile has no usable token."
+                            : "Enter the token ID and secret from Modal."}
+                    </span>
+                  </div>
                 </div>
                 <Show when={modal()?.connected}>
                   <Switch

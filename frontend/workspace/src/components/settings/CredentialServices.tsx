@@ -2,8 +2,8 @@ import { Button } from "@synsci/ui/button"
 import { type Component, type JSX, For, Show, createMemo, createSignal, onMount } from "solid-js"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { usePlatform } from "@/context/platform"
-import { StatusDot } from "@/atlas/shared/StatusDot"
 import { settingsApi } from "./api"
+import { ProviderLogo } from "./ProviderLogo"
 
 type Field = {
   name: string
@@ -157,7 +157,7 @@ export const CredentialServices: Component<{
           {(service) => (
             <div class="settings-list-item">
               <div class="settings-list-row">
-                <StatusDot status={service.connected ? "active" : "muted"} />
+                <ProviderLogo id={service.id} label={service.label} connected={service.connected} />
                 <div class="settings-list-copy">
                   <strong>{service.label}</strong>
                   <span>{service.connected ? "Connected" : service.description}</span>
