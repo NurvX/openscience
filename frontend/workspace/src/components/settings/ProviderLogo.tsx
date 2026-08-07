@@ -127,6 +127,7 @@ export const ProviderLogo: Component<{
 }> = (props) => {
   const label = () => props.label ?? props.id
   const small = () => props.size === "small"
+  const source = () => providerLogoSource(props.id)
   return (
     <span
       class="relative flex shrink-0 items-center justify-center overflow-hidden border border-border-weak-base bg-surface-base text-text-strong"
@@ -134,8 +135,9 @@ export const ProviderLogo: Component<{
       role="img"
       aria-label={`${label()} logo`}
       data-provider-logo={props.id}
+      data-provider-logo-source={source().kind}
     >
-      <Mark source={providerLogoSource(props.id)} label={label()} small={small()} />
+      <Mark source={source()} label={label()} small={small()} />
       <Show when={props.connected}>
         <span
           aria-hidden="true"
