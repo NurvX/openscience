@@ -96,15 +96,15 @@ export default function General() {
   }
 
   return (
-    <div class="flex flex-col h-full overflow-y-auto no-scrollbar px-4 pb-10 sm:px-8">
-      <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-raised-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
-        <div class="flex flex-col gap-1 pt-8 pb-8 max-w-[760px]">
+    <div class="flex flex-col h-full overflow-y-auto no-scrollbar">
+      <div class="settings-page-header">
+        <div class="settings-page-header__inner">
           <h2 class="text-16-medium text-text-strong">General</h2>
           <p class="text-13-regular text-text-weak">Your account, workspace, licensing, and appearance.</p>
         </div>
       </div>
 
-      <div class="flex flex-col gap-8 w-full max-w-[760px]">
+      <div class="settings-page-body">
         <Show when={error()}>
           <div
             style={{
@@ -265,7 +265,7 @@ const IntentCard: Component<{ active: boolean; title: string; body: string; onCl
     <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
       <span class="text-14-medium text-text-strong">{props.title}</span>
       <Show when={props.active}>
-        <span style={{ "font-family": FONT_SANS, "font-size": "11px", color: "var(--color-text-muted)" }}>active</span>
+        <span style={{ "font-family": FONT_SANS, "font-size": "11px", color: "var(--color-text-muted)" }}>Active</span>
       </Show>
     </div>
     <span class="text-12-regular text-text-weak" style={{ "line-height": 1.5 }}>

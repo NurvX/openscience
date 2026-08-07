@@ -713,7 +713,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     | { type: "file"; path: string; display: string; recent?: boolean }
 
   const agentList = createMemo(() =>
-    sync.data.agent
+    (Array.isArray(sync.data.agent) ? sync.data.agent : [])
       .filter((agent) => !agent.hidden && agent.mode !== "primary")
       .map((agent): AtOption => ({ type: "agent", name: agent.name, display: agent.name })),
   )

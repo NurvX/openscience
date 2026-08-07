@@ -72,13 +72,13 @@ export const CodexConnection: Component<{
             <StatusDot status="active" size={8} />
             <span class="text-12-regular text-text-weak">Connected</span>
             <Button size="small" variant="secondary" disabled={busy()} onClick={() => void disconnect()}>
-              disconnect
+              Disconnect
             </Button>
           </div>
         }
       >
         <Button type="button" size="small" variant="primary" disabled={busy()} onClick={() => void connect()}>
-          {busy() ? "waiting for ChatGPT…" : "Sign in with ChatGPT"}
+          {busy() ? "Waiting for ChatGPT…" : "Sign in with ChatGPT"}
         </Button>
       </Show>
     </div>

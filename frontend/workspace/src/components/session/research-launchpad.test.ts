@@ -4,13 +4,7 @@ import { fileURLToPath } from "node:url"
 import type { JSX } from "solid-js"
 import { createServer } from "vite"
 import solid from "vite-plugin-solid"
-import {
-  researchStarters,
-  researchSuggestions,
-  researchWorkflows,
-  workflowGroups,
-  workflowPrompt,
-} from "./research-launchpad"
+import { researchSuggestions, researchWorkflows, workflowGroups, workflowPrompt } from "./research-launchpad"
 
 const view = () => readFileSync(fileURLToPath(new URL("./session-new-view.tsx", import.meta.url)), "utf8")
 const server = await createServer({
@@ -104,11 +98,6 @@ describe("research launchpad", () => {
     expect(workflowPrompt(workflow, 12)).toContain(workflow.prompt)
   })
 
-  test("ships local-first starter projects with valid backend template ids", () => {
-    expect(researchStarters.map((starter) => starter.id)).toEqual(["single-cell", "dose-response", "protein-structure"])
-    expect(researchStarters.every((starter) => starter.files.length >= 2)).toBe(true)
-  })
-
   test("keeps the default suggestions quiet and decision-relevant", () => {
     expect(researchSuggestions.map((workflow) => workflow.id)).toEqual([
       "analyze-data",
@@ -121,9 +110,7 @@ describe("research launchpad", () => {
     const source = view()
 
     expect(source).toContain('aria-label="New research session"')
-    expect(source).not.toContain("Starters")
     expect(source).not.toContain("catalogOpen")
-    expect(source).not.toContain("/file/starters")
     expect(source).not.toContain("researchWorkflows")
   })
 
