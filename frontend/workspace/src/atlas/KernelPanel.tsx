@@ -2,8 +2,9 @@ import { For, Show, createMemo, createResource, onCleanup, type JSX } from "soli
 import { createStore } from "solid-js/store"
 import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
+import { useSync } from "@/context/sync"
 import { IconCpu } from "@/atlas/shared/Icon"
-import { type KernelStatus } from "@/notebook/runtime"
+import { kernelLabel, kernelLanguageLabel, type KernelStatus } from "@/notebook/runtime"
 import { useExecutionAuthority } from "./use-execution-authority"
 import { useKernelList } from "./use-kernel-list"
 import { identify } from "@/atlas/poll-identity"
@@ -59,6 +60,7 @@ export function inventory<T>(request: Promise<T>, settled: (error: string) => vo
 
 export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
   const transport = props.request ?? useSDK().request
+  const sync = useSync()
   // Per-kernel CPU is measured across the window since this caller's previous
   // poll, so a panel that does not name itself shares one window with every
   // other panel on the route — two tabs then truncate each other's window to
@@ -87,15 +89,17 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
   })
   const request = async <T,>(path: string, init?: RequestInit, query?: Record<string, string>) => {
     const response = await transport(path, init, query)
-    if (response.ok) return response.json() as Promise<T>
+    if (response.ok) {
+      const body = await response.text()
+      if (!body) return undefined as T
+      return JSON.parse(body) as T
+    }
     const detail = await response.text().catch(() => "")
     throw new Error(detail || `${response.status} ${response.statusText}`)
   }
   const load = () => {
-    if (!params.id || params.id === "new") return Promise.resolve({ kernels: [] })
-    return inventory(
-      request<KernelsPayload>("/notebook/kernels", undefined, { sessionID: params.id, client }),
-      (error) => setView(error ? { error } : { error: "", updated: Date.now() }),
+    return inventory(request<KernelsPayload>("/notebook/kernels", undefined, { client }), (error) =>
+      setView(error ? { error } : { error: "", updated: Date.now() }),
     )
   }
   const [data, api] = createResource(load)
@@ -110,6 +114,32 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
   // load and returns the previous value while a refetch is in flight (see
   // HostStrip.tsx for the full mechanism).
   const kernels = useKernelList(() => data.latest?.kernels)
+  const route = () => (params.id && params.id !== "new" ? params.id : undefined)
+  const live = createMemo(() => kernels.filter((kernel) => kernel.active || kernel.state === "starting"))
+  const saved = createMemo(() =>
+    kernels.filter(
+      (kernel) =>
+        !kernel.active &&
+        kernel.state !== "starting" &&
+        kernel.name !== "agent" &&
+        !kernel.name.startsWith("notebook:"),
+    ),
+  )
+  const title = (sessionID: string) => sync.session.get(sessionID)?.title?.trim() || "Untitled session"
+  const grouped = createMemo(() => {
+    const grouped = new Map<string, KernelStatus[]>()
+    for (const kernel of live()) grouped.set(kernel.sessionID, [...(grouped.get(kernel.sessionID) ?? []), kernel])
+    return grouped
+  })
+  const groups = createMemo(() =>
+    [...grouped().keys()].sort((a, b) => {
+      const current = Number(route() === b) - Number(route() === a)
+      if (current) return current
+      const activity = (sessionID: string) =>
+        Math.max(...(grouped().get(sessionID) ?? []).map((kernel) => kernel.last_activity_at ?? kernel.started_at ?? 0))
+      return activity(b) - activity(a)
+    }),
+  )
   const ensureSession = async () => {
     if (params.id && params.id !== "new") return params.id
     return props.onEnsureSession?.()
@@ -156,11 +186,18 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
       .finally(() => setView("action", ""))
   }
   const control = (kernel: KernelStatus, action: KernelAction) => {
-    if (action === "restart" && !authority.allowed()) {
-      setView("problem", authority.message() ?? "This session cannot start a kernel.")
-      return
+    if (action === "restart") {
+      if (kernel.sessionID !== route()) {
+        setView("problem", "Open the owning session before starting or restarting this kernel.")
+        return
+      }
+      if (!authority.allowed()) {
+        setView("problem", authority.message() ?? "This session cannot start a kernel.")
+        return
+      }
     }
     const key = `${kernel.id}:${action}`
+    const starting = action === "restart" && !kernel.active
     setView({ action: key, problem: "", notice: "" })
     const remove = action === "delete"
     return request<ControlResponse>(
@@ -181,7 +218,9 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
       .then((value) => {
         const notice =
           action === "restart"
-            ? "Kernel restarted in a fresh runtime. Previous in-memory variables and queued work were cleared."
+            ? starting
+              ? "Kernel started in a fresh runtime."
+              : "Kernel restarted in a fresh runtime. Previous in-memory variables and queued work were cleared."
             : action === "stop"
               ? "Kernel stopped. In-memory state was cleared. Run a cell to start fresh."
               : action === "delete"
@@ -214,14 +253,14 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
   })
 
   return (
-    <section aria-label="Session kernel control room" data-testid="kernel-panel" class="kernel-panel">
+    <section aria-label="Project kernel control room" data-testid="kernel-panel" class="kernel-panel">
       <header class="kernel-panel__header">
         <div class="kernel-panel__heading">
           {/* No "Compute" eyebrow: the tab above already says it, and 5a's
               restraint is mostly about not saying things twice. The live/
               running/queued breakdown moved onto the kernel's own metric grid,
               where it sits beside the figures it qualifies. */}
-          <strong>Session kernels</strong>
+          <strong>Project kernels</strong>
           <span>{view.updated ? `Synced ${time(view.updated)}` : "Not synced yet"}</span>
         </div>
         {/* No refresh control: the panel already polls every 2.5s and on
@@ -288,7 +327,10 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
         {/* Prose, not a callout. The icon and the bolded lead-in made this read
             as a warning about something that is simply how kernels work. */}
         <section class="kernel-panel__scope" aria-label="Kernel ownership model">
-          <p>Named records survive app restarts. Live variables persist only while the backend process stays alive.</p>
+          <p>
+            Only process-backed runtimes count as kernels. Named environments survive app restarts; live variables do
+            not.
+          </p>
         </section>
 
         <Show when={authority.message()}>
@@ -314,7 +356,7 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
         </Show>
 
         <Show
-          when={kernels.length > 0}
+          when={groups().length > 0}
           fallback={
             <div class="kernel-panel__empty">
               <span aria-hidden="true">
@@ -327,28 +369,86 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
               <strong>{view.error ? "Kernel inventory unavailable" : "No live kernels"}</strong>
               <p>
                 {view.error
-                  ? "The last poll could not read this session's kernels, so this is not a count of what is running."
-                  : "Kernels appear here the moment this session starts computing."}
+                  ? "The last poll could not read this project's kernels, so this is not a count of what is running."
+                  : "Kernels appear here when any session in this project starts a runtime."}
               </p>
             </div>
           }
         >
-          <div class="kernel-panel__list">
-            <For each={kernels}>
-              {(kernel, index) => (
-                <KernelCard
-                  kernel={kernel}
-                  index={index()}
-                  capacity={props.capacity}
-                  routeID={params.id}
-                  action={view.action}
-                  restartDisabled={!authority.allowed()}
-                  restartTitle={authority.message()}
-                  onControl={(action) => void control(kernel, action)}
-                />
+          <div class="kernel-panel__sessions">
+            <For each={groups()}>
+              {(sessionID) => (
+                <section class="kernel-session" data-current={route() === sessionID ? "true" : undefined}>
+                  <header class="kernel-session__header">
+                    <div>
+                      <strong>{title(sessionID)}</strong>
+                      <span>{route() === sessionID ? "Current session" : "Project session"}</span>
+                    </div>
+                    <span>
+                      {grouped().get(sessionID)?.length ?? 0}{" "}
+                      {grouped().get(sessionID)?.length === 1 ? "kernel" : "kernels"}
+                    </span>
+                  </header>
+                  <div class="kernel-panel__list">
+                    <For each={grouped().get(sessionID) ?? []}>
+                      {(kernel, index) => (
+                        <KernelCard
+                          kernel={kernel}
+                          index={index()}
+                          capacity={props.capacity}
+                          routeID={route()}
+                          action={view.action}
+                          restartDisabled={kernel.sessionID !== route() || !authority.allowed()}
+                          restartTitle={
+                            kernel.sessionID !== route()
+                              ? "Open the owning session to restart this kernel."
+                              : authority.message()
+                          }
+                          onControl={(action) => void control(kernel, action)}
+                        />
+                      )}
+                    </For>
+                  </div>
+                </section>
               )}
             </For>
           </div>
+        </Show>
+
+        <Show when={saved().length > 0}>
+          <section class="kernel-panel__saved" aria-label="Saved kernel environments">
+            <header>
+              <strong>Saved environments</strong>
+              <span>{saved().length}</span>
+            </header>
+            <For each={saved()}>
+              {(kernel) => (
+                <div class="kernel-panel__saved-row">
+                  <div>
+                    <strong>{kernelLabel(kernel)}</strong>
+                    <span>
+                      {title(kernel.sessionID)} · {kernelLanguageLabel(kernel)} · not running
+                    </span>
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      disabled={!!view.action || kernel.sessionID !== route() || !authority.allowed()}
+                      title={
+                        kernel.sessionID !== route() ? "Open the owning session to start this environment." : undefined
+                      }
+                      onClick={() => void control(kernel, "restart")}
+                    >
+                      {view.action === `${kernel.id}:restart` ? "Starting…" : "Start"}
+                    </button>
+                    <button type="button" disabled={!!view.action} onClick={() => void control(kernel, "delete")}>
+                      {view.action === `${kernel.id}:delete` ? "Forgetting…" : "Forget"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </For>
+          </section>
         </Show>
       </div>
     </section>

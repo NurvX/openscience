@@ -7,10 +7,12 @@ const card = () => readFileSync(fileURLToPath(new URL("./KernelCard.tsx", import
 const styles = () => readFileSync(fileURLToPath(new URL("./ComputeSurface.css", import.meta.url)), "utf8")
 
 describe("kernel control room", () => {
-  test("makes session ownership and runtime identity explicit", () => {
+  test("makes project and session ownership plus runtime identity explicit", () => {
     const panel = `${source()}\n${card()}`
 
-    expect(panel).toContain('aria-label="Session kernel control room"')
+    expect(panel).toContain('aria-label="Project kernel control room"')
+    expect(panel).toContain('class="kernel-session"')
+    expect(panel).toContain("Current session")
     expect(panel).toContain("data-kernel-owner={owner()}")
     expect(panel).toContain('class="kernel-card__identity"')
     expect(panel).toContain("kernel.projectID")
@@ -23,8 +25,8 @@ describe("kernel control room", () => {
 
     // Stated as prose rather than as a bolded callout with an icon — this is
     // how kernels work, not a warning about them.
-    expect(panel).toContain("Named records survive app restarts.")
-    expect(panel).toContain("Live variables persist only while the backend process stays alive.")
+    expect(panel).toContain("Only process-backed runtimes count as kernels.")
+    expect(panel).toContain("Named environments survive app restarts")
     expect(panel).not.toContain("<strong>Session-owned kernels.</strong>")
     expect(panel).not.toContain("Project inventory")
   })
@@ -38,6 +40,7 @@ describe("kernel control room", () => {
     expect(panel).toContain("kernelCanInterrupt")
     expect(panel).toContain("kernelCanStop")
     expect(panel).toContain("kernelCanForget")
+    expect(panel).toContain("if (!body) return undefined as T")
     expect(panel).toContain("aria-label={`Restart ${kernelLabel(props.kernel)}`}")
     expect(panel).toContain("aria-label={`Stop ${kernelLabel(props.kernel)}`}")
     expect(panel).toContain("aria-label={`Forget ${kernelLabel(props.kernel)}`}")
@@ -51,8 +54,9 @@ describe("kernel control room", () => {
     const panel = `${source()}\n${card()}`
 
     expect(panel).toContain('useExecutionAuthority("kernel")')
-    expect(panel).toContain('action === "restart" && !authority.allowed()')
-    expect(panel).toContain("restartDisabled={!authority.allowed()}")
+    expect(panel).toContain('if (action === "restart")')
+    expect(panel).toContain("kernel.sessionID !== route()")
+    expect(panel).toContain("restartDisabled={kernel.sessionID !== route() || !authority.allowed()}")
     expect(panel).toContain("disabled={!!props.action || props.restartDisabled}")
     expect(panel).toContain("disabled={!!props.action || !kernelCanStop(props.kernel)}")
     expect(panel).toContain("disabled={!!props.action || !kernelCanInterrupt(props.kernel)}")
@@ -75,14 +79,27 @@ describe("kernel control room", () => {
     const panel = source()
     const runtime = readFileSync(fileURLToPath(new URL("../notebook/runtime.ts", import.meta.url)), "utf8")
 
-    // The session id comes straight from the route params, and the poll names
-    // its client so two panels do not share one sampling window on this route.
-    expect(panel).toContain("{ sessionID: params.id, client }")
+    // The inventory is project-wide, while the route only marks the current
+    // session and gates process-starting controls.
+    expect(panel).toContain("{ client }")
+    expect(panel).not.toContain("{ sessionID: params.id, client }")
     expect(panel).not.toContain("Omit<KernelStatus")
     expect(panel).not.toContain("legacy")
     expect(runtime).toContain('"lazy" | "starting" | "idle" | "running" | "stopped" | "crashed"')
     expect(runtime).toContain("incarnation: number | null")
     expect(runtime).toContain("process_identity_verified: boolean | null")
+  })
+
+  test("keeps kernel cards mounted when project inventory polls", () => {
+    const panel = source()
+
+    // Session ids are stable primitives. Rebuilding wrapper objects here makes
+    // Solid remount every session group on each poll and collapses an expanded
+    // kernel card while the user is reading it.
+    expect(panel).toContain("[...grouped().keys()].sort")
+    expect(panel).toContain("<For each={groups()}>")
+    expect(panel).toContain("{(sessionID) => (")
+    expect(panel).not.toContain(".map(([sessionID, items]) => ({")
   })
 
   test("nests the kernel as its own card with a printed-record metric grid", () => {
@@ -128,11 +145,11 @@ describe("kernel control room", () => {
     expect(panel).toContain("const transport = props.request ?? useSDK().request")
   })
 
-  test("names the empty state for live kernels and scopes its promise to this session", () => {
+  test("names the empty state for live kernels across the project", () => {
     const panel = source()
 
     expect(panel).toContain("No live kernels")
-    expect(panel).toContain("Kernels appear here the moment this session starts computing.")
+    expect(panel).toContain("Kernels appear here when any session in this project starts a runtime.")
     expect(panel).not.toContain("on this machine")
   })
 
@@ -153,9 +170,9 @@ describe("kernel control room", () => {
 
     // An empty list after a failed poll is not "No live kernels" — the panel
     // does not know that. Degrading visibly is the difference between a poll
-    // that failed and a session that is genuinely idle.
+    // that failed and a project that is genuinely idle.
     expect(panel).toContain('{view.error ? "Kernel inventory unavailable" : "No live kernels"}')
-    expect(panel).toContain("The last poll could not read this session's kernels")
+    expect(panel).toContain("The last poll could not read this project's kernels")
     expect(panel).toContain("Kernel inventory unavailable. ${view.error}")
   })
 })

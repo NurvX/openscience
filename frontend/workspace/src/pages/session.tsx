@@ -59,8 +59,6 @@ import { IconTrash } from "@/atlas/shared/Icon"
 import { toast } from "@/atlas/Toast"
 import { artifactContext } from "@/artifacts/context"
 import { createSessionTabs } from "@/atlas/store/sessionTabs"
-import { ProjectTrustControl } from "@/atlas/ProjectTrust"
-import { projectTrustApi, type ProjectTrustApi } from "@/atlas/project-trust"
 import { terminalEndpointAvailable } from "@/atlas/terminal-endpoint"
 import { productPreferences, type ProductPreferences } from "@/context/product-preferences"
 import { SIDEBAR_WIDTH, clampSidebarWidth } from "@/pages/session-sidebar-size"
@@ -118,7 +116,6 @@ export default function Page(): JSX.Element {
   const server = useServer()
   const platform = usePlatform()
   const dialog = useDialog()
-  const trust = projectTrustApi(sdk.client)
   const [creating, setCreating] = createSignal(false)
   const pending: { value?: Promise<string | undefined>; context?: SessionContext } = {}
   const [mobileSessionsOpen, setMobileSessionsOpen] = createSignal(false)
@@ -152,7 +149,7 @@ export default function Page(): JSX.Element {
   async function ensureSession() {
     if (params.id && params.id !== "new") return params.id
     const context = uiStore.context()
-    if ((["terminal", "files", "kernels"] as SessionContext[]).includes(context as SessionContext)) {
+    if (context === "terminal") {
       pending.context = context as SessionContext
     }
     if (pending.value) return pending.value
@@ -192,7 +189,7 @@ export default function Page(): JSX.Element {
   const openContext = (context: SessionContext) => {
     if (context === "canvas" && !atlasAvailable()) return
     uiStore.openContext(context)
-    if (!(["terminal", "files", "kernels"] as SessionContext[]).includes(context)) return
+    if (context !== "terminal") return
     void ensureSession()
   }
 
@@ -759,10 +756,6 @@ export default function Page(): JSX.Element {
         >
           <Header
             title={chatTitle()}
-            projectID={project()?.id ?? sdk.projectID}
-            projectName={projectName()}
-            directory={projectPath()}
-            trust={trust}
             onBack={() => navigate("/")}
             onRunReview={() => void runReview()}
             reviewDisabled={reviewDisabled()}
@@ -1175,10 +1168,6 @@ function SessionTabStrip(props: {
 
 function Header(props: {
   title: string
-  projectID?: string
-  projectName: string
-  directory: string
-  trust: ProjectTrustApi
   onBack: () => void
   onRunReview: () => void
   reviewDisabled: boolean
@@ -1202,12 +1191,6 @@ function Header(props: {
           <strong>{props.title}</strong>
         </span>
       </div>
-      <ProjectTrustControl
-        projectID={props.projectID}
-        name={props.projectName}
-        directory={props.directory}
-        api={props.trust}
-      />
       <span class="workspace-header__spacer" />
       <HeaderIconButton
         class="workspace-header__review"
