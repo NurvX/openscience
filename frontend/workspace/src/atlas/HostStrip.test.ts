@@ -109,7 +109,7 @@ describe("host strip", () => {
     expect(calls.length).toBeGreaterThan(0)
     await expect(calls[0]).rejects.toThrow()
     expect(host.querySelector("[data-boundary]")).toBeNull()
-    expect(host.querySelectorAll(".host-strip__figure, .host-strip__cores").length).toBe(2)
+    expect(host.querySelectorAll(".host-strip__metric").length).toBe(3)
     expect(values(host)).toEqual(["—", "—"])
     expect(host.textContent).not.toContain("0 B")
     expect(host.textContent).not.toContain("0 / 0")
@@ -122,21 +122,17 @@ describe("host strip", () => {
 
     expect((await calls[0])?.status).toBe(503)
     expect(host.querySelector("[data-boundary]")).toBeNull()
-    expect(host.querySelectorAll(".host-strip__figure, .host-strip__cores").length).toBe(2)
+    expect(host.querySelectorAll(".host-strip__metric").length).toBe(3)
     expect(values(host)).toEqual(["—", "—"])
     expect(host.textContent).not.toContain("0 B")
     expect(host.textContent).not.toContain("0 / 0")
   })
 
-  test("names the block, so its figures are not read as a kernel's own", () => {
-    // The strip states the machine; each kernel plate states that kernel. A
-    // reader who took "6.7 GB used" here for the kernel's own would be out by
-    // three orders of magnitude, and nothing else on the surface said which
-    // was which.
+  test("names the block as machine resources", () => {
     const source = readFileSync(fileURLToPath(new URL("./HostStrip.tsx", import.meta.url)), "utf8")
 
-    expect(source).toContain('<span class="host-strip__title">System statistics</span>')
-    expect(source).toContain('aria-label="System statistics"')
+    expect(source).toContain('<span class="host-strip__label">Machine</span>')
+    expect(source).toContain('aria-label="Machine resources"')
   })
 
   test("states the machine's capacity once a poll succeeds", async () => {
@@ -145,10 +141,9 @@ describe("host strip", () => {
     await settle(calls)
 
     expect(host.querySelector("[data-boundary]")).toBeNull()
-    expect(values(host)).toEqual(["6.7", "2 / 8"])
-    // 5a states the reading itself rather than a sentence about it.
-    expect(host.textContent).toContain("GB used")
-    expect(host.textContent).toContain("of 16.0")
+    expect(values(host)).toEqual(["412.0 MB", "~0.4 of 8"])
+    expect(host.textContent).toContain("of 16.0 GB memory")
+    expect(host.textContent).toContain("2kernels · 1 running")
   })
 
   test("asks the route the compute strip is served from, naming itself to the server", async () => {
@@ -160,8 +155,9 @@ describe("host strip", () => {
     guard(() => subject.HostStrip({ request: track }))
     await Bun.sleep(20)
 
-    expect(paths.length).toBe(1)
-    const asked = new URL(paths[0] ?? "", "http://host")
+    expect(paths).toHaveLength(2)
+    expect(paths).toContain("/settings/compute/jobs")
+    const asked = new URL(paths.find((path) => path.startsWith("/notebook/compute")) ?? "", "http://host")
     expect(asked.pathname).toBe("/notebook/compute")
 
     // Both CPU figures the route serves are measured across the window since
@@ -183,8 +179,9 @@ describe("host strip", () => {
     )
     await Bun.sleep(20)
 
-    expect(others.length).toBe(1)
-    expect(new URL(others[0] ?? "", "http://host").searchParams.get("client")).not.toBe(client)
+    expect(others).toHaveLength(2)
+    const other = others.find((path) => path.startsWith("/notebook/compute")) ?? ""
+    expect(new URL(other, "http://host").searchParams.get("client")).not.toBe(client)
   })
 
   test("keeps the same tile nodes mounted across a poll that changes the data", async () => {
@@ -210,7 +207,7 @@ describe("host strip", () => {
     const memoryTile = host.querySelector('[data-host-tile="memory"]')
     const cpuTile = host.querySelector('[data-host-tile="cpu"]')
     expect(memoryTile).not.toBeNull()
-    expect(values(host)).toEqual(["6.7", "2 / 8"])
+    expect(values(host)).toEqual(["412.0 MB", "~0.4 of 8"])
 
     capacity = {
       memory: { total: 16_000_000_000, available: 5_000_000_000, kernels: 900_000_000 },
@@ -225,7 +222,7 @@ describe("host strip", () => {
     expect(host.querySelector('[data-host-tile="cpu"]')).toBe(cpuTile)
     expect(host.contains(memoryTile)).toBe(true)
     // Freshness: the values inside those same nodes actually moved.
-    expect(values(host)).toEqual(["11.0", "4 / 8"])
+    expect(values(host)).toEqual(["900.0 MB", "~1.1 of 8"])
   })
 
   test("stays mounted with no Suspense fallback while a poll is genuinely in flight", async () => {
@@ -253,7 +250,10 @@ describe("host strip", () => {
     }
     let settleSecond: ((response: Response) => void) | undefined
     let requests = 0
-    const respond = (_path: string): Promise<Response> => {
+    const respond = (path: string): Promise<Response> => {
+      if (path === "/settings/compute/jobs") {
+        return Promise.resolve(new Response("[]", { headers: { "content-type": "application/json" } }))
+      }
       requests += 1
       if (requests === 1) return serving()
       return new Promise<Response>((resolve) => (settleSecond = resolve))
@@ -272,7 +272,7 @@ describe("host strip", () => {
     // Let the first load resolve; the fallback should be gone and tiles present.
     await Bun.sleep(20)
     expect(host.querySelector("[data-fallback]")).toBeNull()
-    expect(values(host)).toEqual(["6.7", "2 / 8"])
+    expect(values(host)).toEqual(["412.0 MB", "~0.4 of 8"])
     const memoryTile = host.querySelector('[data-host-tile="memory"]')
     expect(memoryTile).not.toBeNull()
 
@@ -287,7 +287,7 @@ describe("host strip", () => {
     expect(host.querySelector("[data-fallback]")).toBeNull()
     expect(memoryTile?.isConnected).toBe(true)
     expect(host.querySelector('[data-host-tile="memory"]')).toBe(memoryTile)
-    expect(values(host)).toEqual(["6.7", "2 / 8"])
+    expect(values(host)).toEqual(["412.0 MB", "~0.4 of 8"])
 
     // Resolve it and confirm the value actually moved.
     settleSecond?.(new Response(JSON.stringify(refreshed), { headers: { "content-type": "application/json" } }))
@@ -295,7 +295,7 @@ describe("host strip", () => {
 
     expect(host.querySelector("[data-fallback]")).toBeNull()
     expect(host.querySelector('[data-host-tile="memory"]')).toBe(memoryTile)
-    expect(values(host)).toEqual(["11.0", "4 / 8"])
+    expect(values(host)).toEqual(["900.0 MB", "~1.1 of 8"])
   })
 
   test("refreshes when the tab is shown again and polls nothing after unmount", async () => {
@@ -307,13 +307,13 @@ describe("host strip", () => {
     document.dispatchEvent(new Event("visibilitychange"))
     await settle(calls)
 
-    expect(calls.length).toBe(polled + 1)
+    expect(calls.length).toBe(polled + 2)
 
     cleanups.splice(0).forEach((cleanup) => cleanup())
     document.dispatchEvent(new Event("visibilitychange"))
     // Longer than the 2.5s poll, so a surviving interval would show up here.
     await Bun.sleep(2_700)
 
-    expect(calls.length).toBe(polled + 1)
+    expect(calls.length).toBe(polled + 2)
   })
 })

@@ -53,7 +53,7 @@ import { createAutoScroll } from "../hooks"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { NotebookView, type NotebookCellProps } from "./notebook-cell"
 import { skillName, stripRedactedReasoning } from "./tool-display"
-import { ToolRegistry } from "./tool-registry"
+import { ToolRegistry, type ToolProps } from "./tool-registry"
 
 export { ARTIFACT_TOOL, ToolRegistry, type ToolComponent, type ToolProps } from "./tool-registry"
 
@@ -803,6 +803,213 @@ PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
     </Show>
   )
 }
+
+function KernelTool(props: ToolProps & { language: "python" | "r"; label: "Python" | "R" }) {
+  const code = () => (typeof props.input.code === "string" ? props.input.code : "")
+  const kernel = () => (typeof props.input.kernel === "string" ? props.input.kernel : props.language)
+  const preview = () => code().trim().split("\n").find(Boolean)?.slice(0, 120)
+  const images = () => {
+    const artifact = props.metadata.artifact
+    if (!artifact || typeof artifact !== "object") return []
+    const data = "data" in artifact && artifact.data && typeof artifact.data === "object" ? artifact.data : undefined
+    const value = data && "images" in data ? data.images : undefined
+    if (!Array.isArray(value)) return []
+    return value.filter((item): item is string => typeof item === "string" && item.startsWith("data:image/"))
+  }
+
+  if (props.input.action === "stop") {
+    return (
+      <BasicTool
+        {...props}
+        icon="circle-check"
+        trigger={{ title: "Kernel stopped", subtitle: `${props.label} · ${kernel()}` }}
+      />
+    )
+  }
+
+  return (
+    <BasicTool
+      {...props}
+      defaultOpen
+      icon="code"
+      trigger={{
+        title: props.status === "completed" ? "Computed" : "Computing",
+        subtitle: preview(),
+      }}
+    >
+      <div data-component="kernel-tool">
+        <header>
+          <strong>{props.label}</strong>
+          <span>env {kernel()}</span>
+        </header>
+        <pre data-slot="kernel-tool-source">
+          <code>{code()}</code>
+        </pre>
+        <Show when={props.output}>
+          <details data-slot="kernel-tool-output" open>
+            <summary>Show output</summary>
+            <pre>{stripAnsi(props.output ?? "")}</pre>
+          </details>
+        </Show>
+        <Show when={images().length > 0}>
+          <div data-slot="kernel-tool-images">
+            <For each={images()}>
+              {(image) => <img src={image} alt={`${props.label} cell output`} loading="lazy" />}
+            </For>
+          </div>
+        </Show>
+      </div>
+    </BasicTool>
+  )
+}
+
+ToolRegistry.register({
+  name: "notebook",
+  render: (props) => <KernelTool {...props} language="python" label="Python" />,
+})
+
+ToolRegistry.register({
+  name: "rkernel",
+  render: (props) => <KernelTool {...props} language="r" label="R" />,
+})
+
+function SavedArtifactTool(props: ToolProps) {
+  const data = useData()
+  const saved = () => {
+    const value = props.metadata.savedArtifact
+    if (!value || typeof value !== "object") return
+    if (
+      typeof value.title !== "string" ||
+      typeof value.kind !== "string" ||
+      typeof value.path !== "string" ||
+      typeof value.id !== "string" ||
+      typeof value.versionID !== "string" ||
+      typeof value.version !== "number" ||
+      typeof value.size !== "number" ||
+      typeof value.sha256 !== "string"
+    )
+      return
+    return value as {
+      title: string
+      kind: string
+      path: string
+      id: string
+      versionID: string
+      mimeType?: string
+      version: number
+      size: number
+      sha256: string
+      preview?: { kind: "image" | "text"; data: string }
+    }
+  }
+
+  return (
+    <BasicTool
+      {...props}
+      defaultOpen
+      icon="archive"
+      trigger={{
+        title: saved() ? "Saved artifact" : props.title || "Artifact",
+        subtitle: saved() ? `${saved()!.title} · v${saved()!.version}` : undefined,
+      }}
+    >
+      <Show
+        when={saved()}
+        fallback={
+          <Show when={props.output}>
+            <div data-component="tool-output" data-scrollable>
+              <pre>{stripAnsi(props.output ?? "")}</pre>
+            </div>
+          </Show>
+        }
+      >
+        {(artifact) => (
+          <div data-component="saved-artifact-tool">
+            <header>
+              <strong>{artifact().title}</strong>
+              <span>
+                {artifact().kind} · v{artifact().version}
+              </span>
+            </header>
+            <code>{artifact().path}</code>
+            <Show when={artifact().preview?.kind === "image" ? artifact().preview?.data : undefined}>
+              {(image) => (
+                <img data-slot="saved-artifact-preview" src={image()} alt={artifact().title} loading="lazy" />
+              )}
+            </Show>
+            <Show when={artifact().preview?.kind === "text" ? artifact().preview?.data : undefined}>
+              {(preview) => (
+                <div data-slot="saved-artifact-preview-text">
+                  <Markdown
+                    text={artifact().mimeType === "text/markdown" ? preview() : `\`\`\`\n${preview()}\n\`\`\``}
+                  />
+                </div>
+              )}
+            </Show>
+            <footer>
+              <button type="button" onClick={() => data.openFile?.(artifact().path)}>
+                Open beside chat
+              </button>
+              <span>{artifact().size.toLocaleString()} bytes</span>
+              <span>sha256 {artifact().sha256.slice(0, 12)}</span>
+            </footer>
+            <Show when={props.output}>
+              <details>
+                <summary>Show save receipt</summary>
+                <pre>{stripAnsi(props.output ?? "")}</pre>
+              </details>
+            </Show>
+          </div>
+        )}
+      </Show>
+    </BasicTool>
+  )
+}
+
+ToolRegistry.register({
+  name: "artifact",
+  render: (props) => <SavedArtifactTool {...props} />,
+})
+
+function RemoteComputeTool(props: ToolProps) {
+  const job = () => {
+    const value = props.metadata.job
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined
+  }
+  const gpu = () => {
+    const value = job()?.modal
+    if (value && typeof value === "object" && "gpu" in value && typeof value.gpu === "string") return value.gpu
+    return typeof props.input.gpu === "string" ? props.input.gpu : undefined
+  }
+  const status = () => (typeof job()?.status === "string" ? job()!.status : props.status)
+  return (
+    <BasicTool
+      {...props}
+      defaultOpen
+      icon="console"
+      trigger={{
+        title: props.tool === "modal" ? "Modal compute" : "Remote compute result",
+        subtitle: [gpu(), status()].filter(Boolean).join(" · "),
+      }}
+    >
+      <Show when={typeof props.input.command === "string" ? props.input.command : undefined}>
+        {(command) => (
+          <div data-component="tool-output" data-scrollable>
+            <pre>{command()}</pre>
+          </div>
+        )}
+      </Show>
+      <Show when={props.output}>
+        <div data-component="tool-output" data-scrollable>
+          <pre>{stripAnsi(props.output ?? "")}</pre>
+        </div>
+      </Show>
+    </BasicTool>
+  )
+}
+
+ToolRegistry.register({ name: "modal", render: (props) => <RemoteComputeTool {...props} /> })
+ToolRegistry.register({ name: "compute_job", render: (props) => <RemoteComputeTool {...props} /> })
 
 ToolRegistry.register({
   name: "read",
