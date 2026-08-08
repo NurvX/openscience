@@ -6,6 +6,8 @@ import {
   kernelAtlasLabel,
   kernelCpuLabel,
   kernelEnvironmentLabel,
+  kernelNetworkLabel,
+  kernelNetworkTone,
   kernelEnvironmentTone,
   kernelGpuLabel,
   kernelLabel,
@@ -60,10 +62,10 @@ describe("kernel runtime presentation", () => {
   })
 
   test("exposes an idle kernel as ready without hiding canonical running states", () => {
-    expect(kernelStateLabel("idle")).toBe("ready")
-    expect(kernelStateLabel("running")).toBe("running")
-    expect(kernelStateLabel("starting")).toBe("starting")
-    expect(kernelStateLabel("lazy")).toBe("not started")
+    expect(kernelStateLabel("idle")).toBe("Ready")
+    expect(kernelStateLabel("running")).toBe("Running")
+    expect(kernelStateLabel("starting")).toBe("Starting")
+    expect(kernelStateLabel("lazy")).toBe("Not started")
   })
 
   test("summarizes live, running, and queued work independently", () => {
@@ -131,8 +133,32 @@ describe("kernel runtime presentation", () => {
     )
   })
 
+  test("states network reach on its own, with an open network as the notable case", () => {
+    const sandboxed = (network: "deny" | "allow", enforced = true) =>
+      kernel({
+        environment: {
+          cwd: "/work/project",
+          atlas: { access: "host_broker", credentials: "withheld", sources: "source_ids_only" },
+          sandbox: { requested: true, enforced, backend: "bubblewrap", network, platform: "linux", available: true },
+        },
+      })
+
+    expect(kernelNetworkLabel(sandboxed("deny"))).toBe("Network disabled")
+    expect(kernelNetworkTone(sandboxed("deny"))).toBe("muted")
+    expect(kernelNetworkLabel(sandboxed("allow"))).toBe("Network allowed")
+    expect(kernelNetworkTone(sandboxed("allow"))).toBe("pending")
+
+    // A sandbox that was asked for but never took hold does not block anything,
+    // whatever its recorded network setting says.
+    expect(kernelNetworkLabel(sandboxed("deny", false))).toBe("Network allowed")
+    expect(kernelNetworkTone(sandboxed("deny", false))).toBe("pending")
+
+    // Nothing measured yet is not the same as an open network.
+    expect(kernelNetworkLabel(kernel())).toBeNull()
+  })
+
   test("states the actual sandbox and network contract", () => {
-    expect(kernelEnvironmentLabel(kernel())).toBe("environment pending")
+    expect(kernelEnvironmentLabel(kernel())).toBe("Environment pending")
     expect(
       kernelEnvironmentLabel(
         kernel({
@@ -154,7 +180,7 @@ describe("kernel runtime presentation", () => {
           },
         }),
       ),
-    ).toBe("seatbelt sandbox · network blocked")
+    ).toBe("Seatbelt sandbox")
     expect(
       kernelEnvironmentLabel(
         kernel({
@@ -176,7 +202,7 @@ describe("kernel runtime presentation", () => {
           },
         }),
       ),
-    ).toBe("sandbox unavailable · host access")
+    ).toBe("Sandbox unavailable · host access")
     expect(
       kernelEnvironmentLabel(
         kernel({
@@ -198,7 +224,7 @@ describe("kernel runtime presentation", () => {
           },
         }),
       ),
-    ).toBe("sandbox off · host access")
+    ).toBe("Sandbox off · host access")
     expect(kernelEnvironmentTone(kernel())).toBe("muted")
     expect(
       kernelEnvironmentTone(

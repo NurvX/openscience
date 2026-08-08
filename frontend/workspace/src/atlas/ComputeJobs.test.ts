@@ -101,7 +101,7 @@ describe("compute jobs surface", () => {
 
   test("uses compact headers, rows, and cards", () => {
     expect(source).toContain('class="compute-jobs"')
-    expect(source).toContain('"font-size": "15px"')
+    expect(source).toContain('"font-size": "14px"')
     expect(source).toContain('"min-height": "44px"')
     expect(source).toContain('width: "32px"')
     expect(source).toContain('"border-radius": "12px"')
@@ -111,7 +111,8 @@ describe("compute jobs surface", () => {
   })
 
   test("nests collapsible details beneath each run", () => {
-    const runs = source.indexOf("<For each={jobs()}>")
+    // Runs are grouped into day bands, so the rows come from the inner loop.
+    const runs = source.indexOf("<For each={ledger(")
     const details = source.indexOf("id={`compute-run-${item.id}`}")
 
     expect(runs).toBeGreaterThan(-1)
@@ -226,5 +227,43 @@ describe("compute jobs surface", () => {
     expect(apiSource).toContain("if (state.active)")
     expect(source).toContain(".finally(() =>")
     expect(source).not.toContain("Save the session before starting")
+  })
+  test("marks a run that is still moving so the ledger shows motion, not just a word", () => {
+    // The status column already names it, but a word does not read as motion,
+    // and this is the only row whose value will change on its own.
+    expect(source).toContain('class={terminal.has(item.status) ? undefined : "compute-run--active"}')
+    expect(source).toContain('position: "relative"')
+  })
+
+  test("keeps the tab total live while the jobs panel is the one mounted", () => {
+    // The surface's own poll is gated on the tab, so on the jobs tab the total
+    // beside the label froze at whatever it read when the user switched — a
+    // project with 11 runs kept reading 10. The panel reports its own count
+    // off the poll it already runs rather than a second poll of the same route.
+    expect(source).toContain("onTotalChange?: (count: number) => void")
+    expect(source).toContain("props.onTotalChange?.(list.length)")
+  })
+  test("keeps mono for code and the app's face for labels", () => {
+    // The surface moved to one sans face, but this panel styles inline, so its
+    // rules were missed by the stylesheet pass and the ledger's labels stayed
+    // mono while the kernel plate's equivalents did not.
+    const style = (name: string) => {
+      const start = source.indexOf(`const ${name}: JSX.CSSProperties = {`)
+      expect(start).toBeGreaterThan(-1)
+      return source.slice(start, source.indexOf("}", start))
+    }
+
+    for (const label of ["ledgerTitle", "runIndex", "runTarget", "runStatusText", "runAge"]) {
+      expect(style(label)).not.toContain("FONT_MONO")
+    }
+    // A figure that lost mono's fixed advance needs tabular ones, or the
+    // column wanders as the values change.
+    expect(style("runIndex")).toContain("tabular-nums")
+    expect(style("runAge")).toContain("tabular-nums")
+
+    // Code-shaped content keeps mono, which is what origin/main does too.
+    for (const code of ["commandBox", "log", "meta", "manifestGrid"]) {
+      expect(style(code)).toContain("FONT_MONO")
+    }
   })
 })

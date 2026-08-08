@@ -16,6 +16,7 @@ import {
   serial,
   stableJobs,
 } from "@/atlas/ComputeJobsAPI"
+import { ledger, type RunTone } from "@/atlas/run-ledger"
 import { useExecutionAuthority } from "@/atlas/use-execution-authority"
 import {
   IconActivity,
@@ -28,7 +29,6 @@ import {
   IconCopy,
   IconDownload,
   IconPlus,
-  IconRefresh,
   IconStop,
   IconTrash,
 } from "@/atlas/shared/Icon"
@@ -39,6 +39,10 @@ export function ComputeJobs(
   props: {
     onEnsureSession?: () => Promise<string | undefined>
     onActiveChange?: (count: number) => void
+    // The surface shows a total beside the tab label. It cannot poll for it
+    // while this panel is open without duplicating this panel's own 2.5s poll,
+    // so the count comes from here instead.
+    onTotalChange?: (count: number) => void
     manual?: boolean
   } = {},
 ): JSX.Element {
@@ -148,6 +152,10 @@ export function ComputeJobs(
   const active = createMemo(() => jobs()?.filter((job) => !terminal.has(job.status)).length ?? 0)
 
   createEffect(() => props.onActiveChange?.(active()))
+  createEffect(() => {
+    const list = jobs()
+    if (list) props.onTotalChange?.(list.length)
+  })
 
   const refresh = async (report = false) => {
     if (!cache.value) {
@@ -486,10 +494,9 @@ export function ComputeJobs(
             </span>
           </div>
         </div>
+        {/* No refresh control: this panel polls every 2.5s on its own, so the
+            button only ever did what was about to happen regardless. */}
         <div style={{ display: "flex", gap: "6px" }}>
-          <Action title="Refresh jobs" onClick={() => void refresh(true)}>
-            <IconRefresh size={15} />
-          </Action>
           <Show when={props.manual}>
             <Action
               title={creating() ? "Close job setup" : "New job"}
@@ -817,15 +824,17 @@ export function ComputeJobs(
               </div>
             }
           >
-            <div style={listHeader}>
-              <span>Recent runs</span>
-              <button type="button" disabled={busy()} style={textButton} onClick={() => void clear()}>
-                <IconTrash size={14} />
+            {/* One header over the whole ledger rather than a rule per day.
+                The age is already on every row, so day bands repeated in a
+                heading what the rows were saying anyway. */}
+            <div style={ledgerHeader}>
+              <span style={ledgerTitle}>Recent runs</span>
+              <button type="button" disabled={busy()} style={clearButton} onClick={() => void clear()}>
                 Clear finished
               </button>
             </div>
             <div style={list}>
-              <For each={jobs()}>
+              <For each={ledger(jobs() ?? [])}>
                 {(item) => {
                   const job = () => item
                   return (
@@ -834,48 +843,41 @@ export function ComputeJobs(
                         type="button"
                         aria-expanded={selected() === item.id}
                         aria-controls={`compute-run-${item.id}`}
+                        // A run that is still moving gets a sweep along the
+                        // foot of its row. The status column already names it,
+                        // but a word does not read as motion — and this is the
+                        // one row in the ledger whose value will change on its
+                        // own, so it is the one worth catching the eye.
+                        class={terminal.has(item.status) ? undefined : "compute-run--active"}
                         onClick={() => setSelected((value) => (value === item.id ? undefined : item.id))}
                         style={{
                           ...row,
+                          position: "relative",
                           background:
                             selected() === item.id
                               ? "color-mix(in srgb, var(--color-surface-solid) 92%, var(--color-accent) 8%)"
                               : "transparent",
                         }}
                       >
-                        <StatusIcon status={item.status} />
-                        <span
-                          style={{ display: "flex", "flex-direction": "column", gap: "4px", "min-width": 0, flex: 1 }}
-                        >
-                          <span
-                            style={{
-                              color: "var(--color-text)",
-                              "font-size": "14px",
-                              "font-weight": 600,
-                              overflow: "hidden",
-                              "text-overflow": "ellipsis",
-                              "white-space": "nowrap",
-                            }}
-                          >
-                            {item.name}
-                          </span>
-                          <span
-                            style={{
-                              color: "var(--color-text-faint)",
-                              "font-size": "12px",
-                              overflow: "hidden",
-                              "text-overflow": "ellipsis",
-                              "white-space": "nowrap",
-                            }}
-                          >
-                            {item.target_label} · {item.status}
-                          </span>
+                        {/* Position in the ledger, not an identifier —
+                                  it is what makes this read as a numbered
+                                  record rather than a list of cards. */}
+                        <span style={runIndex} aria-hidden="true">
+                          {item.index}
                         </span>
-                        <span
-                          style={{ color: "var(--color-text-faint)", "font-size": "11px", "white-space": "nowrap" }}
-                        >
-                          {age(item.created_at)}
+                        <span style={runStack}>
+                          <span style={runName}>{item.name}</span>
+                          <span style={runTarget}>{item.target}</span>
                         </span>
+                        {/* A column, so it is stated on every row: one
+                                  with holes is harder to scan than one always
+                                  filled, because the eye tracks a fixed
+                                  position instead of hunting. */}
+                        <span style={runStatus}>
+                          <span style={{ ...dot, background: toneColor(item.tone) }} aria-hidden="true" />
+                          <span style={{ ...runStatusText, color: toneColor(item.tone) }}>{item.statusLabel}</span>
+                        </span>
+                        <span style={runAge}>{age(item.created_at)}</span>
                         <span style={disclosure}>
                           <Show when={selected() === item.id} fallback={<IconChevronRight size={15} />}>
                             <IconChevronDown size={15} />
@@ -889,7 +891,7 @@ export function ComputeJobs(
                               style={{
                                 color: "var(--color-text-faint)",
                                 "font-family": FONT_MONO,
-                                "font-size": "11px",
+                                "font-size": "12px",
                                 flex: 1,
                                 "min-width": 0,
                               }}
@@ -1121,7 +1123,7 @@ function ArtifactRow(props: { item: Artifact; label?: string }): JSX.Element {
           style={{
             color: "var(--color-text)",
             "font-family": FONT_MONO,
-            "font-size": "13px",
+            "font-size": "14px",
             overflow: "hidden",
             "text-overflow": "ellipsis",
             "white-space": "nowrap",
@@ -1130,7 +1132,7 @@ function ArtifactRow(props: { item: Artifact; label?: string }): JSX.Element {
         >
           {props.item.path}
         </strong>
-        <span style={{ color: "var(--color-text-faint)", "font-family": FONT_MONO, "font-size": "11px" }}>
+        <span style={{ color: "var(--color-text-faint)", "font-family": FONT_MONO, "font-size": "12px" }}>
           {props.label ? `${props.label} · ` : ""}
           {bytes(props.item.size)} · sha256 {props.item.sha256.slice(0, 10)}
         </span>
@@ -1291,7 +1293,7 @@ const mark: JSX.CSSProperties = {
 
 const title: JSX.CSSProperties = {
   color: "var(--color-text)",
-  "font-size": "15px",
+  "font-size": "14px",
   "font-weight": 600,
   "letter-spacing": "-0.01em",
   "line-height": 1.2,
@@ -1300,7 +1302,7 @@ const title: JSX.CSSProperties = {
 const subtitle: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
-  "font-size": "11px",
+  "font-size": "12px",
   "line-height": 1.3,
 }
 
@@ -1328,7 +1330,7 @@ const formHeader: JSX.CSSProperties = {
 
 const formTitle: JSX.CSSProperties = {
   color: "var(--color-text)",
-  "font-size": "15px",
+  "font-size": "14px",
   "font-weight": 600,
   "letter-spacing": "-0.01em",
 }
@@ -1351,7 +1353,7 @@ const input: JSX.CSSProperties = {
   outline: "2px solid transparent",
   "outline-offset": "1px",
   "font-family": FONT_SANS,
-  "font-size": "13px",
+  "font-size": "14px",
   transition: "border-color 140ms ease, outline-color 140ms ease, background-color 140ms ease",
 }
 
@@ -1368,7 +1370,7 @@ const advancedToggle: JSX.CSSProperties = {
   background: "color-mix(in srgb, var(--color-bg-subtle) 82%, transparent)",
   color: "var(--color-text-muted)",
   "font-family": FONT_SANS,
-  "font-size": "13px",
+  "font-size": "14px",
   "font-weight": 550,
   padding: "0 10px",
   "text-align": "left",
@@ -1383,7 +1385,7 @@ const advancedGrid: JSX.CSSProperties = {
 const advancedHint: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
-  "font-size": "11px",
+  "font-size": "12px",
   "line-height": 1.4,
   padding: "2px 2px 0",
 }
@@ -1397,7 +1399,7 @@ const primaryButton: JSX.CSSProperties = {
   "min-height": "34px",
   padding: "0 13px",
   "font-family": FONT_SANS,
-  "font-size": "13px",
+  "font-size": "14px",
   "font-weight": 600,
   transition: "filter 140ms ease, transform 140ms ease",
 }
@@ -1411,7 +1413,7 @@ const secondaryButton: JSX.CSSProperties = {
   "min-height": "32px",
   padding: "0 10px",
   "font-family": FONT_SANS,
-  "font-size": "13px",
+  "font-size": "14px",
   "font-weight": 550,
 }
 
@@ -1425,7 +1427,7 @@ const empty: JSX.CSSProperties = {
   gap: "10px",
   padding: "36px 24px 44px",
   color: "var(--color-text-muted)",
-  "font-size": "13px",
+  "font-size": "14px",
   "line-height": 1.5,
   "text-align": "center",
 }
@@ -1444,7 +1446,7 @@ const emptyMark: JSX.CSSProperties = {
 
 const emptyTitle: JSX.CSSProperties = {
   color: "var(--color-text)",
-  "font-size": "15px",
+  "font-size": "14px",
   "font-weight": 600,
   "letter-spacing": "-0.01em",
 }
@@ -1452,7 +1454,7 @@ const emptyTitle: JSX.CSSProperties = {
 const emptyCopy: JSX.CSSProperties = {
   "max-width": "360px",
   color: "var(--color-text-muted)",
-  "font-size": "13px",
+  "font-size": "14px",
   "line-height": 1.5,
 }
 
@@ -1464,7 +1466,7 @@ const listHeader: JSX.CSSProperties = {
   padding: "10px 12px 4px",
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
-  "font-size": "11px",
+  "font-size": "12px",
   "font-weight": 600,
 }
 
@@ -1496,7 +1498,105 @@ const list: JSX.CSSProperties = {
 const run: JSX.CSSProperties = {
   display: "flex",
   "flex-direction": "column",
-  "border-bottom": "1px solid color-mix(in srgb, var(--color-border) 66%, transparent)",
+}
+
+// 3a's ledger: a numbered record, not a stack of cards. The day rules are
+// gone — the age is already on every row, so the bands repeated in a heading
+// what the rows were saying anyway.
+const ledgerHeader: JSX.CSSProperties = {
+  display: "flex",
+  "align-items": "center",
+  "justify-content": "space-between",
+  gap: "12px",
+  padding: "6px 18px 8px",
+  "border-bottom": "1px solid var(--color-border)",
+  "flex-shrink": 0,
+}
+
+const ledgerTitle: JSX.CSSProperties = {
+  color: "var(--color-text-faint)",
+  "font-size": "10px",
+}
+
+const clearButton: JSX.CSSProperties = {
+  all: "unset",
+  cursor: "pointer",
+  color: "var(--icon-brand-base)",
+  "font-family": FONT_SANS,
+  "font-size": "12px",
+}
+
+const runIndex: JSX.CSSProperties = {
+  width: "16px",
+  flex: "none",
+  color: "var(--color-text-faint)",
+  "font-size": "10px",
+  "font-variant-numeric": "tabular-nums",
+}
+
+const runStack: JSX.CSSProperties = {
+  display: "flex",
+  "flex-direction": "column",
+  gap: "2px",
+  "min-width": 0,
+  flex: 1,
+}
+
+const runName: JSX.CSSProperties = {
+  color: "var(--color-text)",
+  "font-size": "14px",
+  overflow: "hidden",
+  "text-overflow": "ellipsis",
+  "white-space": "nowrap",
+}
+
+// Where it ran, on its own line under the name rather than competing with it.
+const runTarget: JSX.CSSProperties = {
+  color: "var(--color-text-muted)",
+  "font-size": "10px",
+  overflow: "hidden",
+  "text-overflow": "ellipsis",
+  "white-space": "nowrap",
+}
+
+const runStatus: JSX.CSSProperties = {
+  display: "flex",
+  "align-items": "center",
+  gap: "6px",
+  flex: "none",
+}
+
+const runStatusText: JSX.CSSProperties = {
+  width: "66px",
+  "font-size": "10px",
+  "white-space": "nowrap",
+}
+
+const dot: JSX.CSSProperties = {
+  width: "5px",
+  height: "5px",
+  "border-radius": "50%",
+  flex: "none",
+}
+
+const runAge: JSX.CSSProperties = {
+  width: "22px",
+  flex: "none",
+  "text-align": "right",
+  color: "var(--color-text-faint)",
+  "font-size": "10px",
+  "font-variant-numeric": "tabular-nums",
+  "white-space": "nowrap",
+}
+
+// Status reaches the dot and the word through the same semantic tokens the
+// rest of the app uses; the app ships 16 themes and a literal colour here
+// would be right in exactly one of them.
+function toneColor(tone: RunTone): string {
+  if (tone === "danger") return "var(--color-error)"
+  if (tone === "success") return "var(--color-success)"
+  if (tone === "active") return "var(--color-warning)"
+  return "var(--color-text-muted)"
 }
 
 const row: JSX.CSSProperties = {
@@ -1551,7 +1651,7 @@ const commandBox: JSX.CSSProperties = {
 const meta: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_MONO,
-  "font-size": "11px",
+  "font-size": "12px",
   overflow: "hidden",
   "text-overflow": "ellipsis",
   "white-space": "nowrap",
@@ -1574,7 +1674,7 @@ const cardTitle: JSX.CSSProperties = {
   gap: "10px",
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
-  "font-size": "11px",
+  "font-size": "12px",
   "font-weight": 600,
 }
 
@@ -1595,7 +1695,7 @@ const manifestGrid: JSX.CSSProperties = {
   gap: "7px 10px",
   color: "var(--color-text-faint)",
   "font-family": FONT_MONO,
-  "font-size": "11px",
+  "font-size": "12px",
   "line-height": 1.4,
 }
 
@@ -1623,7 +1723,7 @@ const logHeader: JSX.CSSProperties = {
   gap: "10px",
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
-  "font-size": "11px",
+  "font-size": "12px",
   "font-weight": 600,
   "margin-top": "4px",
 }

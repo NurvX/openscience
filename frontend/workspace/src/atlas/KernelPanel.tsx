@@ -2,11 +2,12 @@ import { For, Show, createMemo, createResource, onCleanup, type JSX } from "soli
 import { createStore } from "solid-js/store"
 import { useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
-import { IconCpu, IconPlus, IconRefresh } from "@/atlas/shared/Icon"
-import { summarizeKernels, type KernelStatus } from "@/notebook/runtime"
+import { IconCpu } from "@/atlas/shared/Icon"
+import { type KernelStatus } from "@/notebook/runtime"
 import { useExecutionAuthority } from "./use-execution-authority"
 import { useKernelList } from "./use-kernel-list"
 import { identify } from "@/atlas/poll-identity"
+import type { Capacity } from "./host-instruments"
 import { KernelCard, type KernelAction } from "./KernelCard"
 
 type KernelsPayload = { kernels: KernelStatus[] }
@@ -23,6 +24,9 @@ const time = (value: number | null) => {
 
 type KernelPanelProps = {
   onEnsureSession?: () => Promise<string | undefined>
+  // Measured once by the host strip above and passed down, so every plate's
+  // ceiling agrees with the headline figure the user is reading beside it.
+  capacity?: Partial<Capacity>
   // The transport is a prop so a poll-behavior test can mount the real
   // component against a controlled response instead of a live SDK; the
   // session SDK supplies it in the product. See HostStrip.tsx for the same
@@ -104,10 +108,8 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
   // nearest Suspense boundary on every in-flight fetch, which suspends the
   // entire RightPane on every 2.5s poll. `.latest` only suspends on the first
   // load and returns the previous value while a refetch is in flight (see
-  // HostStrip.tsx for the full mechanism). `data.loading`, used below to
-  // disable the refresh button, is unaffected and left alone.
+  // HostStrip.tsx for the full mechanism).
   const kernels = useKernelList(() => data.latest?.kernels)
-  const summary = createMemo(() => summarizeKernels(kernels))
   const ensureSession = async () => {
     if (params.id && params.id !== "new") return params.id
     return props.onEnsureSession?.()
@@ -215,33 +217,28 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
     <section aria-label="Session kernel control room" data-testid="kernel-panel" class="kernel-panel">
       <header class="kernel-panel__header">
         <div class="kernel-panel__heading">
-          <span class="kernel-panel__eyebrow">Compute</span>
+          {/* No "Compute" eyebrow: the tab above already says it, and 5a's
+              restraint is mostly about not saying things twice. The live/
+              running/queued breakdown moved onto the kernel's own metric grid,
+              where it sits beside the figures it qualifies. */}
           <strong>Session kernels</strong>
-          <span>
-            {summary().live} live · {summary().running} running · {summary().queued} queued
-          </span>
+          <span>{view.updated ? `Synced ${time(view.updated)}` : "Not synced yet"}</span>
         </div>
+        {/* No refresh control: the panel already polls every 2.5s and on
+            visibilitychange, so the button asked the user to do what was
+            happening anyway — and disabling it per poll made it flicker
+            twice a second. The "Synced Ns ago" line beside the title is the
+            honest version of the same information. */}
         <div class="kernel-panel__refresh">
-          <Show when={view.updated}>
-            <span aria-label={`Updated ${time(view.updated)}`}>{time(view.updated)}</span>
-          </Show>
           <button
             type="button"
+            class="kernel-panel__primary-action"
             aria-label="Create named kernel"
             title="Create an isolated named Python or R kernel"
             onClick={() => void begin()}
             disabled={!!view.action}
           >
-            <IconPlus size={13} strokeWidth={1.6} />
-          </button>
-          <button
-            type="button"
-            aria-label="Refresh kernels"
-            title="Refresh kernel inventory"
-            onClick={() => void api.refetch()}
-            disabled={data.loading}
-          >
-            <IconRefresh size={12} strokeWidth={1.6} />
+            New kernel
           </button>
         </div>
       </header>
@@ -288,14 +285,10 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
           </form>
         </Show>
 
+        {/* Prose, not a callout. The icon and the bolded lead-in made this read
+            as a warning about something that is simply how kernels work. */}
         <section class="kernel-panel__scope" aria-label="Kernel ownership model">
-          <span class="kernel-panel__scope-icon" aria-hidden="true">
-            <IconCpu size={13} strokeWidth={1.5} />
-          </span>
-          <p>
-            <strong>Session-owned kernels.</strong> Named records survive app restarts; live variables persist only
-            while their backend process remains alive.
-          </p>
+          <p>Named records survive app restarts. Live variables persist only while the backend process stays alive.</p>
         </section>
 
         <Show when={authority.message()}>
@@ -342,9 +335,11 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
         >
           <div class="kernel-panel__list">
             <For each={kernels}>
-              {(kernel) => (
+              {(kernel, index) => (
                 <KernelCard
                   kernel={kernel}
+                  index={index()}
+                  capacity={props.capacity}
                   routeID={params.id}
                   action={view.action}
                   restartDisabled={!authority.allowed()}

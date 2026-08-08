@@ -52,10 +52,15 @@ const kernel = (value: Partial<KernelStatus> = {}): KernelStatus => ({
   ...value,
 })
 
-const mount = (view: () => JSX.Element) => {
+// The plate collapses by default, so everything below the head — the ledger,
+// the environment block, the controls, the identity list — is not in the DOM
+// until it is opened. Mounting opens it, because that is the state these
+// assertions are about; the collapsed head has its own tests below.
+const mount = (view: () => JSX.Element, options: { collapsed?: boolean } = {}) => {
   const host = document.createElement("div")
   document.body.append(host)
   cleanups.push(web.render(view, host))
+  if (!options.collapsed) host.querySelector<HTMLButtonElement>(".kernel-card__plate")?.click()
   return host
 }
 
@@ -74,7 +79,7 @@ describe("KernelCard lifecycle controls", () => {
       }),
     )
 
-    expect(host.textContent).toContain("runtime active")
+    expect(host.querySelector(".kernel-card__state")?.textContent).toBe("Ready")
     expect(host.textContent).toContain("r4")
     expect(host.textContent).toContain("8234")
     expect(host.textContent).toContain("PID and process start verified")
@@ -102,9 +107,11 @@ describe("KernelCard lifecycle controls", () => {
     expect(button(host, "Restart analysis.ipynb")?.title).toContain(
       "All in-memory variables and queued cells will be lost",
     )
-    expect(host.querySelector(".kernel-card__control-note")?.textContent).toContain(
-      "every in-memory variable and queued cell is lost",
-    )
+    // The standing note under the controls is gone with the 3a plate. The
+    // warning has to survive somewhere the user meets it before acting, so it
+    // rides on the button that causes the loss.
+    expect(host.querySelector(".kernel-card__control-note")).toBeNull()
+    expect(button(host, "Stop analysis.ipynb")?.title).toContain("clear its in-memory state")
     button(host, "Interrupt analysis.ipynb")?.click()
     expect(calls).toEqual(["interrupt"])
   })
@@ -139,18 +146,23 @@ describe("KernelCard lifecycle controls", () => {
   })
 
   test("shows the local target with sampled usage and an unavailable fallback, never zero", () => {
+    // CPU is stated as a share of the machine, so this row needs the host
+    // reading the surface passes down: 12.34% of one core on an 8-core box is
+    // 1.5% of the machine.
+    const capacity = { memory: { total: 16_400_000_000, available: 12_000_000_000 }, cpu: { cores: 8 } }
     const sampled = mount(() =>
       subject.KernelCard({
         kernel: kernel({ resources: { cpu_percent: 12.34, memory_bytes: 412_000_000 } }),
         routeID: "ses_current",
         action: "",
+        capacity,
         onControl: () => {},
       }),
     )
     const usage = sampled.querySelector(".kernel-card__metrics--usage")
     expect(usage?.textContent).toContain("Target")
     expect(usage?.textContent).toContain("Local")
-    expect(usage?.textContent).toContain("12.3%")
+    expect(usage?.textContent).toContain("1.5%")
     expect(usage?.textContent).toContain("412 MB")
     expect(usage?.textContent).toContain("Uptime")
     expect(usage?.textContent).toContain("GPU")
@@ -158,9 +170,10 @@ describe("KernelCard lifecycle controls", () => {
 
     const partial = mount(() =>
       subject.KernelCard({
-        kernel: kernel({ resources: { cpu_percent: 3 } }),
+        kernel: kernel({ resources: { cpu_percent: 24 } }),
         routeID: "ses_current",
         action: "",
+        capacity,
         onControl: () => {},
       }),
     )
@@ -227,5 +240,114 @@ describe("KernelCard lifecycle controls", () => {
     button(host, "Restart analysis.ipynb")?.click()
     button(host, "Stop analysis.ipynb")?.click()
     expect(calls).toEqual(["stop"])
+  })
+  test("collapses to a head that still answers whether the runtime is in the way", () => {
+    const host = mount(
+      () =>
+        subject.KernelCard({
+          kernel: kernel({ state: "running", resources: { cpu_percent: 180, memory_bytes: 2_400_000_000 } }),
+          routeID: "ses_current",
+          action: "",
+          index: 0,
+          capacity: { memory: { total: 16_400_000_000, available: 12_000_000_000 }, cpu: { cores: 8 } },
+          onControl: () => {},
+        }),
+      { collapsed: true },
+    )
+
+    const plate = host.querySelector<HTMLButtonElement>(".kernel-card__plate")
+    expect(plate?.getAttribute("aria-expanded")).toBe("false")
+    expect(host.querySelector(".kernel-card__language")?.textContent).toBe("Kernel 01 · Python")
+    expect(host.querySelector(".kernel-card__state")?.textContent).toBe("Running")
+    // The two figures that survive the collapse.
+    expect(host.querySelector(".kernel-card__usage")?.textContent).toContain("2.4")
+    expect(host.querySelector(".kernel-card__usage")?.textContent).toContain("/ 16.4 GB")
+    expect(host.querySelectorAll(".kernel-card__usage-cores > div").length).toBe(8)
+    expect(host.querySelectorAll('.kernel-card__usage-cores > div[data-lit="true"]').length).toBe(2)
+
+    // Nothing below the head is in the DOM until it is opened, so a list of
+    // several runtimes stays a list rather than a stack of full records.
+    expect(host.querySelector(".kernel-card__controls")).toBeNull()
+    expect(host.querySelector(".kernel-card__metrics")).toBeNull()
+    expect(host.querySelector(".kernel-card__identity")).toBeNull()
+    expect(host.textContent).not.toContain("Runtime identity")
+  })
+
+  test("opens and closes from the head, which is the whole hit target", () => {
+    const host = mount(
+      () =>
+        subject.KernelCard({
+          kernel: kernel(),
+          routeID: "ses_current",
+          action: "",
+          onControl: () => {},
+        }),
+      { collapsed: true },
+    )
+    const plate = host.querySelector<HTMLButtonElement>(".kernel-card__plate")
+
+    plate?.click()
+    expect(plate?.getAttribute("aria-expanded")).toBe("true")
+    expect(host.querySelector(".kernel-card__controls")).not.toBeNull()
+    expect(host.querySelector(".kernel-card")?.getAttribute("data-open")).toBe("true")
+
+    plate?.click()
+    expect(plate?.getAttribute("aria-expanded")).toBe("false")
+    expect(host.querySelector(".kernel-card__controls")).toBeNull()
+  })
+
+  test("numbers each plate by its position so two collapsed heads read apart", () => {
+    const host = mount(
+      () =>
+        subject.KernelCard({
+          kernel: kernel({ language: "r" }),
+          routeID: "ses_current",
+          action: "",
+          index: 2,
+          onControl: () => {},
+        }),
+      { collapsed: true },
+    )
+
+    expect(host.querySelector(".kernel-card__language")?.textContent).toBe("Kernel 03 · R")
+  })
+  test("counts uptime like a stopwatch rather than freezing at its first reading", async () => {
+    // The kernel object is reconciled in place, so it does not change while a
+    // runtime simply keeps running. Uptime therefore has to be driven by a
+    // clock inside the card; before it was, the head sat at "2s" for as long
+    // as the runtime lived.
+    const host = mount(
+      () =>
+        subject.KernelCard({
+          kernel: kernel({ active: true, state: "running", started_at: Date.now() - 2_000 }),
+          routeID: "ses_current",
+          action: "",
+          onControl: () => {},
+        }),
+      { collapsed: true },
+    )
+
+    const first = host.querySelector(".kernel-card__uptime")?.textContent
+    expect(first).toMatch(/^\d+s$/)
+    await Bun.sleep(1_200)
+    const second = host.querySelector(".kernel-card__uptime")?.textContent
+    expect(second).not.toBe(first)
+  })
+
+  test("stops the clock when there is nothing running to count", () => {
+    const host = mount(
+      () =>
+        subject.KernelCard({
+          kernel: kernel({ active: false, state: "stopped", started_at: null }),
+          routeID: "ses_current",
+          action: "",
+          onControl: () => {},
+        }),
+      { collapsed: true },
+    )
+
+    // "Unavailable" is three times the width of the figure it replaces and
+    // says nothing the lifecycle pill beside it does not.
+    expect(host.querySelector(".kernel-card__uptime")).toBeNull()
   })
 })

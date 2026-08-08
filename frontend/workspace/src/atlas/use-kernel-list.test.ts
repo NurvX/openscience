@@ -59,6 +59,10 @@ const mount = (view: () => JSX.Element) => {
   const host = document.createElement("div")
   document.body.append(host)
   cleanups.push(web.render(view, host))
+  // The 3a plate collapses by default, so the metric ledger these assertions
+  // read is not rendered until each card is opened. Reconciliation is the
+  // subject here, not the collapse, so open every plate up front.
+  host.querySelectorAll<HTMLButtonElement>(".kernel-card__plate").forEach((plate) => plate.click())
   return host
 }
 
@@ -97,6 +101,11 @@ const list = (source: () => KernelStatus[] | undefined) => {
         },
         routeID: "ses_current",
         action: "",
+        // CPU is stated as a share of the machine, so a card with no host
+        // reading cannot state it at all. The surface supplies this in the
+        // app; supplying it here keeps the subject reconciliation, not
+        // degradation.
+        capacity: { memory: { total: 16_400_000_000, available: 12_000_000_000 }, cpu: { cores: 8 } },
         onControl: () => {},
       }),
   })
@@ -132,6 +141,30 @@ describe("kernel list reconciliation", () => {
     expect(host.contains(cardB)).toBe(true)
     // Freshness: kernel-b's changed field actually reached the same node.
     expect(executions(cardB)).toBe("9")
+  })
+
+  test("moves the collapsed plate's own figures when a poll changes them", async () => {
+    // These are the two numbers a collapsed plate is reduced to, and they sit
+    // on a nested object (`resources`) rather than on the kernel itself — so
+    // this pins that reconcile's patch reaches them and the head re-renders,
+    // rather than the card holding the first reading it was given.
+    const usage = (element: Element | null) => element?.querySelector(".kernel-card__usage")?.textContent ?? ""
+    const [source, setSource] = core.createSignal<KernelStatus[] | undefined>([
+      kernel({ id: "kernel-a", resources: { cpu_percent: 0, memory_bytes: 16_000_000 } }),
+    ])
+    const host = mount(() => list(source))
+    await Promise.resolve()
+
+    const card = host.querySelector('[data-kernel-id="kernel-a"]')
+    expect(usage(card)).toContain("16 MB")
+    expect(usage(card)).toContain("0.0%")
+
+    setSource([kernel({ id: "kernel-a", resources: { cpu_percent: 187.5, memory_bytes: 2_400_000_000 } })])
+    await Promise.resolve()
+
+    expect(host.querySelector('[data-kernel-id="kernel-a"]')).toBe(card)
+    expect(usage(card)).toContain("2.4 GB")
+    expect(usage(card)).toContain("23.4%")
   })
 
   test("mounts a newly appeared kernel and unmounts one that disappeared", async () => {
