@@ -26,19 +26,17 @@ const subject = (await vite.ssrLoadModule("/src/atlas/KernelPanel.tsx")) as type
 
 afterAll(() => vite.close())
 
-// A genuinely closed port, so the connection failure is the real thing rather
-// than a rejection this test invented. happydom.ts replaces globalThis.Response,
+// An unbound high loopback port, so the connection failure comes from a real
+// fetch rather than a rejection this test invented. happydom.ts replaces globalThis.Response,
 // so a live Bun.serve endpoint cannot stand in for the product server here —
 // see HostStrip.test.ts for the full reasoning.
-const closed = Bun.serve({ port: 0, fetch: () => new Response("") })
-const unreachable = `http://127.0.0.1:${closed.port}`
-await closed.stop(true)
+const unreachable = "http://127.0.0.1:65535"
 
 describe("kernel panel poll", () => {
   test("resolves to no inventory when the server cannot be reached", async () => {
     const reported: string[] = []
 
-    const value = await subject.inventory(Bun.fetch(`${unreachable}/notebook/kernels`), (error) => reported.push(error))
+    const value = await subject.inventory(Bun.fetch(`${unreachable}/kernels`), (error) => reported.push(error))
 
     // Resolved, not rejected: an errored resource re-throws where the render
     // path reads it, and the only ErrorBoundary in the app wraps the whole

@@ -268,15 +268,25 @@ export namespace Config {
         },
       })
     }
+    for (const [name, mode] of Object.entries(execution.mode ?? {})) {
+      execution.agent = mergeDeep(execution.agent ?? {}, {
+        [name]: {
+          ...mode,
+          mode: "primary" as const,
+        },
+      })
+    }
 
     if (Flag.OPENSCIENCE_PERMISSION) {
       result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENSCIENCE_PERMISSION))
+      execution.permission = mergeDeep(execution.permission ?? {}, JSON.parse(Flag.OPENSCIENCE_PERMISSION))
     }
 
     // Backwards compatibility: legacy top-level `tools` config
-    if (result.tools) {
+    for (const target of [result, execution]) {
+      if (!target.tools) continue
       const perms: Record<string, Config.PermissionAction> = {}
-      for (const [tool, enabled] of Object.entries(result.tools)) {
+      for (const [tool, enabled] of Object.entries(target.tools)) {
         const action: Config.PermissionAction = enabled ? "allow" : "deny"
         if (tool === "write" || tool === "edit" || tool === "patch" || tool === "multiedit") {
           perms.edit = action
@@ -284,7 +294,7 @@ export namespace Config {
         }
         perms[tool] = action
       }
-      result.permission = mergeDeep(perms, result.permission ?? {})
+      target.permission = mergeDeep(perms, target.permission ?? {})
     }
 
     if (!result.username) result.username = os.userInfo().username
@@ -1086,14 +1096,31 @@ export namespace Config {
                 .number()
                 .int()
                 .positive()
+                .max(2_147_483_647)
                 .describe(
-                  "Timeout in milliseconds for requests to this provider. Default is 300000 (5 minutes). Set to false to disable timeout.",
+                  "Optional total wall-clock timeout in milliseconds for a provider request. No total timeout is applied by default; active long-running generations are allowed to finish.",
                 ),
-              z.literal(false).describe("Disable timeout for this provider entirely."),
+              z.literal(false).describe("Explicitly disable the optional total wall-clock timeout."),
             ])
             .optional()
             .describe(
-              "Timeout in milliseconds for requests to this provider. Default is 300000 (5 minutes). Set to false to disable timeout.",
+              "Optional total wall-clock timeout in milliseconds for a provider request. No total timeout is applied by default. Use idleTimeout to bound silent connections without cutting off active generations.",
+            ),
+          idleTimeout: z
+            .union([
+              z
+                .number()
+                .int()
+                .positive()
+                .max(2_147_483_647)
+                .describe(
+                  "Maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Defaults to 300000 (5 minutes) and resets on every body chunk.",
+                ),
+              z.literal(false).describe("Disable the provider inactivity watchdog."),
+            ])
+            .optional()
+            .describe(
+              "Maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Defaults to 300000 (5 minutes), resets on each body chunk, and does not cap total generation time.",
             ),
         })
         .catchall(z.any())
@@ -1522,6 +1549,12 @@ export namespace Config {
     if (await ProjectTrust.allowed(Instance.project)) return current.config
     return {
       ...current.config,
+      command: current.execution.command,
+      agent: current.execution.agent,
+      mode: current.execution.mode,
+      default_agent: current.execution.default_agent,
+      permission: current.execution.permission,
+      tools: current.execution.tools,
       plugin: current.execution.plugin,
       mcp: current.execution.mcp,
       formatter: current.execution.formatter,
@@ -1545,6 +1578,36 @@ export namespace Config {
       return entries?.[name]
     }
     return JSON.stringify(value(current.config)) !== JSON.stringify(value(current.execution))
+  }
+
+  /** Whether an exact provider token command entered through project-owned
+   * config. Unlike getExecution(), the baseline remains project-free after a
+   * project is trusted, so cached provider clients can keep enforcing trust at
+   * every later mint boundary. */
+  export async function projectControlsProviderToken(providerID: string, command: string) {
+    const current = await state()
+    const value = (config: Info) => config.provider?.[providerID]?.options?.tokenCommand
+    return value(current.config) === command && value(current.execution) !== command
+  }
+
+  /** Whether this exact plugin entry entered through project-owned config or a
+   * project-local plugin directory. The execution baseline contains only
+   * remote, global, custom-CLI, synced, and managed sources, so comparing the
+   * final deduplicated entries preserves provenance even when a local plugin
+   * overrides a global plugin with the same package name. */
+  export async function projectControlsPlugin(plugin: string) {
+    const current = await state()
+    const all = current.config.plugin ?? []
+    const trusted = current.execution.plugin ?? []
+    return all.includes(plugin) && !trusted.includes(plugin)
+  }
+
+  /** Whether an MCP definition entered through project-owned config. Kept as
+   * provenance so a tool object retained across revocation can re-check trust
+   * at its actual remote call boundary. */
+  export async function projectControlsMcp(name: string) {
+    const current = await state()
+    return JSON.stringify(current.config.mcp?.[name]) !== JSON.stringify(current.execution.mcp?.[name])
   }
 
   export async function getGlobal() {

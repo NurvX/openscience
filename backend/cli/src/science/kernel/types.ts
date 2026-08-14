@@ -23,6 +23,11 @@ export const AtlasEnvironment = {
 
 export const KernelEnvironment = z.object({
   cwd: z.string(),
+  interpreter: z.object({
+    name: z.string(),
+    binary: z.string(),
+    version: z.string().optional(),
+  }),
   atlas: z.object({
     access: z.literal(AtlasEnvironment.access),
     credentials: z.literal(AtlasEnvironment.credentials),
@@ -87,7 +92,7 @@ export interface ExecuteOptions {
   /** Message, tool call, and human-facing cell identity used for lineage/UI. */
   origin?: { messageID?: string; callID?: string; title?: string; source?: string }
   /** Internal lifecycle hook fired when a queued cell actually starts. */
-  onStart?: () => void
+  onStart?: () => void | Promise<void>
 }
 
 export interface KernelStartOptions {
@@ -97,8 +102,26 @@ export interface KernelStartOptions {
   cwd?: string
   /** Extra environment variables. */
   env?: Record<string, string>
+  /** Narrow writable roots granted only to this process incarnation. Used for
+   * explicitly approved package/environment mutations, never normal code. */
+  extraWritable?: string[]
+  /** Narrow network override for an explicitly approved process incarnation.
+   * Package mutations may contact package repositories even when ordinary
+   * analysis runtimes inherit a deny-by-default project policy. */
+  sandboxNetwork?: "allow" | "deny"
   /** Interpreter binary override (e.g. a specific python/Rscript path). */
   binary?: string
+  /** Stable user-facing name for the selected interpreter environment. */
+  environmentName?: string
+  /** Internal durable process ownership allocated by the registry before the
+   * interpreter is spawned. Kernel managers should register it immediately
+   * after spawn and before waiting for the ready handshake. */
+  processOwnership?: {
+    id: string
+    projectID: string
+    sessionID: string
+    authorityGeneration: string
+  }
 }
 
 export interface KernelProcess {
@@ -108,6 +131,8 @@ export interface KernelProcess {
   startedAt: number
   /** Platform process-start token used to guard against PID reuse when available. */
   token?: string
+  /** Synced durable ownership record for this process group. */
+  ownershipID?: string
 }
 
 /** A single persistent interpreter process. State persists across executes. */

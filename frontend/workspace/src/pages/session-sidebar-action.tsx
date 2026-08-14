@@ -1,6 +1,7 @@
 import { Show, type JSX } from "solid-js"
 import { IconActivity, IconCpu, IconFile, IconFolderTree, IconLayoutGrid, IconTerminal } from "@/atlas/shared/Icon"
 import { preloadTerminal } from "@/components/terminal"
+import "./session-sidebar.css"
 
 export type SessionContext = "files" | "terminal" | "canvas" | "kernels" | "trace" | "artifact"
 
@@ -85,6 +86,7 @@ export function SidebarAction(props: {
       type="button"
       class={`session-sidebar__action${props.class ? ` ${props.class}` : ""}`}
       aria-label={props.ariaLabel}
+      data-tooltip={props.label}
       aria-pressed={props.active === undefined ? undefined : props.active}
       data-selected={props.active ? "true" : undefined}
       disabled={props.disabled}
@@ -115,7 +117,10 @@ export function SessionSidebarActions(props: {
   onContext: (context: SessionContext) => void
 }): JSX.Element {
   return (
-    <div class="session-sidebar__context-actions" style={{ display: "contents" }}>
+    <div class="session-sidebar__context-actions">
+      <div class="session-sidebar__group-label" aria-hidden="true">
+        Workspace
+      </div>
       <div class="session-sidebar__action-list">
         <SidebarAction
           label="Files"
@@ -150,7 +155,7 @@ export function SessionSidebarActions(props: {
         </Show>
         <SidebarAction
           label="Compute"
-          detail="Project kernels"
+          detail="Runtimes and jobs"
           ariaLabel="Open project compute"
           active={props.context === "kernels" && props.contextOpen}
           onClick={(_event?: Event) => props.onContext("kernels")}

@@ -30,25 +30,35 @@ import { PlanExitTool, PlanEnterTool } from "./plan"
 import { ApplyPatchTool } from "./apply_patch"
 import { BiologyTools, BIOLOGY_TOOL_IDS } from "./biology"
 import { ArtifactTool } from "./artifact"
-import { LearnTool } from "./learn"
 import { ScienceTools } from "./science"
 import { ProvenanceTools } from "./provenance"
-import { NotebookTool } from "./notebook"
-import { RKernelTool } from "./rkernel"
+import { NotebookTool, PythonTool } from "./notebook"
+import { RKernelTool, RTool } from "./rkernel"
 import { AtlasTool } from "./atlas"
 import { AtlasRecordTool } from "./atlas-record"
 import { ArtifactSnapshotTool } from "./artifact-snapshot"
 import { ModalTool } from "./modal"
 import { ComputeJobTool } from "./compute-job"
+import { State } from "@/project/state"
+import { ProjectTrust } from "@/project/trust"
+import { AuthoritySignal } from "@/project/authority-signal"
 
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
+  const compatibility = new Map<string, Tool.Info>([
+    [NotebookTool.id, NotebookTool],
+    [RKernelTool.id, RKernelTool],
+    [ModalTool.id, ModalTool],
+  ])
 
-  export const state = Instance.state(async () => {
+  const compute = async () => {
     const custom = [] as Tool.Info[]
     const glob = new Bun.Glob("{tool,tools}/*.{js,ts}")
 
-    for (const dir of await Config.directories()) {
+    // Importing a tool module executes its top-level code in the host process.
+    // Config.executableDirectories excludes project-owned directories until
+    // their canonical project root has been explicitly trusted.
+    for (const dir of await Config.executableDirectories()) {
       for await (const match of glob.scan({
         cwd: dir,
         absolute: true,
@@ -56,35 +66,57 @@ export namespace ToolRegistry {
         dot: true,
       })) {
         const namespace = path.basename(match, path.extname(match))
-        const mod = await import(match)
+        // A symlinked file is still project-owned when its directory entry is
+        // project-owned. Serialize the final trust check and module import with
+        // revocation so top-level module code cannot finish after a revoke has
+        // already been acknowledged.
+        const projectOwned = Instance.containsPath(dir)
+        const mod = projectOwned
+          ? await AuthoritySignal.exclusive(async () => {
+              await ProjectTrust.require(Instance.project, "project_plugin")
+              return import(match)
+            })
+          : await import(match)
         for (const [id, def] of Object.entries<ToolDefinition>(mod)) {
-          custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def))
+          custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def, projectOwned))
         }
       }
     }
 
     const plugins = await Plugin.list()
     for (const plugin of plugins) {
+      const projectOwned = Plugin.projectOwned(plugin)
       for (const [id, def] of Object.entries(plugin.tool ?? {})) {
-        custom.push(fromPlugin(id, def))
+        custom.push(fromPlugin(id, def, projectOwned))
       }
     }
 
     return { custom }
-  })
+  }
 
-  function fromPlugin(id: string, def: ToolDefinition): Tool.Info {
+  export const state = Instance.state(compute)
+
+  /** Evict imported project tools and plugin tools after a trust transition. */
+  export function invalidate() {
+    State.clear(Instance.directory, compute)
+  }
+
+  function fromPlugin(id: string, def: ToolDefinition, projectOwned = false): Tool.Info {
     return Tool.define(id, async (initCtx) => ({
       parameters: z.object(def.args),
       description: def.description,
       execute: async (args, ctx) => {
+        // Cache eviction removes the tool from future registries. This check is
+        // the fail-closed guard for a caller that retained an initialized tool
+        // object across revocation.
+        if (projectOwned) await ProjectTrust.require(Instance.project, "project_plugin")
         const pluginCtx = {
           ...ctx,
           directory: Instance.directory,
           worktree: Instance.worktree,
         } as unknown as PluginToolContext
         const result = await def.execute(args as any, pluginCtx)
-        const out = await Truncate.output(result, {}, initCtx?.agent)
+        const out = await Truncate.output(result, { sessionID: ctx.sessionID }, initCtx?.agent)
         return {
           title: "",
           output: out.truncated ? out.content : result,
@@ -137,23 +169,47 @@ export namespace ToolRegistry {
       ArtifactSnapshotTool,
       AtlasTool,
       AtlasRecordTool,
-      NotebookTool,
-      RKernelTool,
+      PythonTool,
+      RTool,
       ArtifactTool,
-      LearnTool,
-      ModalTool,
       ComputeJobTool,
-      ...custom,
+      ...custom.filter((tool) => !compatibility.has(tool.id) && tool.id !== PythonTool.id && tool.id !== RTool.id),
     ]
   }
 
   const ARTIFACT_TOOL_ID = "artifact"
   const ARTIFACT_AGENTS = ["research", "biology", "ml"]
 
-  const MODAL_AGENTS = ["research", "biology", "physics", "ml"]
+  const COMPUTE_AGENTS = ["research", "biology", "physics", "ml"]
 
   export async function ids() {
     return all().then((x) => x.map((t) => t.id))
+  }
+
+  /**
+   * Resolve an executable tool by name without adding compatibility aliases to
+   * the model-facing registry. This keeps old persisted calls and explicit
+   * dispatchers working while `ids()` and `tools()` advertise only canonical
+   * names.
+   */
+  export async function resolve(
+    id: string,
+    model?: {
+      providerID: string
+      modelID: string
+    },
+    agent?: Agent.Info,
+  ) {
+    const alias = compatibility.get(id)
+    if (alias) {
+      using _ = log.time(alias.id)
+      return {
+        id: alias.id,
+        ...(await alias.init({ agent })),
+      }
+    }
+    if (!model) return
+    return (await tools(model, agent)).find((tool) => tool.id === id)
   }
 
   export async function tools(
@@ -177,8 +233,8 @@ export namespace ToolRegistry {
             return !!agent?.name && ARTIFACT_AGENTS.includes(agent.name)
           }
 
-          if (t.id === "modal" || t.id === "compute_job") {
-            return !!agent?.name && MODAL_AGENTS.includes(agent.name)
+          if (t.id === "compute_job") {
+            return !!agent?.name && COMPUTE_AGENTS.includes(agent.name)
           }
 
           // Enable websearch/codesearch for zen users OR via enable flag

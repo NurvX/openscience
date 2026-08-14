@@ -12,17 +12,37 @@ type Options = {
   access?: SessionFilesystem.Access
 }
 
-export async function assertExternalDirectory(ctx: Tool.Context, target?: string, options?: Options) {
+export type AuthorizedPath = { path: string; managedToolOutput?: boolean }
+
+/** The agent-facing cwd is the isolated workspace owned by this session. */
+export async function sessionToolDirectory(ctx: Pick<Tool.Context, "sessionID">) {
+  if (!ctx.sessionID.startsWith("ses_")) return Instance.directory
+  return SessionFilesystem.workspace(ctx.sessionID)
+}
+
+export async function assertExternalDirectory(
+  ctx: Tool.Context,
+  target?: string,
+  options?: Options,
+): Promise<AuthorizedPath | undefined> {
   if (!target) return
 
   const canonical = await Filesystem.canonical(target)
   if (!canonical) throw new SessionFilesystem.InvalidPathError({ path: path.resolve(target) })
   if (options?.bypass) return { path: canonical }
 
-  const internal = await Instance.containsCanonicalPath(canonical)
+  const workspace = ctx.sessionID.startsWith("ses_") ? await SessionFilesystem.workspace(ctx.sessionID) : undefined
+  const canonicalWorkspace = workspace ? await Filesystem.canonical(workspace) : undefined
+  const internal =
+    (canonicalWorkspace ? Filesystem.contains(canonicalWorkspace, canonical) : false) ||
+    (await Instance.containsCanonicalPath(canonical))
+  const owned =
+    !internal && ctx.sessionID.startsWith("ses_")
+      ? await SessionFilesystem.ownsToolOutput({ sessionID: ctx.sessionID, path: canonical })
+      : false
   const access = options?.access ?? "read"
 
-  if (!internal) {
+  if (!internal && !owned) {
     const kind = options?.kind ?? "file"
     const parentDir = kind === "directory" ? canonical : path.dirname(canonical)
     const glob = path.join(parentDir, "*")
@@ -45,9 +65,10 @@ export async function assertExternalDirectory(ctx: Tool.Context, target?: string
   // Direct unit tests use a deliberately synthetic context. Production tool
   // contexts always carry a real session id and therefore fail closed here.
   if (!ctx.sessionID.startsWith("ses_")) return { path: canonical }
-  return SessionFilesystem.authorize({
+  const authorized = await SessionFilesystem.authorize({
     sessionID: ctx.sessionID,
     path: canonical,
     access,
   })
+  return { ...authorized, ...(owned ? { managedToolOutput: true } : {}) }
 }

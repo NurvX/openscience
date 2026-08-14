@@ -1,19 +1,189 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
+import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from "child_process"
 import path from "path"
 import os from "os"
 import { Global } from "../global"
 import { Log } from "../util/log"
 import { BunProc } from "../bun"
-import { $, readableStreamToText } from "bun"
+import { $ as bunShell, readableStreamToText } from "bun"
 import fs from "fs/promises"
+import fsSync from "fs"
 import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
 import { Archive } from "../util/archive"
 import { ProjectTrust } from "../project/trust"
+import { OpenScience } from "../openscience"
+import { AsyncLocalStorage } from "node:async_hooks"
+import { Sandbox } from "../sandbox/sandbox"
+import { AuthoritySignal } from "../project/authority-signal"
+import { WindowsJobLauncher } from "../process/windows-job-launcher"
+
+interface LaunchContext {
+  root: string
+  options: Sandbox.Options
+  /** Built-in, app-owned support roots required beside an executable. */
+  readable?: string[]
+  /** Built-in server definitions may name trusted support files in argv. A
+   * configured server's argv is project/user input and must never widen read
+   * access merely by naming an arbitrary host path. */
+  allowArgumentReadDirectories: boolean
+  register(process: ChildProcessWithoutNullStreams, windowsRelease?: string): Promise<() => void>
+}
+
+const launch = new AsyncLocalStorage<LaunchContext>()
+const environment = (overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv => ({
+  ...OpenScience.kernelEnv(process.env),
+  ...overrides,
+})
+
+/**
+ * Bind the final language-server process creation to the project whose LSP
+ * request is being served. Preparation (binary discovery/downloads) stays
+ * outside the authority lease; the actual spawn below re-checks trust while
+ * holding it and registers the child before a revocation can be acknowledged.
+ */
+export function withLSPSandbox<T>(input: LaunchContext, action: () => Promise<T>): Promise<T> {
+  return launch.run(input, action)
+}
+
+// child_process.spawn inherits process.env when `env` is omitted. Keep that
+// dangerous default out of this module: language servers need toolchain/runtime
+// discovery, never account, provider, or cloud credentials.
+async function spawn(command: string, argsOrOptions?: any, maybeOptions?: any) {
+  const context = launch.getStore()
+  if (!context) throw new Error("Language-server spawn attempted outside its trusted launch context")
+
+  const args: string[] = Array.isArray(argsOrOptions) ? argsOrOptions : []
+  const options = (Array.isArray(argsOrOptions) ? maybeOptions : argsOrOptions) ?? {}
+  return AuthoritySignal.exclusive(async () => {
+    await ProjectTrust.require(Instance.project, "project_lsp")
+    const sandbox = Sandbox.wrapArgv({
+      file: command,
+      args,
+      workspace: [Instance.directory, Instance.worktree],
+      readable: [
+        context.root,
+        ...(context.readable ?? []),
+        ...(context.allowArgumentReadDirectories
+          ? args.flatMap((value) => {
+              if (!path.isAbsolute(value)) return []
+              try {
+                return [fsSync.statSync(value).isDirectory() ? value : path.dirname(value)]
+              } catch {
+                return []
+              }
+            })
+          : []),
+      ],
+      unreadable: OpenScience.kernelSensitivePaths(),
+      options: context.options,
+    })
+    const wrapped = WindowsJobLauncher.wrap({ file: sandbox.file, args: sandbox.args })
+
+    let child: ChildProcessWithoutNullStreams
+    try {
+      const env = environment(options.env)
+      if (sandbox.temporary) {
+        env.HOME = sandbox.temporary
+        env.XDG_CONFIG_HOME = path.join(sandbox.temporary, "config")
+        env.XDG_CACHE_HOME = path.join(sandbox.temporary, "cache")
+        env.XDG_DATA_HOME = path.join(sandbox.temporary, "data")
+        env.XDG_STATE_HOME = path.join(sandbox.temporary, "state")
+      }
+      child = spawnProcess(wrapped.file, wrapped.args, {
+        ...options,
+        shell: false,
+        env,
+        // A private process group lets durable ownership reap language-server
+        // helpers and background descendants after this server process dies.
+        detached: process.platform !== "win32",
+      }) as ChildProcessWithoutNullStreams
+    } catch (error) {
+      Sandbox.cleanup(sandbox)
+      throw error
+    }
+
+    let unregister: (() => void) | undefined
+    let finished = false
+    const cleanup = () => {
+      finished = true
+      unregister?.()
+      unregister = undefined
+      Sandbox.cleanup(sandbox)
+    }
+    child.once("exit", cleanup)
+    child.once("error", cleanup)
+    try {
+      // The authority lease remains held until exact process identity and
+      // project ownership are durably recorded by the caller.
+      unregister = await context.register(child, wrapped.release)
+      // A fast child can exit while durable registration is in flight. The
+      // first cleanup saw no callback; run it again now so ownership is not
+      // stranded in the ledger.
+      if (finished) cleanup()
+    } catch (error) {
+      child.kill()
+      cleanup()
+      throw error
+    }
+    return child
+  })
+}
+
+export const spawnLSPChild = spawn
+
+type ClangdRelease = {
+  tag_name?: string
+  assets?: { name?: string; browser_download_url?: string }[]
+}
+
+export function selectClangdReleaseAsset(
+  release: ClangdRelease,
+  platform: string,
+): { tag: string; name: string; downloadURL: string; format: "zip" | "tar" } | undefined {
+  const tag = release.tag_name
+  if (!tag || !/^[0-9]{1,4}(?:\.[0-9]{1,4}){1,3}$/.test(tag)) return
+
+  const token = { darwin: "mac", linux: "linux", win32: "windows" }[platform]
+  if (!token) return
+  const expected = [
+    { name: `clangd-${token}-${tag}.zip`, format: "zip" as const },
+    { name: `clangd-${token}-${tag}.tar.xz`, format: "tar" as const },
+  ]
+  for (const candidate of expected) {
+    const asset = (release.assets ?? []).find((item) => item.name === candidate.name)
+    if (!asset?.browser_download_url) continue
+    let url: URL
+    try {
+      url = new URL(asset.browser_download_url)
+    } catch {
+      continue
+    }
+    if (url.origin !== "https://github.com" || url.username || url.password || url.search || url.hash) continue
+    if (url.pathname !== `/clangd/clangd/releases/download/${tag}/${candidate.name}`) continue
+    return { tag, name: candidate.name, downloadURL: url.href, format: candidate.format }
+  }
+}
 
 export namespace LSPServer {
   const log = Log.create({ service: "lsp.server" })
+
+  const bunSpawn: typeof Bun.spawn = ((commandOrOptions: any, options?: any) => {
+    if (Array.isArray(commandOrOptions)) {
+      return Bun.spawn(commandOrOptions, {
+        ...options,
+        env: environment(options?.env),
+      })
+    }
+    return Bun.spawn({
+      ...commandOrOptions,
+      env: environment(commandOrOptions?.env),
+    })
+  }) as typeof Bun.spawn
+
+  const $: typeof bunShell = ((strings: TemplateStringsArray, ...expressions: any[]) =>
+    bunShell(strings, ...expressions).env(environment())) as typeof bunShell
+
   const pathExists = async (p: string) =>
     fs
       .stat(p)
@@ -57,6 +227,10 @@ export namespace LSPServer {
     id: string
     extensions: string[]
     global?: boolean
+    /** True when command/argv came from global or project configuration. */
+    configured?: boolean
+    /** Built-in, app-owned support roots required beside an executable. */
+    readable?: string[]
     root: RootFunction
     spawn(root: string): Promise<Handle | undefined>
   }
@@ -90,7 +264,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(deno)
       return {
-        process: spawn(deno, ["lsp"], {
+        process: await spawn(deno, ["lsp"], {
           cwd: root,
         }),
         project,
@@ -110,10 +284,10 @@ export namespace LSPServer {
       log.info("typescript server", { tsserver })
       if (!tsserver) return
       const project = await projectBinary(tsserver)
-      const proc = spawn(BunProc.which(), ["x", "typescript-language-server", "--stdio"], {
+      const proc = await spawn(BunProc.which(), ["x", "typescript-language-server", "--stdio"], {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -147,10 +321,10 @@ export namespace LSPServer {
         )
         if (!(await Bun.file(js).exists())) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "@vue/language-server"], {
+          await bunSpawn([BunProc.which(), "install", "@vue/language-server"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
             stdout: "pipe",
@@ -163,10 +337,10 @@ export namespace LSPServer {
       }
       args.push("--stdio")
       const project = await projectBinary(binary)
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -225,10 +399,10 @@ export namespace LSPServer {
         log.info("installed VS Code ESLint server", { serverPath })
       }
 
-      const proc = spawn(BunProc.which(), [serverPath, "--stdio"], {
+      const proc = await spawn(BunProc.which(), [serverPath, "--stdio"], {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -282,12 +456,12 @@ export namespace LSPServer {
 
       if (lintBin) {
         const project = await projectBinary(lintBin)
-        const proc = Bun.spawn([lintBin, "--help"], { stdout: "pipe" })
+        const proc = bunSpawn([lintBin, "--help"], { stdout: "pipe" })
         await proc.exited
         const help = await readableStreamToText(proc.stdout)
         if (help.includes("--lsp")) {
           return {
-            process: spawn(lintBin, ["--lsp"], {
+            process: await spawn(lintBin, ["--lsp"], {
               cwd: root,
             }),
             project,
@@ -303,7 +477,7 @@ export namespace LSPServer {
       if (serverBin) {
         const project = await projectBinary(serverBin)
         return {
-          process: spawn(serverBin, [], {
+          process: await spawn(serverBin, [], {
             cwd: root,
           }),
           project,
@@ -365,10 +539,10 @@ export namespace LSPServer {
         args = ["x", "biome", "lsp-proxy", "--stdio"]
       }
 
-      const proc = spawn(bin, args, {
+      const proc = await spawn(bin, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -397,9 +571,9 @@ export namespace LSPServer {
         if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
 
         log.info("installing gopls")
-        const proc = Bun.spawn({
+        const proc = bunSpawn({
           cmd: ["go", "install", "golang.org/x/tools/gopls@latest"],
-          env: { ...process.env, GOBIN: Global.Path.bin },
+          env: { ...OpenScience.kernelEnv(process.env), GOBIN: Global.Path.bin },
           stdout: "pipe",
           stderr: "pipe",
           stdin: "pipe",
@@ -416,7 +590,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(bin!)
       return {
-        process: spawn(bin!, {
+        process: await spawn(bin!, {
           cwd: root,
         }),
         project,
@@ -441,7 +615,7 @@ export namespace LSPServer {
         }
         if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
         log.info("installing rubocop")
-        const proc = Bun.spawn({
+        const proc = bunSpawn({
           cmd: ["gem", "install", "rubocop", "--bindir", Global.Path.bin],
           stdout: "pipe",
           stderr: "pipe",
@@ -459,7 +633,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(bin!)
       return {
-        process: spawn(bin!, ["--lsp"], {
+        process: await spawn(bin!, ["--lsp"], {
           cwd: root,
         }),
         project,
@@ -524,7 +698,7 @@ export namespace LSPServer {
       }
 
       project = (await projectBinary(binary)) || project
-      const proc = spawn(binary, ["server"], {
+      const proc = await spawn(binary, ["server"], {
         cwd: root,
       })
 
@@ -547,10 +721,10 @@ export namespace LSPServer {
         const js = path.join(Global.Path.bin, "node_modules", "pyright", "dist", "pyright-langserver.js")
         if (!(await Bun.file(js).exists())) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "pyright"], {
+          await bunSpawn([BunProc.which(), "install", "pyright"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
           }).exited
@@ -579,10 +753,10 @@ export namespace LSPServer {
       }
 
       project = (await projectBinary(binary)) || project
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -640,7 +814,7 @@ export namespace LSPServer {
           await $`mix deps.get && mix compile && mix elixir_ls.release2 -o release`
             .quiet()
             .cwd(path.join(Global.Path.bin, "elixir-ls-master"))
-            .env({ MIX_ENV: "prod", ...process.env })
+            .env({ MIX_ENV: "prod", ...OpenScience.kernelEnv(process.env) })
 
           log.info(`installed elixir-ls`, {
             path: elixirLsPath,
@@ -650,7 +824,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(binary)
       return {
-        process: spawn(binary, {
+        process: await spawn(binary, {
           cwd: root,
         }),
         project,
@@ -764,7 +938,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -788,7 +962,7 @@ export namespace LSPServer {
 
         if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
         log.info("installing csharp-ls via dotnet tool")
-        const proc = Bun.spawn({
+        const proc = bunSpawn({
           cmd: ["dotnet", "tool", "install", "csharp-ls", "--tool-path", Global.Path.bin],
           stdout: "pipe",
           stderr: "pipe",
@@ -806,7 +980,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -830,7 +1004,7 @@ export namespace LSPServer {
 
         if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
         log.info("installing fsautocomplete via dotnet tool")
-        const proc = Bun.spawn({
+        const proc = bunSpawn({
           cmd: ["dotnet", "tool", "install", "fsautocomplete", "--tool-path", Global.Path.bin],
           stdout: "pipe",
           stderr: "pipe",
@@ -848,7 +1022,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -867,7 +1041,7 @@ export namespace LSPServer {
       if (sourcekit) {
         const project = await projectBinary(sourcekit)
         return {
-          process: spawn(sourcekit, {
+          process: await spawn(sourcekit, {
             cwd: root,
           }),
           project,
@@ -888,7 +1062,7 @@ export namespace LSPServer {
       const project = await projectBinary(bin)
 
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -936,7 +1110,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -946,6 +1120,7 @@ export namespace LSPServer {
 
   export const Clangd: Info = {
     id: "clangd",
+    readable: [path.join(Global.Path.bin, "clangd-current")],
     root: NearestRoot(["compile_commands.json", "compile_flags.txt", ".clangd", "CMakeLists.txt", "Makefile"]),
     extensions: [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
     async spawn(root) {
@@ -954,7 +1129,7 @@ export namespace LSPServer {
       if (fromPath) {
         const project = await projectBinary(fromPath)
         return {
-          process: spawn(fromPath, args, {
+          process: await spawn(fromPath, args, {
             cwd: root,
           }),
           project,
@@ -962,11 +1137,23 @@ export namespace LSPServer {
       }
 
       const ext = process.platform === "win32" ? ".exe" : ""
+      const managedRoot = path.join(Global.Path.bin, "clangd-current")
+      const managed = path.join(managedRoot, "bin", "clangd" + ext)
+      if (await Bun.file(managed).exists()) {
+        const project = await projectBinary(managed)
+        return {
+          process: await spawn(managed, args, {
+            cwd: root,
+          }),
+          project,
+        }
+      }
+
       const direct = path.join(Global.Path.bin, "clangd" + ext)
       if (await Bun.file(direct).exists()) {
         const project = await projectBinary(direct)
         return {
-          process: spawn(direct, args, {
+          process: await spawn(direct, args, {
             cwd: root,
           }),
           project,
@@ -981,7 +1168,7 @@ export namespace LSPServer {
         if (await Bun.file(candidate).exists()) {
           const project = await projectBinary(candidate)
           return {
-            process: spawn(candidate, args, {
+            process: await spawn(candidate, args, {
               cwd: root,
             }),
             project,
@@ -998,47 +1185,24 @@ export namespace LSPServer {
         return
       }
 
-      const release: {
-        tag_name?: string
-        assets?: { name?: string; browser_download_url?: string }[]
-      } = await releaseResponse.json()
-
-      const tag = release.tag_name
-      if (!tag) {
-        log.error("clangd release did not include a tag name")
-        return
-      }
+      const release: ClangdRelease = await releaseResponse.json()
       const platform = process.platform
-      const tokens: Record<string, string> = {
-        darwin: "mac",
-        linux: "linux",
-        win32: "windows",
-      }
-      const token = tokens[platform]
-      if (!token) {
+      if (!(["darwin", "linux", "win32"] as string[]).includes(platform)) {
         log.error(`Platform ${platform} is not supported by clangd auto-download`)
         return
       }
 
-      const assets = release.assets ?? []
-      const valid = (item: { name?: string; browser_download_url?: string }) => {
-        if (!item.name) return false
-        if (!item.browser_download_url) return false
-        if (!item.name.includes(token)) return false
-        return item.name.includes(tag)
-      }
-
-      const asset =
-        assets.find((item) => valid(item) && item.name?.endsWith(".zip")) ??
-        assets.find((item) => valid(item) && item.name?.endsWith(".tar.xz")) ??
-        assets.find((item) => valid(item))
-      if (!asset?.name || !asset.browser_download_url) {
-        log.error("clangd could not match release asset", { tag, platform })
+      const asset = selectClangdReleaseAsset(release, platform)
+      if (!asset) {
+        log.error("clangd release metadata did not contain a trusted platform asset", {
+          tag: release.tag_name,
+          platform,
+        })
         return
       }
 
-      const name = asset.name
-      const downloadResponse = await fetch(asset.browser_download_url)
+      const { tag, name } = asset
+      const downloadResponse = await fetch(asset.downloadURL)
       if (!downloadResponse.ok) {
         log.error("Failed to download clangd")
         return
@@ -1052,14 +1216,7 @@ export namespace LSPServer {
       }
       await Bun.write(archive, buf)
 
-      const zip = name.endsWith(".zip")
-      const tar = name.endsWith(".tar.xz")
-      if (!zip && !tar) {
-        log.error("clangd encountered unsupported asset", { asset: name })
-        return
-      }
-
-      if (zip) {
+      if (asset.format === "zip") {
         const ok = await Archive.extractZip(archive, Global.Path.bin)
           .then(() => true)
           .catch((error) => {
@@ -1068,29 +1225,34 @@ export namespace LSPServer {
           })
         if (!ok) return
       }
-      if (tar) {
+      if (asset.format === "tar") {
         await $`tar -xf ${archive}`.cwd(Global.Path.bin).quiet().nothrow()
       }
       await fs.rm(archive, { force: true })
 
       const bin = path.join(Global.Path.bin, "clangd_" + tag, "bin", "clangd" + ext)
-      if (!(await Bun.file(bin).exists())) {
+      const installed = await fs.lstat(bin).catch(() => undefined)
+      if (!installed?.isFile()) {
         log.error("Failed to extract clangd binary")
         return
       }
 
-      if (platform !== "win32") {
-        await $`chmod +x ${bin}`.quiet().nothrow()
+      // Launch through a fixed app-owned path. Release metadata can choose only
+      // a validated official asset and never becomes an executable argv value.
+      await fs.rm(managedRoot, { recursive: true, force: true })
+      await fs.rename(path.dirname(path.dirname(bin)), managedRoot)
+      const managedFile = await fs.lstat(managed).catch(() => undefined)
+      if (!managedFile?.isFile()) {
+        log.error("Failed to install clangd at its managed path")
+        return
       }
+      if (platform !== "win32") await fs.chmod(managed, 0o755)
 
-      await fs.unlink(path.join(Global.Path.bin, "clangd")).catch(() => {})
-      await fs.symlink(bin, path.join(Global.Path.bin, "clangd")).catch(() => {})
+      log.info(`installed clangd`, { bin: managed, version: tag })
 
-      log.info(`installed clangd`, { bin })
-
-      const project = await projectBinary(bin)
+      const project = await projectBinary(managed)
       return {
-        process: spawn(bin, args, {
+        process: await spawn(managed, args, {
           cwd: root,
         }),
         project,
@@ -1109,10 +1271,10 @@ export namespace LSPServer {
         const js = path.join(Global.Path.bin, "node_modules", "svelte-language-server", "bin", "server.js")
         if (!(await Bun.file(js).exists())) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "svelte-language-server"], {
+          await bunSpawn([BunProc.which(), "install", "svelte-language-server"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
             stdout: "pipe",
@@ -1125,10 +1287,10 @@ export namespace LSPServer {
       }
       args.push("--stdio")
       const project = await projectBinary(binary)
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -1159,10 +1321,10 @@ export namespace LSPServer {
         const js = path.join(Global.Path.bin, "node_modules", "@astrojs", "language-server", "bin", "nodeServer.js")
         if (!(await Bun.file(js).exists())) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "@astrojs/language-server"], {
+          await bunSpawn([BunProc.which(), "install", "@astrojs/language-server"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
             stdout: "pipe",
@@ -1175,10 +1337,10 @@ export namespace LSPServer {
       }
       args.push("--stdio")
       const binaryProject = await projectBinary(binary)
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -1271,7 +1433,7 @@ export namespace LSPServer {
       )
       const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "openscience-jdtls-data"))
       return {
-        process: spawn(
+        process: await spawn(
           java,
           [
             "-jar",
@@ -1382,7 +1544,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(launcherScript)
       return {
-        process: spawn(launcherScript, ["--stdio"], {
+        process: await spawn(launcherScript, ["--stdio"], {
           cwd: root,
         }),
         project,
@@ -1410,10 +1572,10 @@ export namespace LSPServer {
         const exists = await Bun.file(js).exists()
         if (!exists) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "yaml-language-server"], {
+          await bunSpawn([BunProc.which(), "install", "yaml-language-server"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
             stdout: "pipe",
@@ -1426,10 +1588,10 @@ export namespace LSPServer {
       }
       args.push("--stdio")
       const project = await projectBinary(binary)
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -1574,7 +1736,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -1593,10 +1755,10 @@ export namespace LSPServer {
         const js = path.join(Global.Path.bin, "node_modules", "intelephense", "lib", "intelephense.js")
         if (!(await Bun.file(js).exists())) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "intelephense"], {
+          await bunSpawn([BunProc.which(), "install", "intelephense"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
             stdout: "pipe",
@@ -1609,10 +1771,10 @@ export namespace LSPServer {
       }
       args.push("--stdio")
       const project = await projectBinary(binary)
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -1640,7 +1802,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(prisma)
       return {
-        process: spawn(prisma, ["language-server"], {
+        process: await spawn(prisma, ["language-server"], {
           cwd: root,
         }),
         project,
@@ -1660,7 +1822,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(dart)
       return {
-        process: spawn(dart, ["language-server", "--lsp"], {
+        process: await spawn(dart, ["language-server", "--lsp"], {
           cwd: root,
         }),
         project,
@@ -1680,7 +1842,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -1698,10 +1860,10 @@ export namespace LSPServer {
         const js = path.join(Global.Path.bin, "node_modules", "bash-language-server", "out", "cli.js")
         if (!(await Bun.file(js).exists())) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "bash-language-server"], {
+          await bunSpawn([BunProc.which(), "install", "bash-language-server"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
             stdout: "pipe",
@@ -1714,10 +1876,10 @@ export namespace LSPServer {
       }
       args.push("start")
       const project = await projectBinary(binary)
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -1806,7 +1968,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, ["serve"], {
+        process: await spawn(bin, ["serve"], {
           cwd: root,
         }),
         project,
@@ -1904,7 +2066,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, {
+        process: await spawn(bin, {
           cwd: root,
         }),
         project,
@@ -1923,10 +2085,10 @@ export namespace LSPServer {
         const js = path.join(Global.Path.bin, "node_modules", "dockerfile-language-server-nodejs", "lib", "server.js")
         if (!(await Bun.file(js).exists())) {
           if (Flag.OPENSCIENCE_DISABLE_LSP_DOWNLOAD) return
-          await Bun.spawn([BunProc.which(), "install", "dockerfile-language-server-nodejs"], {
+          await bunSpawn([BunProc.which(), "install", "dockerfile-language-server-nodejs"], {
             cwd: Global.Path.bin,
             env: {
-              ...process.env,
+              ...OpenScience.kernelEnv(process.env),
               BUN_BE_BUN: "1",
             },
             stdout: "pipe",
@@ -1939,10 +2101,10 @@ export namespace LSPServer {
       }
       args.push("--stdio")
       const project = await projectBinary(binary)
-      const proc = spawn(binary, args, {
+      const proc = await spawn(binary, args, {
         cwd: root,
         env: {
-          ...process.env,
+          ...OpenScience.kernelEnv(process.env),
           BUN_BE_BUN: "1",
         },
       })
@@ -1965,7 +2127,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(gleam)
       return {
-        process: spawn(gleam, ["lsp"], {
+        process: await spawn(gleam, ["lsp"], {
           cwd: root,
         }),
         project,
@@ -1988,7 +2150,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, ["listen"], {
+        process: await spawn(bin, ["listen"], {
           cwd: root,
         }),
         project,
@@ -2018,10 +2180,10 @@ export namespace LSPServer {
       }
       const project = await projectBinary(nixd)
       return {
-        process: spawn(nixd, [], {
+        process: await spawn(nixd, [], {
           cwd: root,
           env: {
-            ...process.env,
+            ...OpenScience.kernelEnv(process.env),
           },
         }),
         project,
@@ -2119,7 +2281,7 @@ export namespace LSPServer {
 
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, { cwd: root }),
+        process: await spawn(bin, { cwd: root }),
         project,
       }
     },
@@ -2137,7 +2299,7 @@ export namespace LSPServer {
       }
       const project = await projectBinary(bin)
       return {
-        process: spawn(bin, ["--lsp"], {
+        process: await spawn(bin, ["--lsp"], {
           cwd: root,
         }),
         project,

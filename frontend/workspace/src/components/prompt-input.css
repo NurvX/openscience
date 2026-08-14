@@ -3,11 +3,11 @@
   min-height: 44px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 8px 6px 12px;
-  border: 1px solid var(--border-weak-base);
-  border-radius: 8px;
-  background: var(--surface-raised-stronger-non-alpha);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised-strong);
   color: var(--text-strong);
 }
 
@@ -20,7 +20,7 @@
 
 .workspace-composer__setup strong {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
   line-height: 17px;
 }
 
@@ -37,13 +37,13 @@
   min-height: 32px;
   flex: 0 0 auto;
   padding-inline: 10px;
-  border: 1px solid var(--border-weak-base);
-  border-radius: 6px;
+  border: 0;
+  border-radius: var(--radius-xs);
   background: var(--surface-base);
   color: var(--text-strong);
   font: inherit;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--font-weight-regular);
   cursor: pointer;
 }
 
@@ -51,32 +51,134 @@
   background: var(--surface-raised-base-hover);
 }
 
+.workspace-composer__context {
+  gap: 6px;
+  padding: 7px 8px 0;
+}
+
+.workspace-composer__context-item {
+  height: 42px;
+  gap: 2px;
+  padding: 4px 5px 4px 7px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--surface-weak);
+  transition: background-color 150ms var(--ease-standard);
+}
+
+.workspace-composer__context-item:hover {
+  background: var(--surface-raised-base-hover);
+}
+
+.workspace-composer__context-heading {
+  min-width: 0;
+  min-height: 20px;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: var(--font-weight-medium);
+  line-height: 16px;
+}
+
+.workspace-composer__context-remove {
+  width: 32px;
+  height: 32px;
+  margin-right: -2px;
+  opacity: 0.58;
+}
+
+.workspace-composer__context-remove:hover,
+.workspace-composer__context-remove:focus-visible {
+  opacity: 1;
+}
+
+.workspace-composer__context-comment {
+  margin-left: 20px;
+  padding-right: 4px;
+  color: var(--text-weak);
+  font-size: 12px;
+  font-weight: var(--font-weight-regular);
+  line-height: 15px;
+}
+
 .workspace-composer__attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 10px 10px 0;
+  padding: 8px 8px 0;
+}
+
+.workspace-composer__dropzone {
+  border-radius: inherit;
+  background: var(--surface-raised-stronger-non-alpha);
+  backdrop-filter: blur(3px);
+}
+
+.workspace-composer__dropzone-copy {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 9px;
+  color: var(--text-weak);
+}
+
+.workspace-composer__dropzone-copy > [data-component="icon"] {
+  grid-row: 1 / span 2;
+}
+
+.workspace-composer__dropzone-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  line-height: 17px;
+}
+
+.workspace-composer__dropzone-copy span {
+  color: var(--text-weak);
+  font-size: 11.5px;
+  font-weight: var(--font-weight-regular);
+  line-height: 15px;
 }
 
 .workspace-composer__attachment {
   min-width: 0;
   max-width: min(260px, 100%);
-  height: 42px;
+  height: 44px;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) 32px;
   align-items: center;
   gap: 7px;
   padding: 5px 5px 5px 6px;
-  border: 1px solid color-mix(in srgb, var(--border-weak-base) 82%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 74%, transparent);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-weak);
+}
+
+.workspace-composer__attachment-open {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border-radius: var(--radius-xs);
+  color: inherit;
+  text-decoration: none;
+}
+
+.workspace-composer__attachment-open:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.workspace-composer__attachment-open:hover .workspace-composer__attachment-copy strong {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .workspace-composer__attachment-icon,
 .workspace-composer__attachment-preview {
   width: 30px;
   height: 30px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
 }
 
 .workspace-composer__attachment-icon {
@@ -89,7 +191,6 @@
 
 .workspace-composer__attachment-preview {
   object-fit: cover;
-  cursor: zoom-in;
 }
 
 .workspace-composer__attachment-copy {
@@ -108,24 +209,26 @@
 
 .workspace-composer__attachment-copy strong {
   color: var(--text-strong);
-  font-size: 11.5px;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-weight: var(--font-weight-medium);
+  line-height: 16px;
 }
 
 .workspace-composer__attachment-copy span {
   color: var(--text-weak);
-  font-size: 10px;
-  text-transform: lowercase;
+  font-size: 12px;
+  line-height: 15px;
 }
 
 .workspace-composer__attachment-remove {
-  width: 24px;
-  height: 24px;
+  position: relative;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   background: transparent;
   cursor: pointer;
   opacity: 0.72;
@@ -135,285 +238,6 @@
 .workspace-composer__attachment-remove:focus-visible {
   background: var(--surface-raised-base-hover);
   opacity: 1;
-}
-
-.workspace-composer__overflow {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.workspace-composer__overflow > summary {
-  position: relative;
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid var(--border-weak-base);
-  border-radius: 10px;
-  background: var(--surface-raised-strong);
-  color: var(--text-weak);
-  cursor: pointer;
-  list-style: none;
-}
-
-.workspace-composer__overflow > summary [data-slot="icon-svg"] {
-  width: 17px;
-  height: 17px;
-}
-
-.workspace-composer__overflow > summary::-webkit-details-marker {
-  display: none;
-}
-
-.workspace-composer__overflow > summary:hover,
-.workspace-composer__overflow[open] > summary {
-  background: var(--surface-raised-base-hover);
-  color: var(--text-strong);
-}
-
-.workspace-composer__overflow > summary:focus-visible {
-  outline: 2px solid #4f8cff !important;
-  outline-offset: 1px;
-  box-shadow: none !important;
-}
-
-.workspace-composer__overflow > div {
-  position: absolute;
-  z-index: 70;
-  left: 0;
-  bottom: calc(100% + 6px);
-  width: min(286px, calc(100vw - 24px));
-  max-height: min(360px, calc(100dvh - 160px));
-  overflow-y: auto;
-  padding: 6px;
-  border: 1px solid var(--border-base);
-  border-radius: 13px;
-  background: var(--surface-raised-stronger-non-alpha);
-  box-shadow: 0 12px 30px color-mix(in srgb, #000 18%, transparent);
-}
-
-.workspace-composer__overflow button {
-  width: 100%;
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-strong);
-  font: inherit;
-  font-size: 13.5px;
-  font-weight: 450;
-  line-height: 18px;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.workspace-composer__capability-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.workspace-composer__capability-list button > span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-composer__capability-value {
-  min-width: 0;
-  max-width: 142px;
-  display: inline-flex;
-  align-items: center;
-  overflow: hidden;
-  flex: 0 0 auto;
-  color: var(--text-weaker);
-  font-size: 12.5px;
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-composer__capability-chevron {
-  display: inline-block;
-  margin-left: 5px;
-  color: var(--text-weaker);
-  font-size: 17px;
-  line-height: 1;
-  transform: translateY(1px);
-}
-
-.workspace-composer__capability-switch {
-  position: relative;
-  width: 34px;
-  height: 20px;
-  flex: 0 0 34px;
-  border-radius: 999px;
-  background: var(--surface-raised-base-active);
-  box-shadow: inset 0 0 0 1px var(--border-base);
-  transition: background 140ms ease;
-}
-
-.workspace-composer__capability-switch > span {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: var(--text-strong);
-  box-shadow: 0 1px 3px color-mix(in srgb, #000 26%, transparent);
-  transition: transform 140ms ease;
-}
-
-.workspace-composer__capability-switch[data-checked="true"] {
-  background: #4f8cff;
-  box-shadow: none;
-}
-
-.workspace-composer__capability-switch[data-checked="true"] > span {
-  transform: translateX(14px);
-}
-
-.workspace-composer__capability-divider {
-  height: 1px;
-  margin: 7px 10px;
-  background: var(--border-weak-base);
-}
-
-.workspace-composer__overflow > .workspace-composer__compute-menu {
-  z-index: 71;
-  left: 256px;
-  bottom: 0;
-  width: min(226px, calc(100vw - 24px));
-  max-height: none;
-  overflow: visible;
-}
-
-.workspace-composer__compute-label,
-.workspace-composer__compute-hint {
-  display: block;
-  padding: 5px 10px;
-  color: var(--text-weaker);
-  font-size: 11.5px;
-  line-height: 1.35;
-}
-
-.workspace-composer__compute-label {
-  font-weight: 550;
-}
-
-.workspace-composer__compute-hint {
-  padding-top: 0;
-  white-space: normal;
-}
-
-.workspace-composer__compute-menu button:last-child {
-  justify-content: flex-start;
-  gap: 9px;
-}
-
-.workspace-composer__specialist-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.workspace-composer__specialist-list .workspace-composer__specialist-back {
-  min-height: 38px;
-  justify-content: flex-start;
-  gap: 9px;
-  color: var(--text-strong);
-}
-
-.workspace-composer__specialist-back > span {
-  color: var(--text-weaker);
-  font-size: 19px;
-  line-height: 1;
-}
-
-.workspace-composer__specialist-back strong {
-  font-size: 13.5px;
-  font-weight: 550;
-}
-
-.workspace-composer__specialist-list .workspace-composer__specialist-option {
-  min-height: 48px;
-  align-items: center;
-  padding-block: 7px;
-  white-space: normal;
-}
-
-.workspace-composer__specialist-option > span:first-child {
-  min-width: 0;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.workspace-composer__specialist-option strong,
-.workspace-composer__specialist-option small {
-  display: block;
-}
-
-.workspace-composer__specialist-option strong {
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 520;
-}
-
-.workspace-composer__specialist-option small {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--text-weaker);
-  font-size: 10.5px;
-  font-weight: 400;
-  line-height: 1.3;
-  -webkit-box-orient: vertical;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  -webkit-line-clamp: 1;
-}
-
-.workspace-composer__specialist-option [data-slot="icon-svg"] {
-  flex: 0 0 auto;
-  color: #4f8cff;
-}
-
-.workspace-composer__reviewer-more {
-  min-height: 40px !important;
-}
-
-.workspace-composer__reviewer-more small {
-  display: none;
-}
-
-@media (max-width: 560px) {
-  .workspace-composer__overflow > div {
-    left: -44px;
-    max-height: min(440px, calc(100dvh - 140px));
-  }
-
-  .workspace-composer__overflow > .workspace-composer__compute-menu {
-    left: -44px;
-    bottom: calc(100% + 6px);
-  }
-}
-
-.workspace-composer__overflow button:hover:not(:disabled),
-.workspace-composer__overflow button:focus-visible {
-  background: var(--surface-raised-base-hover);
-}
-
-.workspace-composer__overflow button:disabled {
-  color: var(--text-weaker);
-  cursor: default;
 }
 
 @media (max-width: 719px) {
@@ -437,5 +261,562 @@
 
   .workspace-composer__setup small {
     white-space: normal;
+  }
+}
+
+.workspace-composer__suggestions {
+  z-index: 40;
+  gap: 2px;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-solid, var(--surface-raised-stronger-non-alpha));
+  background-clip: padding-box;
+  box-shadow: var(--atlas-shadow-md);
+  font-family: var(--font-family-sans);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.workspace-composer__suggestion {
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-composer__suggestion:hover,
+.workspace-composer__suggestion:focus-visible {
+  background: var(--color-bg-subtle, var(--surface-raised-base-hover));
+}
+
+.workspace-composer__suggestion:focus-visible {
+  outline: 2px solid var(--focus-lit-ring);
+  outline-offset: -2px;
+}
+
+/* Composer surface
+   ----------------
+   This file is the sole owner of the input surface, editor baseline, utility
+   row, and responsive control geometry. */
+
+form.workspace-composer {
+  --composer-radius-pill: 999px;
+  --composer-editor-font-family: var(--font-family-sans);
+  --composer-editor-font-features: var(--font-family-sans--font-feature-settings, normal);
+  --composer-editor-font-variation: var(--font-family-sans--font-variation-settings, normal);
+  /* Keep the editor on the same type rhythm as the surrounding workspace.
+     Mobile still steps up to 16px below to prevent browser zoom. */
+  --composer-editor-font-size: var(--font-size-base);
+  --composer-editor-font-weight: var(--font-weight-regular);
+  --composer-editor-line-height: 20px;
+  --composer-editor-padding-block-start: 12px;
+  --composer-editor-padding-block-end: 5px;
+  --composer-editor-padding-inline: 14px;
+  min-height: 88px;
+  border: 1px solid var(--border-weak-base);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-solid, var(--surface-raised-stronger-non-alpha));
+  box-shadow: none;
+  transition:
+    border-color 150ms var(--ease-standard),
+    box-shadow 150ms var(--ease-standard);
+}
+
+form.workspace-composer:focus-within {
+  border-color: var(--border-base);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-strong) 5%, transparent);
+}
+
+.workspace-composer__editor {
+  position: relative;
+  max-height: 240px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-base) transparent;
+}
+
+.workspace-composer__editor[data-composer-mode="shell"] {
+  --composer-editor-font-family: var(--font-family-mono);
+  --composer-editor-font-features: var(--font-family-mono--font-feature-settings, normal);
+  --composer-editor-font-variation: var(--font-family-mono--font-variation-settings, normal);
+}
+
+/* One declaration owns every metric that affects the first glyph's baseline.
+   Keeping the placeholder and contenteditable in the same selector prevents
+   utility classes or future component changes from drifting apart. */
+form.workspace-composer :is([data-component="prompt-input"], .workspace-composer__placeholder) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 46px;
+  padding: var(--composer-editor-padding-block-start) var(--composer-editor-padding-inline)
+    var(--composer-editor-padding-block-end);
+  font-family: var(--composer-editor-font-family);
+  font-feature-settings: var(--composer-editor-font-features);
+  font-variation-settings: var(--composer-editor-font-variation);
+  font-kerning: normal;
+  font-optical-sizing: auto;
+  font-size: var(--composer-editor-font-size);
+  font-style: normal;
+  font-weight: var(--composer-editor-font-weight);
+  line-height: var(--composer-editor-line-height);
+  letter-spacing: 0;
+  font-synthesis: none;
+}
+
+form.workspace-composer [data-component="prompt-input"] {
+  display: block;
+  color: var(--text-strong);
+  caret-color: var(--text-strong);
+  overflow-wrap: anywhere;
+  text-align: start;
+  white-space: pre-wrap;
+}
+
+form.workspace-composer .workspace-composer__placeholder {
+  position: absolute;
+  inset: 0 0 auto;
+  overflow: hidden;
+  color: var(--text-weak);
+  pointer-events: none;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+form.workspace-composer .workspace-composer__footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 2px 6px 6px;
+}
+
+form.workspace-composer .workspace-composer__controls,
+form.workspace-composer .workspace-composer__actions {
+  min-width: 0;
+  gap: 2px;
+}
+
+form.workspace-composer .workspace-composer__controls {
+  overflow: visible;
+}
+
+form.workspace-composer .workspace-composer__actions {
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+form.workspace-composer .workspace-composer__attach {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--radius-xs);
+  color: var(--text-weak);
+  font-weight: var(--font-weight-regular);
+  transition:
+    background-color 150ms var(--ease-standard),
+    color 150ms var(--ease-standard),
+    transform 120ms var(--ease-standard);
+}
+
+form.workspace-composer .workspace-composer__attach:hover:not(:disabled),
+form.workspace-composer .workspace-composer__attach:focus-visible {
+  background: var(--color-bg-subtle, var(--surface-raised-base-hover));
+  color: var(--text-strong);
+}
+
+form.workspace-composer .workspace-composer__attach:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+form.workspace-composer .workspace-composer__research-tools {
+  position: relative;
+  flex: 0 0 auto;
+  height: 32px;
+}
+
+form.workspace-composer .workspace-composer__research-tools > summary {
+  height: 32px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
+  color: var(--text-weak);
+  font-family: var(--font-family-sans);
+  font-size: 12px;
+  font-weight: var(--font-weight-regular);
+  line-height: 1;
+  list-style: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-standard),
+    color 150ms var(--ease-standard),
+    transform 120ms var(--ease-standard);
+}
+
+form.workspace-composer .workspace-composer__research-tools > summary::-webkit-details-marker {
+  display: none;
+}
+
+form.workspace-composer .workspace-composer__research-tools > summary:hover,
+form.workspace-composer .workspace-composer__research-tools > summary:focus-visible,
+form.workspace-composer .workspace-composer__research-tools[open] > summary {
+  background: var(--color-bg-subtle, var(--surface-raised-base-hover));
+  color: var(--text-strong);
+}
+
+form.workspace-composer .workspace-composer__research-tools > summary:focus-visible {
+  outline: 2px solid var(--focus-lit-ring);
+  outline-offset: -2px;
+}
+
+form.workspace-composer .workspace-composer__research-tools > summary:active {
+  transform: scale(0.98);
+}
+
+form.workspace-composer .workspace-composer__research-tools > summary [data-component="icon"] {
+  transition: transform 150ms var(--ease-standard);
+}
+
+form.workspace-composer .workspace-composer__research-tools > summary strong {
+  color: var(--text-strong);
+  font-weight: var(--font-weight-medium);
+}
+
+form.workspace-composer .workspace-composer__research-tools-separator {
+  color: var(--text-weaker);
+}
+
+form.workspace-composer .workspace-composer__research-tools[open] > summary [data-component="icon"] {
+  transform: rotate(180deg);
+}
+
+form.workspace-composer .workspace-composer__research-tools-menu {
+  position: absolute;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  z-index: 40;
+  width: min(292px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-solid, var(--surface-raised-stronger-non-alpha));
+  background-clip: padding-box;
+  box-shadow: var(--atlas-shadow-md);
+}
+
+form.workspace-composer .workspace-composer__research-tools-heading {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+form.workspace-composer .workspace-composer__research-tools-heading strong,
+form.workspace-composer .workspace-composer__research-tools-heading span {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+form.workspace-composer .workspace-composer__research-tools-heading strong {
+  color: var(--text-strong);
+  font-weight: var(--font-weight-medium);
+}
+
+form.workspace-composer .workspace-composer__research-tools-heading span {
+  color: var(--text-weak);
+  font-variant-numeric: tabular-nums;
+}
+
+form.workspace-composer .workspace-composer__research-effort {
+  padding: 7px;
+}
+
+form.workspace-composer .workspace-composer__research-effort p {
+  margin: 4px 0 0;
+  color: var(--text-weak);
+  font-size: 11px;
+  font-weight: var(--font-weight-regular);
+  line-height: 15px;
+  text-wrap: pretty;
+}
+
+form.workspace-composer .workspace-composer__research-effort-options {
+  height: 32px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  margin-top: 5px;
+  padding: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-subtle, var(--surface-raised-base));
+}
+
+form.workspace-composer .workspace-composer__research-effort-options > button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-weak);
+  font-family: var(--font-family-sans);
+  font-size: 12px;
+  font-weight: var(--font-weight-regular);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-standard),
+    color 150ms var(--ease-standard),
+    transform 120ms var(--ease-standard);
+}
+
+form.workspace-composer .workspace-composer__research-effort-options > button[aria-checked="true"] {
+  background: var(--surface-base-active);
+  color: var(--text-strong);
+  font-weight: var(--font-weight-medium);
+}
+
+form.workspace-composer .workspace-composer__research-effort-options > button:hover,
+form.workspace-composer .workspace-composer__research-effort-options > button:focus-visible {
+  color: var(--text-strong);
+}
+
+form.workspace-composer .workspace-composer__research-effort-options > button:focus-visible {
+  outline: 2px solid var(--focus-lit-ring);
+  outline-offset: -2px;
+}
+
+form.workspace-composer .workspace-composer__research-effort-options > button:active {
+  transform: scale(0.98);
+}
+
+form.workspace-composer .workspace-composer__research-tools-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+form.workspace-composer .workspace-composer__research-tools-actions > button {
+  width: 100%;
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-base);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-standard),
+    transform 120ms var(--ease-standard);
+}
+
+form.workspace-composer .workspace-composer__research-tools-actions > button:hover,
+form.workspace-composer .workspace-composer__research-tools-actions > button:focus-visible {
+  background: var(--color-bg-subtle, var(--surface-raised-base-hover));
+}
+
+form.workspace-composer .workspace-composer__research-tools-actions > button:focus-visible {
+  outline: 2px solid var(--focus-lit-ring);
+  outline-offset: -2px;
+}
+
+form.workspace-composer .workspace-composer__research-tools-actions > button:active {
+  transform: scale(0.985);
+}
+
+form.workspace-composer .workspace-composer__research-tools-actions > button > [data-component="icon"] {
+  color: var(--text-weaker);
+}
+
+form.workspace-composer .workspace-composer__research-tools-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+form.workspace-composer .workspace-composer__research-tools-copy strong,
+form.workspace-composer .workspace-composer__research-tools-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+form.workspace-composer .workspace-composer__research-tools-copy strong {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  line-height: 16px;
+}
+
+form.workspace-composer .workspace-composer__research-tools-copy small {
+  color: var(--text-weak);
+  font-size: 11px;
+  font-weight: var(--font-weight-regular);
+  line-height: 15px;
+}
+
+form.workspace-composer .workspace-composer__send {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: var(--composer-radius-pill);
+  box-shadow: none;
+}
+
+form.workspace-composer .workspace-composer__send[data-composer-action="idle"]:disabled {
+  background-color: var(--color-bg-subtle, var(--surface-raised-base-hover));
+}
+
+form.workspace-composer .workspace-composer__send[data-composer-action="idle"]:disabled [data-slot="icon-svg"] {
+  color: var(--text-weaker);
+}
+
+form.workspace-composer .workspace-composer__send[data-composer-action="stop"] {
+  background-color: var(--surface-critical-strong);
+}
+
+form.workspace-composer .workspace-composer__send[data-composer-action="stop"]:hover:not(:disabled),
+form.workspace-composer .workspace-composer__send[data-composer-action="stop"]:focus-visible {
+  background-color: var(--icon-critical-hover);
+}
+
+form.workspace-composer .workspace-composer__send[data-composer-action="stop"] [data-slot="icon-svg"] {
+  color: var(--icon-invert-base);
+}
+
+form.workspace-composer .workspace-composer__send[data-composer-action="stop"] [data-component="icon"] {
+  --icon-size: 12px;
+}
+
+/* The conversation column can narrow independently of the viewport when the
+   research pane is resized. Mirror the small-screen control geometry against
+   that actual available width instead of waiting for a window breakpoint. */
+@container conversation (max-width: 540px) {
+  form.workspace-composer {
+    --composer-editor-padding-inline: 12px;
+  }
+
+  form.workspace-composer .workspace-composer__footer {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    padding: 2px 5px 5px;
+  }
+
+  form.workspace-composer .workspace-composer__controls,
+  form.workspace-composer .workspace-composer__actions {
+    width: 100%;
+  }
+
+  form.workspace-composer .workspace-composer__actions {
+    justify-content: flex-end;
+  }
+
+  form.workspace-composer .workspace-composer__research-tools-menu {
+    left: -46px;
+    width: min(292px, calc(100cqw - 32px));
+  }
+}
+
+@media (max-width: 719px) {
+  form.workspace-composer {
+    --composer-editor-font-size: 16px;
+    --composer-editor-line-height: 24px;
+    --composer-editor-padding-inline: 12px;
+    min-height: 94px;
+    border-radius: var(--radius-lg);
+  }
+
+  form.workspace-composer .workspace-composer__footer {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    padding: 2px 5px 5px;
+  }
+
+  form.workspace-composer .workspace-composer__controls,
+  form.workspace-composer .workspace-composer__actions {
+    width: 100%;
+  }
+
+  form.workspace-composer .workspace-composer__actions {
+    justify-content: flex-end;
+  }
+
+  form.workspace-composer .workspace-composer__research-tools-menu {
+    left: -46px;
+    width: min(292px, calc(100vw - 32px));
+  }
+}
+
+@media (pointer: coarse) {
+  form.workspace-composer .workspace-composer__research-tools {
+    height: 44px;
+  }
+
+  form.workspace-composer .workspace-composer__attach,
+  form.workspace-composer .workspace-composer__research-tools > summary,
+  form.workspace-composer .workspace-composer__send {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  form.workspace-composer .workspace-composer__research-effort-options {
+    height: 44px;
+  }
+
+  form.workspace-composer .workspace-composer__research-effort-options > button,
+  form.workspace-composer .workspace-composer__research-tools-actions > button {
+    min-height: 44px;
+  }
+
+  .workspace-composer__context-remove,
+  .workspace-composer__attachment-remove {
+    position: relative;
+  }
+
+  .workspace-composer__context-remove::after,
+  .workspace-composer__attachment-remove::after {
+    position: absolute;
+    inset: -6px;
+    content: "";
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  form.workspace-composer {
+    transition: none;
+  }
+
+  form.workspace-composer .workspace-composer__research-tools > summary,
+  form.workspace-composer .workspace-composer__research-tools > summary [data-component="icon"],
+  form.workspace-composer .workspace-composer__research-effort-options > button,
+  form.workspace-composer .workspace-composer__research-tools-actions > button,
+  form.workspace-composer .workspace-composer__attach {
+    transition: none;
   }
 }

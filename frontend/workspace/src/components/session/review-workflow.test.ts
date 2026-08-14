@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { settingsApi } from "../settings/api"
 
 const root = join(import.meta.dir, "../..")
 const read = (relative: string) => readFileSync(join(root, relative), "utf8")
@@ -16,16 +15,13 @@ function sources(dir: string): string[] {
 }
 
 describe("reviewer workflow truth pass", () => {
-  test("the session header launches the reviewer directly", () => {
+  test("the session header does not expose a manual reviewer control", () => {
     const session = read("pages/session.tsx")
 
-    expect(session).toContain("Run review")
-    expect(session).toContain("`/session/${id}/review`")
-    expect(session).toContain('{ method: "POST" }')
-    expect(session).toContain('toast.success("review started"')
-    // Disabled without an open, idle session.
-    expect(session).toContain("reviewDisabled")
-    expect(session).toContain('!params.id || params.id === "new" || working()')
+    expect(session).not.toContain("Run review")
+    expect(session).not.toContain("openscience:run-review")
+    expect(session).not.toContain("reviewDisabled")
+    expect(session).not.toContain("workspace-header__review")
   })
 
   test("no surface prefills chat to spawn the reviewer", () => {
@@ -52,30 +48,19 @@ describe("reviewer workflow truth pass", () => {
     expect(model).toContain('"open" | "addressed" | "confirmed"')
   })
 
-  test("the auto-review toggle persists through the review settings store", () => {
-    const specialists = read("components/settings/Specialists.tsx")
+  test("stored Result previews defer review and provenance controls", () => {
+    const registry = read("components/settings/registry.ts")
+    const stored = read("artifacts/StoredArtifactView.tsx")
 
-    expect(specialists).toContain('"/settings/review"')
-    expect(specialists).toContain("Automatically review significant results")
-    expect(specialists).toContain("Runs the reviewer after a result is saved as a durable artifact.")
-    expect(specialists).toContain('method: "PUT"')
-  })
-
-  test("the review settings round-trip preserves the auto flag", async () => {
-    const calls: Array<{ url: string; method?: string }> = []
-    const fetchFn = (async (url: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ url: String(url), method: init?.method })
-      const body = typeof init?.body === "string" ? init.body : JSON.stringify({ auto: false })
-      return new Response(body, { headers: { "content-type": "application/json" } })
-    }) as typeof fetch
-
-    const state = await settingsApi<{ auto: boolean }>("http://127.0.0.1:4096", fetchFn, "/settings/review", {
-      method: "PUT",
-      body: JSON.stringify({ auto: true }),
-    })
-
-    expect(state).toEqual({ auto: true })
-    expect(calls).toEqual([{ url: "http://127.0.0.1:4096/settings/review", method: "PUT" }])
+    expect(registry).not.toContain('title: "Specialists"')
+    expect(registry).not.toContain('title: "Reviewer"')
+    expect(stored).not.toContain("Run independent review")
+    expect(stored).not.toContain("/review/artifact")
+    expect(stored).not.toContain("Versions")
+    expect(stored).not.toContain("How made")
+    expect(stored).not.toContain("Review")
+    expect(stored).not.toContain("Automatically review")
+    expect(stored).not.toContain("Reviewer model")
   })
 
   test("deterministic checks present as a preflight, never as scientific review", () => {

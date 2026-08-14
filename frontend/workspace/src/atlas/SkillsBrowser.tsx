@@ -15,7 +15,7 @@ interface SkillRow {
   name: string
   description: string
   location: string
-  origin?: "default" | "installed" | "learned" | "user" | "project"
+  origin?: "default" | "installed" | "user" | "project"
   category?: string
   tags?: string[]
   entry?: boolean
@@ -24,8 +24,13 @@ interface SkillRow {
 function originOf(skill: SkillRow): string {
   if (skill.origin) return skill.origin
   if (skill.location.includes("installed-skills")) return "installed"
-  if (skill.location.includes("learned-skills")) return "learned"
   return "default"
+}
+
+function sentence(value: string) {
+  const text = value.trim()
+  if (!text) return text
+  return `${text.charAt(0).toLocaleUpperCase()}${text.slice(1)}`
 }
 
 export function SkillsBrowser(props: { onPick: (name: string) => void; onClose: () => void }): JSX.Element {
@@ -108,12 +113,11 @@ export function SkillsBrowser(props: { onPick: (name: string) => void; onClose: 
           style={{
             "font-family": FONT_MONO,
             "font-size": "10px",
-            "letter-spacing": "0.08em",
-            "text-transform": "uppercase",
+            "letter-spacing": "normal",
             color: "var(--color-text-faint)",
           }}
         >
-          skills
+          Skills
         </span>
         <span
           class="tab-fig"
@@ -125,7 +129,7 @@ export function SkillsBrowser(props: { onPick: (name: string) => void; onClose: 
           autofocus
           value={query()}
           onInput={(e) => setQuery(e.currentTarget.value)}
-          placeholder="search skills…"
+          placeholder="Search skills…"
           style={{
             all: "unset",
             flex: 1,
@@ -138,7 +142,8 @@ export function SkillsBrowser(props: { onPick: (name: string) => void; onClose: 
         <button
           type="button"
           onClick={props.onClose}
-          title="close (esc)"
+          aria-label="Close skills"
+          title="Close (Esc)"
           style={{
             all: "unset",
             cursor: "pointer",
@@ -165,7 +170,7 @@ export function SkillsBrowser(props: { onPick: (name: string) => void; onClose: 
                 color: "var(--color-text-faint)",
               }}
             >
-              no matching skills
+              No matching skills
             </div>
           }
         >
@@ -177,12 +182,11 @@ export function SkillsBrowser(props: { onPick: (name: string) => void; onClose: 
                     padding: "6px 8px 3px",
                     "font-family": FONT_MONO,
                     "font-size": "10px",
-                    "letter-spacing": "0.08em",
-                    "text-transform": "uppercase",
+                    "letter-spacing": "normal",
                     color: "var(--color-text-faint)",
                   }}
                 >
-                  {group.label}
+                  {sentence(group.label)}
                 </div>
                 <For each={group.items}>
                   {(skill) => (
@@ -208,7 +212,7 @@ export function SkillsBrowser(props: { onPick: (name: string) => void; onClose: 
                         style={{
                           "font-family": FONT_SANS,
                           "font-size": "13px",
-                          "font-weight": 500,
+                          "font-weight": "var(--font-weight-medium)",
                           color: "var(--color-text)",
                         }}
                       >
@@ -332,7 +336,7 @@ export function SkillLibraryDialog(props: { onPick: (name: string) => void }): J
             autofocus
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
-            placeholder="search skills…"
+            placeholder="Search skills…"
             style={{
               all: "unset",
               flex: 1,
@@ -346,12 +350,11 @@ export function SkillLibraryDialog(props: { onPick: (name: string) => void }): J
             style={{
               "font-family": FONT_MONO,
               "font-size": "11px",
-              "letter-spacing": "0.08em",
-              "text-transform": "uppercase",
+              "letter-spacing": "normal",
               color: "var(--color-text-faint)",
             }}
           >
-            {total()} skills
+            Skills: {total()}
           </span>
         </div>
 
@@ -379,7 +382,7 @@ export function SkillLibraryDialog(props: { onPick: (name: string) => void }): J
                   color: "var(--color-text-faint)",
                 }}
               >
-                no matching skills
+                No matching skills
               </div>
             }
           >
@@ -396,12 +399,11 @@ export function SkillLibraryDialog(props: { onPick: (name: string) => void }): J
                       "margin-bottom": "4px",
                       "font-family": FONT_MONO,
                       "font-size": "11px",
-                      "letter-spacing": "0.08em",
-                      "text-transform": "uppercase",
+                      "letter-spacing": "normal",
                       color: "var(--color-text-faint)",
                     }}
                   >
-                    <span style={{ flex: 1 }}>{group.label}</span>
+                    <span style={{ flex: 1 }}>{sentence(group.label)}</span>
                     <span>{group.items.length}</span>
                   </div>
                   <For each={group.items}>
@@ -435,7 +437,7 @@ export function SkillLibraryDialog(props: { onPick: (name: string) => void }): J
                           style={{
                             "font-family": FONT_MONO,
                             "font-size": "14px",
-                            "font-weight": 500,
+                            "font-weight": "var(--font-weight-medium)",
                             color: "var(--color-text)",
                           }}
                         >

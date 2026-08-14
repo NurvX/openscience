@@ -1,6 +1,8 @@
 import z from "zod"
 import { Tool } from "./tool"
-import { ComputeJobs } from "@/compute/jobs"
+import { JobBroker } from "@/compute/job-broker"
+import { Instance } from "@/project/instance"
+import { SessionFilesystem } from "@/session/filesystem"
 
 export const ModalTool = Tool.define("modal", {
   description: [
@@ -15,6 +17,12 @@ export const ModalTool = Tool.define("modal", {
   ].join("\n"),
   parameters: z.object({
     name: z.string().trim().min(1).max(120).describe("Short job name shown in Compute."),
+    purpose: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .describe("Expected scientific purpose and the result this paid job should produce."),
     command: z.string().trim().min(1).max(100_000).describe("Ordinary shell command executed inside the sandbox."),
     cwd: z.string().trim().min(1).optional().describe("Working directory relative to the session workspace."),
     uploads: z
@@ -43,7 +51,12 @@ export const ModalTool = Tool.define("modal", {
       .min(1)
       .max(24 * 60)
       .describe("Required job limit chosen from the expected runtime plus a reasonable safety margin."),
-    wait: z.boolean().default(true).describe("Wait for completion and return the job log; use false for long jobs."),
+    wait: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Wait for completion and return the job log only when explicitly requested; dispatch returns immediately by default.",
+      ),
   }),
   async execute(input, ctx) {
     // Kept dynamic because ComputeSettings currently owns both route handlers and
@@ -59,6 +72,7 @@ export const ModalTool = Tool.define("modal", {
     }
     const request = {
       name: input.name,
+      purpose: input.purpose,
       command: input.command,
       cwd: input.cwd,
       target: { kind: "modal" as const },
@@ -70,18 +84,24 @@ export const ModalTool = Tool.define("modal", {
       gpu: input.gpu,
       sessionID: ctx.sessionID,
     }
-    const plan = await ComputeJobs.plan(request, { modal: config })
+    const broker = {
+      projectDirectory: Instance.directory,
+      workspace: await SessionFilesystem.workspace(ctx.sessionID),
+      modal: config,
+    }
+    const plan = await JobBroker.plan(request, broker)
+    if (plan.provider !== "modal") throw new Error("Modal approval returned a non-Modal plan")
     const metadata = { compute: { ...plan, name: input.name } }
     ctx.metadata({ title: `Review Modal job: ${input.name}`, metadata })
     await ctx.ask({
       permission: "modal",
       patterns: [plan.digest],
-      always: [],
+      always: [plan.digest],
       metadata,
     })
 
     const resolveCredentials = settings.ComputeSettings.modalResolver()
-    const job = await ComputeJobs.start({ ...request, approval: plan.digest }, { modal: config, resolveCredentials })
+    const job = await JobBroker.start({ ...request, approval: plan.digest }, { ...broker, resolveCredentials })
     ctx.metadata({ title: `Modal job: ${input.name}`, metadata: { ...metadata, job } })
     if (!input.wait) {
       return {
@@ -91,10 +111,11 @@ export const ModalTool = Tool.define("modal", {
       }
     }
 
-    const finished = await ComputeJobs.wait(job.id, {
+    const finished = await JobBroker.wait(job.id, {
+      ...broker,
       timeout: plan.timeout_minutes * 60_000 + 10 * 60_000,
     })
-    const log = await ComputeJobs.log(job.id)
+    const log = await JobBroker.log(job.id, broker)
     return {
       title: `Modal job: ${input.name}`,
       metadata: { ...metadata, job: finished },

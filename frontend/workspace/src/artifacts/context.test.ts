@@ -4,6 +4,7 @@ import {
   createArtifactContext,
   createArtifactState,
   inferArtifactKind,
+  resolveArtifactPath,
   type ArtifactContext,
   type ArtifactStorage,
 } from "./context"
@@ -41,8 +42,13 @@ describe("artifact context", () => {
     })
   })
 
+  test("resolves project-relative paths without rewriting external paths", () => {
+    expect(resolveArtifactPath("/work/project/", "results/water.xyz")).toBe("/work/project/results/water.xyz")
+    expect(resolveArtifactPath("/work/project", "/external/water.xyz")).toBe("/external/water.xyz")
+  })
+
   test("classifies scientific and publication formats without pretending unknown files are reports", () => {
-    expect(inferArtifactKind("analysis.ipynb")).toBe("notebook")
+    expect(inferArtifactKind("analysis.ipynb")).toBe("file")
     expect(inferArtifactKind("aligned.fasta", "msa")).toBe("sequence")
     expect(inferArtifactKind("variants.vcf")).toBe("genomics")
     expect(inferArtifactKind("sample.mzML")).toBe("spectrum")

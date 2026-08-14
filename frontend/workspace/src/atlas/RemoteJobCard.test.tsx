@@ -61,22 +61,28 @@ const job = {
   },
 }
 
-test("completed Modal GPU work shows resources, delivered result, and released lifecycle", async () => {
+test("completed Modal GPU work leads with the result and keeps logs, files, and resources inspectable", async () => {
   const host = mount(() =>
     subject.RemoteJobCard({
       job,
-      cancelling: false,
+      action: "",
       onCancel: async () => undefined,
+      onRetry: async () => undefined,
+      onRelease: async () => undefined,
       onOutput: async () => "accuracy=0.91",
     }),
   )
 
-  expect(host.textContent).toContain("GPU")
-  expect(host.textContent).toContain("Modal · A100 · 4 CPU · 16 GB")
-  expect(host.textContent).toContain("succeeded")
-  expect(host.textContent).toContain("exit 0 · 1 artifact · remote released")
+  expect(host.querySelector(".activity-card__kind")?.textContent).toBe("Remote GPU")
+  expect(host.querySelector(".kernel-card__copy")?.textContent).toContain("Exit 0 · 1 file")
+  expect(host.querySelector(".activity-card__status")).toBeNull()
+  expect(host.textContent).toContain("A100 · 4 CPU · 16 GB memory")
   expect(host.textContent).not.toContain("Cancel")
-  host.querySelector<HTMLButtonElement>(".remote-job-card__actions button")!.click()
+  const logs = Array.from(host.querySelectorAll<HTMLDetailsElement>("details")).find(
+    (item) => item.querySelector("summary")?.textContent === "Logs",
+  )
+  expect(logs?.open).toBe(false)
+  logs?.querySelector<HTMLElement>("summary")?.click()
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(host.textContent).toContain("accuracy=0.91")
 })
@@ -91,12 +97,56 @@ test("a live Modal job remains cancellable and counts as live", () => {
   const host = mount(() =>
     subject.RemoteJobCard({
       job: running,
-      cancelling: false,
+      action: "",
       onCancel: async () => undefined,
+      onRetry: async () => undefined,
+      onRelease: async () => undefined,
       onOutput: async () => "",
     }),
   )
 
   expect(subject.jobLive(running)).toBe(true)
+  expect(subject.jobStatusLabel("interrupted")).toBe("Interrupted")
   expect(host.textContent).toContain("Cancel")
+  expect(host.textContent).toContain("Modal billing may continue")
+  expect(host.textContent).toContain("10-minute timeout")
+})
+
+test("keeps live work and a bounded newest-first set of completed results", () => {
+  const running = {
+    ...job,
+    id: "job_running",
+    status: "running" as const,
+    completed_at: undefined,
+    lifecycle: { ...job.lifecycle, execution: "running", resource: "active" as const },
+  }
+  const older = {
+    ...job,
+    id: "job_older",
+    completed_at: "2026-08-08T09:01:01.000Z",
+  }
+  const newer = {
+    ...job,
+    id: "job_newer",
+    completed_at: "2026-08-08T11:01:01.000Z",
+  }
+
+  expect(subject.visibleJobs([older, running, newer], 1).map((item) => item.id)).toEqual(["job_running", "job_newer"])
+})
+
+test("never hides an older failed job behind newer successful history", () => {
+  const failed = {
+    ...job,
+    id: "job_failed",
+    status: "failed" as const,
+    completed_at: "2026-08-08T08:01:01.000Z",
+  }
+  const successes = Array.from({ length: 8 }, (_, index) => ({
+    ...job,
+    id: `job_success_${index}`,
+    completed_at: `2026-08-08T${String(10 + index).padStart(2, "0")}:01:01.000Z`,
+  }))
+
+  expect(subject.visibleJobs([failed, ...successes], 2).map((item) => item.id)).toContain("job_failed")
+  expect(subject.visibleJobs([failed, ...successes], 2)).toHaveLength(3)
 })

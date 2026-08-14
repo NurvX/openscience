@@ -4,14 +4,19 @@ import {
   createEffect,
   createMemo,
   createResource,
+  lazy,
   onCleanup,
   Show,
+  Suspense,
   type ParentProps,
 } from "solid-js"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { SDKProvider, useSDK } from "@/context/sdk"
 import { SyncProvider, useSync } from "@/context/sync"
 import { LocalProvider } from "@/context/local"
+import { TerminalProvider } from "@/context/terminal"
+import { FileProvider } from "@/context/file"
+import { PromptProvider } from "@/context/prompt"
 
 import { DataProvider } from "@synsci/ui/context"
 import { MarkdownImages } from "@synsci/ui/markdown"
@@ -21,7 +26,8 @@ import { showToast } from "@synsci/ui/toast"
 import { useLanguage } from "@/context/language"
 import { uiStore } from "@/atlas/store/ui"
 import { artifactContext } from "@/artifacts/context"
-import { normalizeStoredArtifact } from "@/artifacts/store"
+import { normalizeStoredArtifact, savedResultLabel } from "@/artifacts/store"
+import { ProjectWorkspaceFrame } from "@/atlas/ProjectWorkspaceFrame"
 import { useGlobalSync } from "@/context/global-sync"
 import { decode64, setCurrentDirectory } from "@/utils/base64"
 import { assetUrl } from "@/utils/markdown-assets"
@@ -33,6 +39,8 @@ import {
   resolveProjectAlias,
   resolveProjectRoute,
 } from "@/utils/project-route"
+
+const ProjectRightPane = lazy(() => import("@/atlas/ProjectRightPane"))
 
 export default function Layout(props: ParentProps) {
   const params = useParams()
@@ -159,9 +167,8 @@ export default function Layout(props: ParentProps) {
                 })
             }
 
-            // "Save as artifact…" at the end of an assistant turn promotes a
-            // written scratch file into a durable, immutable artifact version
-            // via the explicit-save route.
+            // "Save as Result…" at the end of an assistant turn promotes a
+            // written scratch file into a durable Result via the explicit-save route.
             const saveArtifact = (path: string) => {
               const session = params.id && params.id !== "new" ? params.id : undefined
               if (!session) {
@@ -177,14 +184,22 @@ export default function Layout(props: ParentProps) {
                 })
                 .then(async (response) => {
                   if (!response.ok) throw new Error(`artifact save failed (${response.status})`)
-                  const ref = (await response.json()) as { current?: { version?: number } }
+                  const name = path.split("/").filter(Boolean).at(-1) || "Result"
+                  const saved = normalizeStoredArtifact(await response.json().catch(() => undefined))
                   window.dispatchEvent(new CustomEvent("openscience:artifacts-changed"))
                   showToast({
                     variant: "success",
-                    title: "saved as artifact",
-                    description: `${path} · v${ref.current?.version ?? 1}`,
+                    title: "Saved to Results",
+                    description: saved ? savedResultLabel(saved) : name,
+                    actions: saved
+                      ? [
+                          {
+                            label: "Open",
+                            onClick: () => uiStore.openSaved(saved),
+                          },
+                        ]
+                      : undefined,
                   })
-                  return { version: ref.current?.version ?? 1 }
                 })
                 .catch((error: unknown) => {
                   showToast({
@@ -222,7 +237,23 @@ export default function Layout(props: ParentProps) {
                 onSaveArtifact={saveArtifact}
               >
                 <MarkdownImages resolve={image}>
-                  <LocalProvider>{props.children}</LocalProvider>
+                  <LocalProvider>
+                    <TerminalProvider>
+                      <FileProvider>
+                        <PromptProvider>
+                          <ProjectWorkspaceFrame
+                            inspector={
+                              <Suspense>
+                                <ProjectRightPane project={sdk.scope} session={params.id ?? "new"} />
+                              </Suspense>
+                            }
+                          >
+                            {props.children}
+                          </ProjectWorkspaceFrame>
+                        </PromptProvider>
+                      </FileProvider>
+                    </TerminalProvider>
+                  </LocalProvider>
                 </MarkdownImages>
               </DataProvider>
             )

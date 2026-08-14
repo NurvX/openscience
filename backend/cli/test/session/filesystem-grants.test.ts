@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { ComputeJobs } from "../../src/compute/jobs"
+import { Bus } from "../../src/bus"
 import { File } from "../../src/file"
 import { PermissionNext } from "../../src/permission/next"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
@@ -14,6 +15,9 @@ import { Session } from "../../src/session"
 import { SessionFilesystem } from "../../src/session/filesystem"
 import { Storage } from "../../src/storage/storage"
 import { executionSession, tmpdir } from "../fixture/fixture"
+import { Truncate } from "../../src/tool/truncation"
+import { Global } from "../../src/global"
+import { OpenScience } from "../../src/openscience"
 
 async function withSession<T>(directory: string, fn: (session: Session.Info) => Promise<T>) {
   return Instance.provide({
@@ -33,17 +37,231 @@ async function wait(sessionID: string, attempt = 0): Promise<PermissionNext.Requ
 }
 
 describe("session filesystem grants", () => {
+  test("only the tool-output broker can mint an exact managed-output grant", async () => {
+    await using external = await tmpdir({
+      init: (dir) => Bun.write(path.join(dir, "tool-output.txt"), "evidence"),
+    })
+    await using tmp = await tmpdir()
+    await withSession(tmp.path, async (session) => {
+      const output = path.join(external.path, "tool-output.txt")
+      const changes: SessionFilesystem.Grant[] = []
+      const unsubscribe = Bus.subscribe(SessionFilesystem.Event.Changed, (event) => {
+        if (event.properties.sessionID === session.id) changes.push(event.properties.grant)
+      })
+      await expect(
+        SessionFilesystem.grant({
+          sessionID: session.id,
+          path: output,
+          access: "read",
+          scope: "session",
+          source: "tool",
+        }),
+      ).rejects.toBeInstanceOf(SessionFilesystem.InvalidPathError)
+      const before = await SessionFilesystem.snapshot(session.id)
+      const grant = await SessionFilesystem.grantToolOutput({ sessionID: session.id, path: output })
+      const after = await SessionFilesystem.snapshot(session.id)
+      await expect(
+        SessionFilesystem.authorize({ sessionID: session.id, path: output, access: "read" }),
+      ).resolves.toMatchObject({
+        grant: expect.objectContaining({ source: "tool", access: "read", scope: "session" }),
+      })
+      await expect(
+        SessionFilesystem.authorize({ sessionID: session.id, path: external.path, access: "read" }),
+      ).rejects.toBeInstanceOf(SessionFilesystem.DeniedError)
+      expect(changes).toEqual([])
+      expect(after.revision).toBe(before.revision)
+      expect(after.workspace.grantRevision).toBe(before.workspace.grantRevision)
+      expect(await SessionFilesystem.processReadRoots(session.id)).not.toContain(output)
+
+      await SessionFilesystem.revoke(session.id, grant.id)
+      expect(changes).toEqual([])
+      expect((await SessionFilesystem.snapshot(session.id)).revision).toBe(before.revision)
+      await expect(
+        SessionFilesystem.authorize({ sessionID: session.id, path: output, access: "read" }),
+      ).rejects.toBeInstanceOf(SessionFilesystem.DeniedError)
+      unsubscribe()
+    })
+  })
+
+  test("normal API and permission approvals cannot grant the managed tool-output broker", async () => {
+    await using tmp = await tmpdir()
+    await withSession(tmp.path, async (session) => {
+      const output = path.join(Truncate.DIR, "tool_00000000000000000000000000")
+      await Bun.write(output, "sibling broker secret")
+      const physicalBroker = await fs.realpath(Truncate.DIR)
+      expect(physicalBroker).not.toBe(Truncate.DIR)
+
+      await expect(
+        SessionFilesystem.grant({
+          sessionID: session.id,
+          path: Truncate.DIR,
+          access: "read",
+          scope: "session",
+          source: "api",
+        }),
+      ).rejects.toBeInstanceOf(SessionFilesystem.InvalidPathError)
+      await expect(
+        SessionFilesystem.grant({
+          sessionID: session.id,
+          path: physicalBroker,
+          access: "read",
+          scope: "session",
+          source: "api",
+        }),
+      ).rejects.toBeInstanceOf(SessionFilesystem.InvalidPathError)
+      await expect(
+        SessionFilesystem.grant({
+          sessionID: session.id,
+          path: path.dirname(physicalBroker),
+          access: "read",
+          scope: "session",
+          source: "api",
+        }),
+      ).rejects.toBeInstanceOf(SessionFilesystem.InvalidPathError)
+      const request = PermissionNext.ask({
+        sessionID: session.id,
+        permission: "external_directory",
+        patterns: [Truncate.DIR],
+        always: [Truncate.DIR],
+        metadata: { filesystem: { path: Truncate.DIR, access: "read" } },
+        ruleset: PermissionNext.fromConfig({ external_directory: "ask" }),
+      })
+      const prompt = await wait(session.id)
+      expect(prompt).toBeDefined()
+      const [asked, replied] = await Promise.allSettled([
+        request,
+        PermissionNext.reply({ requestID: prompt!.id, reply: "session" }),
+      ])
+      expect(asked.status).toBe("rejected")
+      expect(replied.status).toBe("rejected")
+      if (asked.status === "rejected") expect(asked.reason).toBeInstanceOf(SessionFilesystem.InvalidPathError)
+      if (replied.status === "rejected") expect(replied.reason).toBeInstanceOf(SessionFilesystem.InvalidPathError)
+      await expect(
+        SessionFilesystem.authorize({ sessionID: session.id, path: output, access: "read" }),
+      ).rejects.toBeInstanceOf(SessionFilesystem.DeniedError)
+      expect(await SessionFilesystem.processReadRoots(session.id)).not.toContain(Truncate.DIR)
+      await fs.unlink(output).catch(() => undefined)
+    })
+  })
+
+  test("the managed broker enclave ignores historical broad grants and accepts only an exact owner capability", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const owner = await Session.create({})
+        const sibling = await Session.create({})
+        const output = path.join(Truncate.DIR, `tool_${crypto.randomUUID().replaceAll("-", "").slice(0, 26)}`)
+        await Bun.write(output, "owner secret")
+        try {
+          const injectLegacyParent = (sessionID: string) =>
+            Storage.update<SessionFilesystem.State>(["session_filesystem", Instance.project.id, sessionID], (draft) => {
+              draft.grants.push({
+                id: `fsg_legacy_${sessionID}`,
+                path: Global.Path.data,
+                access: "write",
+                scope: "session",
+                source: "api",
+                time: { created: 1 },
+              })
+              draft.revision++
+            })
+          await Promise.all([injectLegacyParent(owner.id), injectLegacyParent(sibling.id)])
+          await SessionFilesystem.grantToolOutput({ sessionID: owner.id, path: output })
+
+          await expect(
+            SessionFilesystem.authorize({ sessionID: owner.id, path: output, access: "read" }),
+          ).resolves.toMatchObject({ grant: { source: "tool" } })
+          await expect(
+            SessionFilesystem.authorize({ sessionID: owner.id, path: output, access: "write" }),
+          ).rejects.toBeInstanceOf(SessionFilesystem.DeniedError)
+          await expect(
+            SessionFilesystem.authorize({ sessionID: sibling.id, path: output, access: "read" }),
+          ).rejects.toBeInstanceOf(SessionFilesystem.DeniedError)
+          expect(await SessionFilesystem.allows({ sessionID: sibling.id, path: output, access: "read" })).toBe(false)
+
+          // The broad legacy parent can remain useful for non-enclave files;
+          // native processes mask the broker root independently.
+          expect(await SessionFilesystem.processReadRoots(sibling.id)).toContain(Global.Path.data)
+          expect(OpenScience.kernelSensitivePaths()).toContain(Truncate.DIR)
+        } finally {
+          await Promise.all([Session.remove(owner.id), Session.remove(sibling.id)])
+          await fs.unlink(output).catch(() => undefined)
+        }
+      },
+    })
+  })
+
+  test("rejects an imported project root that contains the managed broker enclave", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await expect(
+          SessionFilesystem.initialize("ses_managed_broker_parent", Global.Path.data),
+        ).rejects.toBeInstanceOf(SessionFilesystem.InvalidPathError)
+      },
+    })
+  })
+
+  test("does not broadcast a revocation for a new session's initial workspace", async () => {
+    await using external = await tmpdir()
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const changes: string[] = []
+        const unsubscribe = Bus.subscribe(SessionFilesystem.Event.Changed, (event) => {
+          changes.push(event.properties.sessionID)
+        })
+        const session = await Session.create({})
+        await using cleanup = {
+          [Symbol.asyncDispose]: () => Session.remove(session.id),
+        }
+        const workspace = await SessionFilesystem.workspace(session.id)
+
+        expect(changes).toEqual([])
+        expect(await SessionFilesystem.list(session.id)).toContainEqual(
+          expect.objectContaining({
+            path: workspace,
+            access: "write",
+            scope: "session",
+            source: "workspace",
+          }),
+        )
+        expect(await SessionFilesystem.list(session.id)).toContainEqual(
+          expect.objectContaining({ path: tmp.path, access: "write", scope: "session", source: "api" }),
+        )
+
+        const grant = await SessionFilesystem.grant({
+          sessionID: session.id,
+          path: external.path,
+          access: "read",
+          scope: "session",
+        })
+        expect(changes).toEqual([session.id])
+        await SessionFilesystem.revoke(session.id, grant.id)
+        expect(changes).toEqual([session.id, session.id])
+        unsubscribe()
+      },
+    })
+  })
+
   test("creates a durable read-write workspace grant with each session", async () => {
     await using tmp = await tmpdir()
     await withSession(tmp.path, async (session) => {
+      const workspace = await SessionFilesystem.workspace(session.id)
       const grants = await SessionFilesystem.list(session.id)
       expect(grants).toContainEqual(
         expect.objectContaining({
-          path: tmp.path,
+          path: workspace,
           access: "write",
           scope: "session",
           source: "workspace",
         }),
+      )
+      expect(grants).toContainEqual(
+        expect.objectContaining({ path: tmp.path, access: "write", scope: "session", source: "api" }),
       )
       await expect(
         SessionFilesystem.authorize({
@@ -81,6 +299,8 @@ describe("session filesystem grants", () => {
           access: "write",
         }),
       ).rejects.toBeInstanceOf(SessionFilesystem.DeniedError)
+      expect(await SessionFilesystem.processReadRoots(session.id)).toContain(external.path)
+      expect(await SessionFilesystem.processWriteRoots(session.id)).not.toContain(external.path)
     })
   })
 
@@ -97,6 +317,7 @@ describe("session filesystem grants", () => {
         access: "read",
         scope: "once",
       })
+      expect(await SessionFilesystem.processReadRoots(session.id)).not.toContain(external.path)
       await expect(
         SessionFilesystem.authorize({
           sessionID: session.id,
@@ -144,7 +365,7 @@ describe("session filesystem grants", () => {
     })
   })
 
-  test("never turns an external write grant into a code-writable mount", async () => {
+  test("keeps process read and write grants directional", async () => {
     await using external = await tmpdir()
     await using tmp = await tmpdir()
     await withSession(tmp.path, async (session) => {
@@ -155,12 +376,14 @@ describe("session filesystem grants", () => {
         scope: "session",
       })
       const roots = await SessionFilesystem.processWriteRoots(session.id)
+      expect(roots).toContain(await SessionFilesystem.workspace(session.id))
       expect(roots).toContain(tmp.path)
-      expect(roots).not.toContain(external.path)
+      expect(roots).toContain(external.path)
+      expect(await SessionFilesystem.processReadRoots(session.id)).toContain(external.path)
       expect((await SessionFilesystem.snapshot(session.id)).enforcement).toEqual({
         broker: "enforced",
-        processWrite: "workspace_only",
-        processRead: "policy_only",
+        processWrite: "grant_only",
+        processRead: Sandbox.describe().readIsolation === "grant_only" ? "grant_only" : "policy_only",
       })
     })
   })
@@ -388,6 +611,7 @@ describe("session filesystem grants", () => {
       init: InstanceBootstrap,
       fn: async () => {
         const session = await executionSession()
+        const workspace = await SessionFilesystem.workspace(session.id)
         const job = await ComputeJobs.start(
           {
             sessionID: session.id,
@@ -395,9 +619,9 @@ describe("session filesystem grants", () => {
             command: "sleep 30",
             target: { kind: "local" },
           },
-          { root: roots.first, workspace: first.path },
+          { root: roots.first, workspace },
         )
-        return { session, job }
+        return { session, job, workspace }
       },
     })
     const two = await Instance.provide({
@@ -405,6 +629,7 @@ describe("session filesystem grants", () => {
       init: InstanceBootstrap,
       fn: async () => {
         const session = await executionSession()
+        const workspace = await SessionFilesystem.workspace(session.id)
         const job = await ComputeJobs.start(
           {
             sessionID: session.id,
@@ -412,9 +637,9 @@ describe("session filesystem grants", () => {
             command: "sleep 30",
             target: { kind: "local" },
           },
-          { root: roots.second, workspace: second.path },
+          { root: roots.second, workspace },
         )
-        return { session, job }
+        return { session, job, workspace }
       },
     })
 
@@ -429,8 +654,8 @@ describe("session filesystem grants", () => {
         }),
     })
     const stopped = await Promise.all([
-      ComputeJobs.wait(one.job.id, { root: roots.first, workspace: first.path, timeout: 5_000 }),
-      ComputeJobs.wait(two.job.id, { root: roots.second, workspace: second.path, timeout: 5_000 }),
+      ComputeJobs.wait(one.job.id, { root: roots.first, workspace: one.workspace, timeout: 5_000 }),
+      ComputeJobs.wait(two.job.id, { root: roots.second, workspace: two.workspace, timeout: 5_000 }),
     ])
     expect(stopped.map((job) => job.status)).toEqual(["cancelled", "cancelled"])
 

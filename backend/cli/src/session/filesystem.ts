@@ -4,6 +4,7 @@ import { Global } from "@/global"
 import { Instance } from "@/project/instance"
 import { Project } from "@/project/project"
 import { Storage } from "@/storage/storage"
+import { Sandbox } from "@/sandbox/sandbox"
 import { Filesystem } from "@/util/filesystem"
 import { Lock } from "@/util/lock"
 import { NamedError } from "@synsci/util/error"
@@ -11,6 +12,8 @@ import crypto from "crypto"
 import path from "path"
 import z from "zod"
 import { SessionWorkspace } from "./workspace"
+import { AuthoritySignal } from "@/project/authority-signal"
+import { ToolOutputPath } from "@/tool/tool-output-path"
 
 /**
  * Durable, directional filesystem authority for a session and its project.
@@ -27,7 +30,7 @@ export namespace SessionFilesystem {
   export const Scope = z.enum(["once", "session", "project", "installation"])
   export type Scope = z.infer<typeof Scope>
 
-  export const Source = z.enum(["workspace", "permission", "api"])
+  export const Source = z.enum(["workspace", "permission", "api", "tool"])
   export type Source = z.infer<typeof Source>
 
   export const Grant = z.object({
@@ -73,8 +76,8 @@ export namespace SessionFilesystem {
     workspace: SessionWorkspace.Info,
     enforcement: z.object({
       broker: z.literal("enforced"),
-      processWrite: z.literal("workspace_only"),
-      processRead: z.literal("policy_only"),
+      processWrite: z.literal("grant_only"),
+      processRead: z.enum(["grant_only", "policy_only"]),
     }),
   })
   export type Snapshot = z.infer<typeof Snapshot>
@@ -111,6 +114,17 @@ export namespace SessionFilesystem {
   const installationKey = ["installation_filesystem"]
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+  async function changed(sessionID: string, projectID: string, grant: Grant) {
+    const signal = await AuthoritySignal.publish({
+      kind: "filesystem",
+      projectID,
+      sessionID,
+      scope: grant.scope,
+    })
+    await Bus.publish(Event.Changed, { sessionID, projectID, grant })
+    await AuthoritySignal.settle(signal.revision)
+  }
+
   async function canonical(input: string, base = Instance.directory) {
     const target = path.isAbsolute(input) ? input : path.resolve(base, input)
     const result = await Filesystem.canonical(target)
@@ -118,10 +132,43 @@ export namespace SessionFilesystem {
     throw new InvalidPathError({ path: target })
   }
 
-  function sessions() {
+  async function toolOutputRoot() {
+    // Resolve through the stable managed data-root link on every authority
+    // operation. Filesystem.canonical preserves a nonexistent tail below the
+    // nearest existing physical parent, so this remains correct before the
+    // first truncated output creates the directory and after a live data-root
+    // retarget.
+    const root = await Filesystem.canonical(ToolOutputPath.root)
+    if (!root) throw new InvalidPathError({ path: ToolOutputPath.root })
+    return Project.canonicalize(root)
+  }
+
+  async function assertNotToolOutput(target: string) {
+    if (!Filesystem.overlaps(await toolOutputRoot(), target)) return
+    throw new InvalidPathError({ path: target })
+  }
+
+  async function managedToolOutput(target: string) {
+    return Filesystem.contains(await toolOutputRoot(), target)
+  }
+
+  function exactToolOutputGrant(grant: Grant, target: string, access: Access) {
+    return (
+      access === "read" &&
+      grant.source === "tool" &&
+      grant.scope === "session" &&
+      grant.path === target &&
+      permits(grant, access)
+    )
+  }
+
+  function managedProject() {
     const root = Project.canonicalize(path.join(Global.Path.data, "projects"))
     const worktree = Project.canonicalize(Instance.project.worktree)
-    if (path.dirname(worktree) !== root || !uuid.test(path.basename(worktree))) return
+    return path.dirname(worktree) === root && uuid.test(path.basename(worktree))
+  }
+
+  function sessions() {
     return SessionWorkspace.root()
   }
 
@@ -180,17 +227,17 @@ export namespace SessionFilesystem {
     if (existing) return assertProject(sessionID, ProjectState.parse(existing))
 
     using _ = await Lock.write(`session-filesystem:project:${Instance.project.id}`)
-    const current = await load()
-    if (current) return assertProject(sessionID, ProjectState.parse(current))
-
-    const record: ProjectState = {
-      version: 1,
-      revision: 1,
-      projectID: Instance.project.id,
-      grants: [],
-    }
-    await Storage.write(projectKey(), record)
-    return record
+    const record = await Storage.upsert<ProjectState>(projectKey(), (current) =>
+      current
+        ? ProjectState.parse(current)
+        : {
+            version: 1,
+            revision: 1,
+            projectID: Instance.project.id,
+            grants: [],
+          },
+    )
+    return assertProject(sessionID, ProjectState.parse(record))
   }
 
   async function installation() {
@@ -203,16 +250,15 @@ export namespace SessionFilesystem {
     if (existing) return InstallationState.parse(existing)
 
     using _ = await Lock.write("session-filesystem:installation")
-    const current = await load()
-    if (current) return InstallationState.parse(current)
-
-    const record: InstallationState = {
-      version: 1,
-      revision: 1,
-      grants: [],
-    }
-    await Storage.write(installationKey, record)
-    return record
+    return Storage.upsert<InstallationState>(installationKey, (current) =>
+      current
+        ? InstallationState.parse(current)
+        : {
+            version: 1,
+            revision: 1,
+            grants: [],
+          },
+    )
   }
 
   async function ensure(sessionID: string) {
@@ -253,32 +299,49 @@ export namespace SessionFilesystem {
     return assert(State.parse(await read(sessionID)))
   }
 
-  export async function initialize(sessionID: string, directory: string) {
+  export async function initialize(sessionID: string, directory: string, options: { revokeExisting?: boolean } = {}) {
     const root = await canonical(directory)
     const worktree = await canonical(Instance.worktree)
+    // The global tool-output directory is a managed broker enclave, never a
+    // project root. Refuse an imported folder (including a broad ancestor such
+    // as the data root or home directory) that would turn initialization's
+    // implicit API grant into authority over every session's broker files.
+    await assertNotToolOutput(root)
+    await assertNotToolOutput(worktree)
     const existing = await read(sessionID).catch((error) => {
       if (Storage.NotFoundError.isInstance(error)) return
       throw error
     })
     if (existing) return assert(State.parse(existing))
 
-    const base = sessions()
     const workspace = await SessionWorkspace.create({
       sessionID,
       directory: root,
-      mode: base ? "isolated" : "legacy",
+      mode: "isolated",
     })
     const canonicalWorkspace = await canonical(workspace.scratchRoot)
-    const grants = [...new Set(base ? [canonicalWorkspace] : [root, worktree])].map(
-      (value): Grant => ({
+    const grants: Grant[] = [
+      {
         id: `fsg_${crypto.randomUUID()}`,
-        path: value,
+        path: canonicalWorkspace,
         access: "write",
         scope: "session",
         source: "workspace",
         time: { created: Date.now() },
-      }),
-    )
+      },
+      ...(!managedProject()
+        ? [...new Set([root, worktree])].map(
+            (value): Grant => ({
+              id: `fsg_${crypto.randomUUID()}`,
+              path: value,
+              access: "write",
+              scope: "session",
+              source: "api",
+              time: { created: Date.now() },
+            }),
+          )
+        : []),
+    ]
     const record: State = {
       version: 1,
       revision: 1,
@@ -287,10 +350,18 @@ export namespace SessionFilesystem {
       directory: root,
       grants,
     }
-    await Storage.write(key(sessionID), record)
+    let inserted = false
+    const stored = await Storage.upsert<State>(key(sessionID), (current) => {
+      if (current) return State.parse(current)
+      inserted = true
+      return record
+    })
+    if (!inserted) return assert(State.parse(stored)).then((value) => workspaceGrant(value))
     await project(sessionID)
-    for (const grant of grants) {
-      await Bus.publish(Event.Changed, { sessionID, projectID: Instance.project.id, grant })
+    if (options.revokeExisting !== false) {
+      for (const grant of grants) {
+        await changed(sessionID, Instance.project.id, grant)
+      }
     }
     return grants[0]
   }
@@ -306,44 +377,39 @@ export namespace SessionFilesystem {
         if (!path.isAbsolute(grant.path)) throw new InvalidPathError({ path: grant.path })
         const root = await Filesystem.canonical(grant.path)
         if (!root) throw new InvalidPathError({ path: grant.path })
+        await assertNotToolOutput(Project.canonicalize(root))
         return { path: Project.canonicalize(root), access: grant.access }
       }),
     )
     if (roots.length === 0) return
 
-    using _ = await Lock.write(`session-filesystem:project:${input.projectID}`)
     const storage = projectKey(input.projectID)
-    const existing = await Storage.read<ProjectState>(storage).catch((error) => {
-      if (Storage.NotFoundError.isInstance(error)) return
-      throw error
+    let additions: Array<Grant & { scope: "project" }> = []
+    await Storage.upsert<ProjectState>(storage, (raw) => {
+      const record = raw
+        ? ProjectState.parse(raw)
+        : ({ version: 1, revision: 1, projectID: input.projectID, grants: [] } satisfies ProjectState)
+      if (record.projectID !== input.projectID) throw new InvalidPathError({ path: input.projectID })
+      additions = roots
+        .filter(
+          (root, index, all) =>
+            all.findIndex((item) => item.path === root.path && item.access === root.access) === index &&
+            !record.grants.some(
+              (grant) => !grant.time.revoked && grant.path === root.path && grant.access === root.access,
+            ),
+        )
+        .map((root): Grant & { scope: "project" } => ({
+          id: `fsg_${crypto.randomUUID()}`,
+          path: root.path,
+          access: root.access,
+          scope: "project",
+          source: "api",
+          time: { created: Date.now() },
+        }))
+      if (!additions.length) return record
+      return { ...record, revision: record.revision + 1, grants: [...record.grants, ...additions] }
     })
-    const record = existing
-      ? ProjectState.parse(existing)
-      : ({ version: 1, revision: 1, projectID: input.projectID, grants: [] } satisfies ProjectState)
-    if (record.projectID !== input.projectID) throw new InvalidPathError({ path: input.projectID })
-
-    const additions = roots
-      .filter(
-        (root, index, all) =>
-          all.findIndex((item) => item.path === root.path && item.access === root.access) === index &&
-          !record.grants.some(
-            (grant) => !grant.time.revoked && grant.path === root.path && grant.access === root.access,
-          ),
-      )
-      .map((root): Grant & { scope: "project" } => ({
-        id: `fsg_${crypto.randomUUID()}`,
-        path: root.path,
-        access: root.access,
-        scope: "project",
-        source: "api",
-        time: { created: Date.now() },
-      }))
-    if (additions.length === 0) return
-    await Storage.write<ProjectState>(storage, {
-      ...record,
-      revision: record.revision + 1,
-      grants: [...record.grants, ...additions],
-    })
+    for (const grant of additions) await changed(`project:${input.projectID}`, input.projectID, grant)
   }
 
   export async function grant(input: {
@@ -353,8 +419,54 @@ export namespace SessionFilesystem {
     scope: Scope
     source?: Source
   }) {
+    if (input.source === "tool") {
+      throw new InvalidPathError({ path: input.path })
+    }
+    return insert(input)
+  }
+
+  /** Internal exact-file capability for app-managed truncated tool output. */
+  export async function grantToolOutput(input: { sessionID: string; path: string }) {
     const state = await ensure(input.sessionID)
     const root = await canonical(input.path)
+    assertPrivate(state, root, "read")
+    const grant: Grant = {
+      id: `fsg_${crypto.randomUUID()}`,
+      path: root,
+      access: "read",
+      scope: "session",
+      source: "tool",
+      time: { created: Date.now() },
+    }
+    const result = await Storage.update<State>(key(input.sessionID), (draft) => {
+      const duplicate = draft.grants.find(
+        (item) =>
+          item.source === "tool" &&
+          !item.time.consumed &&
+          !item.time.revoked &&
+          item.path === root &&
+          item.access === "read" &&
+          item.scope === "session",
+      )
+      if (duplicate) {
+        grant.id = duplicate.id
+        grant.time = duplicate.time
+        return
+      }
+      draft.grants.push(grant)
+    })
+    // Tool-output authority is broker-only. It must not change the process
+    // authority generation or emit the revocation event used to stop warm
+    // kernels, PTYs, commands, and compute jobs. Native processes never mount
+    // this grant; only brokered file tools and an explicitly materialized Task
+    // handoff can consume it.
+    return result.grants.find((item) => item.id === grant.id) ?? grant
+  }
+
+  async function insert(input: { sessionID: string; path: string; access: Access; scope: Scope; source?: Source }) {
+    const state = await ensure(input.sessionID)
+    const root = await canonical(input.path)
+    await assertNotToolOutput(root)
     assertPrivate(state, root, input.access)
     const now = Date.now()
     const grant: Grant = {
@@ -380,11 +492,7 @@ export namespace SessionFilesystem {
         draft.revision++
       })
       const stored = result.grants.find((item) => item.id === grant.id) ?? grant
-      await Bus.publish(Event.Changed, {
-        sessionID: input.sessionID,
-        projectID: Instance.project.id,
-        grant: stored,
-      })
+      await changed(input.sessionID, Instance.project.id, stored)
       return stored
     }
     if (input.scope === "project") {
@@ -404,11 +512,7 @@ export namespace SessionFilesystem {
         draft.revision++
       })
       const stored = result.grants.find((item) => item.id === grant.id) ?? grant
-      await Bus.publish(Event.Changed, {
-        sessionID: input.sessionID,
-        projectID: Instance.project.id,
-        grant: stored,
-      })
+      await changed(input.sessionID, Instance.project.id, stored)
       return stored
     }
     const result = await Storage.update<State>(key(input.sessionID), (draft) => {
@@ -429,11 +533,7 @@ export namespace SessionFilesystem {
       draft.revision++
     })
     const stored = result.grants.find((item) => item.id === grant.id) ?? grant
-    await Bus.publish(Event.Changed, {
-      sessionID: input.sessionID,
-      projectID: Instance.project.id,
-      grant: stored,
-    })
+    await changed(input.sessionID, Instance.project.id, stored)
     return stored
   }
 
@@ -452,8 +552,13 @@ export namespace SessionFilesystem {
     const record = await state(input.sessionID)
     const target = await canonical(input.path, workspaceGrant(record)?.path ?? record.directory)
     assertPrivate(record, target, input.access)
+    const enclave = await managedToolOutput(target)
     const matches = record.grants
-      .filter((grant) => permits(grant, input.access) && Filesystem.contains(grant.path, target))
+      .filter((grant) =>
+        enclave
+          ? exactToolOutputGrant(grant, target, input.access)
+          : permits(grant, input.access) && Filesystem.contains(grant.path, target),
+      )
       .sort((a, b) => {
         const priority = { installation: 0, project: 1, session: 2, once: 3 }
         if (a.scope !== b.scope) return priority[a.scope] - priority[b.scope]
@@ -482,11 +587,7 @@ export namespace SessionFilesystem {
         draft.revision++
       })
       grant.time.consumed = consumed
-      await Bus.publish(Event.Changed, {
-        sessionID: input.sessionID,
-        projectID: Instance.project.id,
-        grant,
-      })
+      await changed(input.sessionID, Instance.project.id, grant)
     }
     return { path: target, grant }
   }
@@ -500,8 +601,28 @@ export namespace SessionFilesystem {
     const record = await state(input.sessionID)
     const target = await canonical(input.path, workspaceGrant(record)?.path ?? record.directory)
     assertPrivate(record, target, input.access)
+    const enclave = await managedToolOutput(target)
     return record.grants.some(
-      (grant) => grant.scope !== "once" && permits(grant, input.access) && Filesystem.contains(grant.path, target),
+      (grant) =>
+        grant.scope !== "once" &&
+        (enclave
+          ? exactToolOutputGrant(grant, target, input.access)
+          : permits(grant, input.access) && Filesystem.contains(grant.path, target)),
+    )
+  }
+
+  /**
+   * An exact app-managed tool output belongs to the session that produced it.
+   * This is deliberately narrower than a normal filesystem grant: callers may
+   * read that one file without reopening the external-directory policy, but a
+   * parent directory, sibling output, or another session never inherits it.
+   */
+  export async function ownsToolOutput(input: { sessionID: string; path: string }) {
+    const record = await state(input.sessionID)
+    const target = await canonical(input.path, workspaceGrant(record)?.path ?? record.directory)
+    return record.grants.some(
+      (grant) =>
+        grant.source === "tool" && grant.scope === "session" && grant.path === target && permits(grant, "read"),
     )
   }
 
@@ -521,12 +642,9 @@ export namespace SessionFilesystem {
     return result
   }
 
-  /**
-   * Public policy packet. `processRead: policy_only` is deliberate and honest:
-   * Seatbelt/bubblewrap readable-mount parity is not safe cross-platform yet,
-   * so file reads are broker-enforced while arbitrary code retains the existing
-   * host-readable sandbox model. External writes never become process mounts.
-   */
+  /** Public policy packet. Native Seatbelt and bubblewrap backends enforce
+   * canonical read grants; policy_only is reserved for an unavailable native
+   * sandbox where brokered file access still remains enforced. */
   export async function snapshot(sessionID: string): Promise<Snapshot> {
     const filesystem = await state(sessionID)
     const workspace = await SessionWorkspace.touch(sessionID)
@@ -535,22 +653,25 @@ export namespace SessionFilesystem {
       workspace,
       enforcement: {
         broker: "enforced",
-        processWrite: "workspace_only",
-        processRead: "policy_only",
+        processWrite: "grant_only",
+        processRead: Sandbox.describe().readIsolation === "grant_only" ? "grant_only" : "policy_only",
       },
     }
   }
 
-  /**
-   * Roots arbitrary code may mutate. External grants are intentionally absent:
-   * even an external write grant means brokered File/Edit/Write mutation, not
-   * an unrestricted writable Bash/Python/R mount.
-   */
-  export async function processWriteRoots(sessionID: string) {
-    const record = await ensure(sessionID)
+  /** Persistent explicit read roots for newly launched processes. One-shot
+   * grants are bound to the single brokered invocation that consumes them. */
+  export async function processReadRoots(sessionID: string) {
+    const record = await state(sessionID)
     return record.grants
-      .filter((grant) => grant.source === "workspace" && grant.scope === "session" && permits(grant, "write"))
+      .filter((grant) => grant.source !== "tool" && grant.scope !== "once" && permits(grant, "read"))
       .map((grant) => grant.path)
+  }
+
+  /** Persistent explicit write roots for newly launched processes. */
+  export async function processWriteRoots(sessionID: string) {
+    const record = await state(sessionID)
+    return record.grants.filter((grant) => grant.scope !== "once" && permits(grant, "write")).map((grant) => grant.path)
   }
 
   export async function workspace(sessionID: string) {
@@ -559,54 +680,72 @@ export namespace SessionFilesystem {
   }
 
   export async function revoke(sessionID: string, grantID: string) {
-    const current = await state(sessionID)
-    const target = current.grants.find((item) => item.id === grantID)
-    if (!target) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
-    const revoked = Date.now()
-    if (target.scope === "installation") {
-      const record = await Storage.update<InstallationState>(installationKey, (draft) => {
+    return AuthoritySignal.exclusive(async () => {
+      const current = await state(sessionID)
+      const target = current.grants.find((item) => item.id === grantID)
+      if (!target) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
+      const revoked = Date.now()
+      if (target.source === "tool") {
+        const record = await Storage.update<State>(key(sessionID), (draft) => {
+          const grant = draft.grants.find((item) => item.id === grantID && item.source === "tool")
+          if (!grant) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
+          grant.time.revoked = revoked
+        })
+        return record.grants.find((item) => item.id === grantID)!
+      }
+      if (target.scope === "installation") {
+        const record = await Storage.update<InstallationState>(installationKey, (draft) => {
+          const grant = draft.grants.find((item) => item.id === grantID)
+          if (!grant) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
+          grant.time.revoked = revoked
+          draft.revision++
+        })
+        const grant = record.grants.find((item) => item.id === grantID)!
+        await changed(sessionID, Instance.project.id, grant)
+        return grant
+      }
+      if (target.scope === "project") {
+        const record = await Storage.update<ProjectState>(projectKey(), (draft) => {
+          assertProject(sessionID, ProjectState.parse(draft))
+          const grant = draft.grants.find((item) => item.id === grantID)
+          if (!grant) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
+          grant.time.revoked = revoked
+          draft.revision++
+        })
+        const grant = record.grants.find((item) => item.id === grantID)!
+        await changed(sessionID, Instance.project.id, grant)
+        return grant
+      }
+      const record = await Storage.update<State>(key(sessionID), (draft) => {
         const grant = draft.grants.find((item) => item.id === grantID)
         if (!grant) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
         grant.time.revoked = revoked
         draft.revision++
       })
       const grant = record.grants.find((item) => item.id === grantID)!
-      await Bus.publish(Event.Changed, { sessionID, projectID: Instance.project.id, grant })
+      await changed(sessionID, Instance.project.id, grant)
       return grant
-    }
-    if (target.scope === "project") {
-      const record = await Storage.update<ProjectState>(projectKey(), (draft) => {
-        assertProject(sessionID, ProjectState.parse(draft))
-        const grant = draft.grants.find((item) => item.id === grantID)
-        if (!grant) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
-        grant.time.revoked = revoked
-        draft.revision++
-      })
-      const grant = record.grants.find((item) => item.id === grantID)!
-      await Bus.publish(Event.Changed, { sessionID, projectID: Instance.project.id, grant })
-      return grant
-    }
-    const record = await Storage.update<State>(key(sessionID), (draft) => {
-      const grant = draft.grants.find((item) => item.id === grantID)
-      if (!grant) throw new Storage.NotFoundError({ message: `Filesystem grant not found: ${grantID}` })
-      grant.time.revoked = revoked
-      draft.revision++
     })
-    const grant = record.grants.find((item) => item.id === grantID)!
-    await Bus.publish(Event.Changed, { sessionID, projectID: Instance.project.id, grant })
-    return grant
   }
 
   export async function remove(sessionID: string) {
-    const record = await read(sessionID).catch((error) => {
-      if (Storage.NotFoundError.isInstance(error)) return
-      throw error
+    return AuthoritySignal.exclusive(async () => {
+      const record = await read(sessionID).catch((error) => {
+        if (Storage.NotFoundError.isInstance(error)) return
+        throw error
+      })
+      if (record) {
+        await ensure(sessionID)
+        await SessionWorkspace.trash(sessionID)
+      }
+      await Storage.remove(key(sessionID))
+      return AuthoritySignal.publish({
+        kind: "filesystem",
+        projectID: Instance.project.id,
+        sessionID,
+        scope: "session",
+      })
     })
-    if (record) {
-      await ensure(sessionID)
-      await SessionWorkspace.trash(sessionID)
-    }
-    await Storage.remove(key(sessionID))
   }
 
   /** Move stale orphan scratch into recoverable trash and purge trash only

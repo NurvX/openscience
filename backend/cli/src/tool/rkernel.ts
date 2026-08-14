@@ -3,7 +3,7 @@ import { Tool } from "./tool"
 import { spawn, type ChildProcess } from "child_process"
 import path from "path"
 import os from "os"
-import { unlinkSync } from "fs"
+import { accessSync, constants, mkdirSync, statSync, unlinkSync } from "fs"
 import { Shell } from "@/shell/shell"
 import { Instance } from "@/project/instance"
 import { OpenScience } from "@/openscience"
@@ -13,6 +13,7 @@ import { Sandbox } from "@/sandbox/sandbox"
 import { KernelQueue } from "@/science/kernel/queue"
 import { KernelProcessIdentity } from "@/science/kernel/process"
 import { KernelRuntime } from "@/science/kernel/registry"
+import { KernelEnvironmentMutation } from "@/science/kernel/environment-mutation"
 import { AtlasEnvironment } from "@/science/kernel/types"
 import type {
   Kernel,
@@ -25,12 +26,15 @@ import type {
   KernelOutput,
   KernelProcess,
 } from "@/science/kernel/types"
+import { WindowsJobLauncher } from "@/process/windows-job-launcher"
+import { ExecutionAuthority } from "@/project/execution"
+import { ToolRetryGuard } from "@/session/tool-retry-guard"
 
 /**
- * Persistent R kernel, following the same pattern as the Python kernel in
+ * Persistent R runtime, following the same pattern as the Python runtime in
  * `tool/notebook.ts` and the biology kernel it generalizes.
  *
- * One long-lived `Rscript` process per sessionID evaluates cells into the global
+ * One long-lived `Rscript` process per sessionID evaluates code in the global
  * environment, so objects/attached packages persist across `execute` calls.
  * stdout (print output) is captured; warnings/messages/errors are surfaced; and
  * base-graphics or ggplot2 plots left on the device are captured as `image/png`
@@ -48,7 +52,7 @@ import type {
 // warnings/messages/error section. The PNG is passed back by file path and read +
 // base64-encoded on the TS side, avoiding any base64 package requirement.
 const KERNEL_SCRIPT = `
-run_cell <- function(code) {
+run_code <- function(code) {
   imgfile <- tempfile(fileext = ".png")
   dev_ok <- tryCatch({
     grDevices::png(filename = imgfile, width = 900, height = 650, res = 110, type = "cairo")
@@ -113,7 +117,7 @@ run_cell <- function(code) {
 
 con <- file("stdin")
 open(con, blocking = TRUE)
-cat("__OPENSCIENCE_KERNEL_READY__\\n")
+cat("__OPENSCIENCE_KERNEL_READY__", R.version.string, "\\n", sep = "")
 flush(stdout())
 
 repeat {
@@ -127,7 +131,7 @@ repeat {
   }
   if (!isTRUE(got_end)) break
   code <- paste(lines, collapse = "\\n")
-  tryCatch(run_cell(code), error = function(e) {
+  tryCatch(run_code(code), error = function(e) {
     cat("__OPENSCIENCE_R_RESULT_START__\\nOK:0\\nIMG:\\n__OPENSCIENCE_R_OUT__\\n\\n__OPENSCIENCE_R_MSG__\\nError: ", conditionMessage(e), "\\n__OPENSCIENCE_R_END__\\n", sep = "")
     flush(stdout())
   })
@@ -137,15 +141,18 @@ repeat {
 const READY = "__OPENSCIENCE_KERNEL_READY__"
 const START = "__OPENSCIENCE_R_RESULT_START__\n"
 const END = "\n__OPENSCIENCE_R_END__"
-const IDLE_MS = 30 * 60 * 1000
-
-async function findRscript(override?: string): Promise<string | null> {
+async function findRscript(override?: string): Promise<{ binary: string; version?: string } | null> {
   const candidates = override ? [override] : ["Rscript"]
   for (const bin of candidates) {
     try {
-      const proc = Bun.spawn([bin, "--version"], { stdout: "pipe", stderr: "pipe" })
-      await proc.exited
-      if (proc.exitCode === 0) return bin
+      // Discovery is metadata-only. A project-selected runtime must not
+      // receive a preflight `--version` execution before KernelRuntime has
+      // acquired trust, sandbox authority and durable OS ownership. The
+      // registered interpreter reports its version in the READY frame.
+      const binary = path.isAbsolute(bin) ? bin : Bun.which(bin)
+      if (!binary || !statSync(binary).isFile()) continue
+      accessSync(binary, process.platform === "win32" ? constants.F_OK : constants.X_OK)
+      return { binary }
     } catch {}
   }
   return null
@@ -206,7 +213,6 @@ class RKernel implements Kernel {
   proc?: ChildProcess
   scriptPath?: string
   configPath?: string
-  lastUsed = Date.now()
   private stderrTail = ""
   private queue = new KernelQueue()
   private intentional = false
@@ -237,8 +243,8 @@ class RKernel implements Kernel {
     if (this.ready) return
     this.intentional = false
     this.stderrTail = ""
-    const bin = await findRscript(opts?.binary)
-    if (!bin) {
+    const interpreter = await findRscript(opts?.binary)
+    if (!interpreter) {
       throw new Error(
         "Rscript not found. Install R (https://www.r-project.org) so `Rscript` is on PATH to use the R kernel.",
       )
@@ -253,45 +259,74 @@ class RKernel implements Kernel {
     const workspace = opts?.sessionID
       ? await SessionFilesystem.processWriteRoots(opts.sessionID)
       : [Instance.directory, Instance.worktree]
+    const readable = opts?.sessionID
+      ? await SessionFilesystem.processReadRoots(opts.sessionID)
+      : [Instance.directory, Instance.worktree]
 
     // Confine the kernel to the workspace when the execution sandbox is on: the R
     // kernel runs arbitrary agent-authored code — the same threat model as the
     // bash tool — so it must respect the same boundary.
     const policy = await Config.trustedSandbox()
     const sandboxed = Sandbox.wrapArgv({
-      file: bin,
+      file: interpreter.binary,
       args: ["--vanilla", scriptPath],
       workspace,
-      extraWritable: [scriptPath, configPath],
+      readable,
+      extraWritable: [scriptPath, configPath, ...(opts?.extraWritable ?? [])],
       unreadable: OpenScience.kernelSensitivePaths(),
-      options: policy,
+      options: { ...policy, ...(opts?.sandboxNetwork ? { network: opts.sandboxNetwork } : {}) },
     })
     const cwd = opts?.cwd ?? (opts?.sessionID ? await SessionFilesystem.workspace(opts.sessionID) : Instance.directory)
     this.environment = {
       cwd,
+      interpreter: {
+        name: opts?.environmentName ?? "r",
+        binary: interpreter.binary,
+        version: interpreter.version,
+      },
       atlas: AtlasEnvironment,
       sandbox: {
         ...Sandbox.describe(),
         requested: policy?.enabled === true,
         enforced: sandboxed.sandboxed,
         backend: sandboxed.backend,
-        network: policy?.network ?? "allow",
+        network: opts?.sandboxNetwork ?? policy?.network ?? "allow",
         warning: sandboxed.warning,
       },
     }
-    const proc = spawn(sandboxed.file, sandboxed.args, {
-      cwd,
-      env: {
-        ...OpenScience.kernelEnv(process.env),
-        ...(opts?.env ?? {}),
-        ATLAS_CLI_CONFIG_PATH: configPath,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-      // Own process group so killing the kernel reaps its worker children (#102).
-      detached: process.platform !== "win32",
-    })
+    const wrapped = WindowsJobLauncher.wrap({ file: sandboxed.file, args: sandboxed.args })
+    let proc: ChildProcess
+    try {
+      proc = spawn(wrapped.file, wrapped.args, {
+        cwd,
+        env: {
+          ...OpenScience.kernelEnv(process.env),
+          ...(opts?.env ?? {}),
+          ATLAS_CLI_CONFIG_PATH: configPath,
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+        // Own process group so killing the kernel reaps its worker children (#102).
+        detached: process.platform !== "win32",
+      })
+    } catch (error) {
+      Sandbox.cleanup(sandboxed)
+      throw error
+    }
+    proc.once("exit", () => Sandbox.cleanup(sandboxed))
+    proc.once("error", () => Sandbox.cleanup(sandboxed))
     this.proc = proc
     this.process = KernelProcessIdentity.capture(proc)
+    try {
+      const ownership = opts?.processOwnership
+        ? { ...opts.processOwnership, windowsRelease: wrapped.release }
+        : undefined
+      const registered = await KernelProcessIdentity.register(proc, ownership)
+      if (!registered) throw new Error("R kernel exited before durable process registration")
+      this.process = registered
+    } catch (error) {
+      await this.terminate(proc)
+      throw error
+    }
     proc.once("exit", () => {
       if (!this.intentional) this.cleanupScript()
     })
@@ -309,7 +344,25 @@ class RKernel implements Kernel {
       let buf = ""
       const onData = (d: Buffer) => {
         buf += d.toString()
-        if (buf.includes(READY)) {
+        if (buf.length > 64 * 1024) {
+          clearTimeout(timer)
+          proc.stdout?.off("data", onData)
+          void this.terminate(proc)
+          reject(new Error("R kernel startup output exceeded 65536 bytes before the ready handshake"))
+          return
+        }
+        const start = buf.indexOf(READY)
+        const end = start === -1 ? -1 : buf.indexOf("\n", start)
+        if (start !== -1 && end !== -1) {
+          const version = buf.slice(start + READY.length, end).trim()
+          if (!version || version.length > 128 || /[\0\r]/.test(version)) {
+            clearTimeout(timer)
+            proc.stdout?.off("data", onData)
+            void this.terminate(proc)
+            reject(new Error("R kernel returned an invalid ready handshake"))
+            return
+          }
+          this.environment!.interpreter.version = version
           clearTimeout(timer)
           proc.stdout?.off("data", onData)
           resolve()
@@ -333,22 +386,31 @@ class RKernel implements Kernel {
 
   private async run(code: string, opts?: ExecuteOptions): Promise<ExecuteResult> {
     if (!this.ready) throw new Error("R kernel is not running")
-    opts?.onStart?.()
+    await opts?.onStart?.()
+    if (opts?.signal?.aborted) throw new Error("Execution aborted before starting")
     const proc = this.proc!
-    this.lastUsed = Date.now()
     const timeout = Math.min(Math.max(opts?.timeout ?? 120_000, 5_000), 600_000)
 
     const raw = await new Promise<RawResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      let stopping = false
+      const stop = (error: Error) => {
+        if (stopping) return
+        stopping = true
         cleanup()
-        void this.terminate(proc)
-        reject(new Error(`Cell execution timed out after ${Math.round(timeout / 1000)}s`))
+        // Do not free the queue while an expired interpreter may still be
+        // running user code. Retire the process first so the following call is
+        // forced onto a clean R incarnation.
+        void this.shutdown().then(
+          () => reject(error),
+          () => reject(error),
+        )
+      }
+      const timer = setTimeout(() => {
+        stop(new Error(`Cell execution timed out after ${Math.round(timeout / 1000)}s`))
       }, timeout)
 
       const onAbort = () => {
-        cleanup()
-        void this.terminate(proc)
-        reject(new Error("Execution aborted"))
+        stop(new Error("Execution aborted"))
       }
 
       let buffer = ""
@@ -428,22 +490,9 @@ class RKernelManager implements KernelManager {
   private kernels = new Map<string, RKernel>()
   private starts = new Map<string, { kernel: RKernel; promise: Promise<RKernel> }>()
 
-  private async reapIdle() {
-    const now = Date.now()
-    for (const [id, kernel] of this.kernels) {
-      if (now - kernel.lastUsed <= IDLE_MS) continue
-      await kernel.shutdown()
-      this.kernels.delete(id)
-    }
-  }
-
   async get(sessionID: string, opts?: KernelStartOptions): Promise<RKernel> {
-    await this.reapIdle()
     const existing = this.kernels.get(sessionID)
-    if (existing && existing.ready) {
-      existing.lastUsed = Date.now()
-      return existing
-    }
+    if (existing && existing.ready) return existing
     if (existing) {
       await existing.shutdown()
       this.kernels.delete(sessionID)
@@ -516,147 +565,231 @@ function clip(s: string, max = 30_000): string {
   return s.length > max ? s.slice(0, max) + "\n\n... (truncated)" : s
 }
 
-export const RKernelTool = Tool.define("rkernel", {
-  description: [
-    "Execute R code in a persistent, managed kernel. Objects, attached packages, and state persist across calls that use the same kernel name.",
-    "For multiple independent analyses, issue multiple kernel calls in the same response with distinct `kernel` names. Those kernels execute concurrently and appear separately in Compute.",
-    "Always set `title` to a concise description of the scientific action, not a code fragment or import.",
-    "Set `source` when the cell belongs to a script or .ipynb file so Compute can identify that source.",
-    "Never use shell subprocesses to imitate multiple kernels; use this tool's `kernel` parameter instead.",
-    "After a named analysis is fully saved and verified, call this tool with `action: stop` and the same kernel name so completed workers do not idle.",
-    "Use instead of `bash Rscript` for analysis — no need to re-source data or reload packages between cells.",
-    "Print output is captured; base-graphics and ggplot2 plots are captured as inline PNG images where the platform supports it.",
-    "Requires Rscript on PATH; if R is not installed the tool reports a clear install hint.",
-  ].join("\n"),
-  parameters: z
-    .object({
-      action: z.enum(["execute", "stop"]).optional().describe("Execute a cell (default) or stop this named kernel"),
-      code: z.string().optional().describe("R code to execute; required when action is execute"),
-      title: z
-        .string()
-        .trim()
-        .min(1)
-        .max(100)
-        .optional()
-        .describe("Short action label for this cell, for example 'Comparing survival curves'"),
-      source: z
-        .string()
-        .trim()
-        .min(1)
-        .max(1024)
-        .optional()
-        .describe("Script or notebook path this cell belongs to, when applicable"),
-      kernel: z
-        .string()
-        .trim()
-        .min(1)
-        .max(64)
-        .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
-        .optional()
-        .describe("Stable name for an isolated managed kernel. Use a distinct name for each parallel analysis."),
-      timeout: z.number().default(120_000).describe("Execution timeout in ms (default: 120s, max: 600s)"),
+const RFields = {
+  action: z.enum(["execute", "stop"]).optional().describe("Run code (default) or stop this conversation's R runtime"),
+  code: z.string().optional().describe("R code to execute; required when action is execute"),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Short action label for this execution, for example 'Comparing survival curves'"),
+  source: z
+    .string()
+    .trim()
+    .min(1)
+    .max(1024)
+    .optional()
+    .describe("Script path associated with this execution, when applicable"),
+  timeout: z.number().default(120_000).describe("Execution timeout in ms (default: 120s, max: 600s)"),
+}
+
+const RParameters = z
+  .object(RFields)
+  .strict()
+  .superRefine((params, issue) => {
+    if (params.action !== "stop" && !params.code) {
+      issue.addIssue({ code: "custom", path: ["code"], message: "code is required when action is execute" })
+    }
+  })
+
+const CompatibilityKernelName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+  .optional()
+  .describe("Deprecated compatibility name for an isolated runtime")
+
+const RKernelParameters = z
+  .object({ ...RFields, kernel: CompatibilityKernelName })
+  .strict()
+  .superRefine((params, issue) => {
+    if (params.action !== "stop" && !params.code) {
+      issue.addIssue({ code: "custom", path: ["code"], message: "code is required when action is execute" })
+    }
+  })
+
+type RInput = z.infer<typeof RKernelParameters>
+
+async function executeR(params: RInput, ctx: Tool.Context, compatibilityNamed: boolean) {
+  const name = compatibilityNamed ? (params.kernel ?? "agent") : "r"
+  const identity = {
+    projectID: Instance.project.id,
+    sessionID: ctx.sessionID,
+    name,
+    language: "r" as const,
+  }
+  if (params.action === "stop") {
+    ctx.metadata({
+      title: compatibilityNamed ? `Stopped R · ${name}` : "Stopped R",
+      metadata: { kernel: name, language: "r", stopped: true },
     })
-    .superRefine((params, issue) => {
-      if (params.action !== "stop" && !params.code) {
-        issue.addIssue({ code: "custom", path: ["code"], message: "code is required when action is execute" })
-      }
-    }),
-  async execute(params, ctx) {
-    const name = params.kernel ?? "agent"
-    const identity = {
+    await KernelRuntime.release(identity)
+    return {
+      title: compatibilityNamed ? `Stopped R · ${name}` : "Stopped R",
+      output: "Managed R runtime stopped. Its in-memory state was cleared.",
+      metadata: {
+        kernel: name,
+        language: "r",
+        stopped: true,
+        ok: true,
+        available: true,
+        output: "Managed R runtime stopped.",
+      },
+    }
+  }
+  const title = params.title ?? "R execution"
+  const retryInput = { ...params, code: params.code! }
+  await ToolRetryGuard.assertKernel(ctx, {
+    language: "r",
+    environment: "r",
+    source: params.source,
+    code: params.code!,
+  })
+  const mutation = KernelEnvironmentMutation.detect({ language: "r", environment: "r", code: params.code! })
+  ctx.metadata({
+    title,
+    metadata: {
+      kernel: name,
+      language: "r",
+      task: title,
+      ...(mutation ? { environmentMutation: mutation } : {}),
+      ...(params.source ? { source: params.source } : {}),
+    },
+  })
+
+  // Discovery is metadata-only, so avoid asking for a change that cannot run.
+  const bin = await findRscript()
+  if (!bin) {
+    const msg =
+      "Rscript not found. Install R from https://www.r-project.org (or `brew install r`) so `Rscript` is on PATH."
+    ctx.metadata({ metadata: { output: msg, ok: false } })
+    return {
+      title: "R runtime unavailable",
+      output: msg,
+      metadata: { kernel: name, language: "r", stopped: false, ok: false, available: false, output: msg },
+    }
+  }
+
+  if (mutation) {
+    await ctx.ask(KernelEnvironmentMutation.permission(mutation))
+    await ExecutionAuthority.require({
       projectID: Instance.project.id,
       sessionID: ctx.sessionID,
-      name,
-      language: "r" as const,
-    }
-    if (params.action === "stop") {
-      ctx.metadata({ title: `Stopped R · ${name}`, metadata: { kernel: name, language: "r", stopped: true } })
-      await KernelRuntime.release(identity)
-      return {
-        title: `Stopped R · ${name}`,
-        output: `Managed kernel ${name} stopped. Its in-memory state was cleared.`,
-        metadata: {
-          kernel: name,
-          language: "r",
-          stopped: true,
-          ok: true,
-          available: true,
-          output: `Managed kernel ${name} stopped.`,
-        },
-      }
-    }
-    const title = params.title ?? "R cell"
-    ctx.metadata({
-      title,
-      metadata: { kernel: name, language: "r", task: title, ...(params.source ? { source: params.source } : {}) },
+      capability: "package_install",
     })
-
-    // Executes arbitrary code — same permission gate as bash.
+    await KernelRuntime.release(identity)
+  } else {
     await ctx.ask({
       permission: "bash",
-      patterns: ["R (rkernel)"],
+      patterns: ["R"],
       always: ["Rscript*"],
       metadata: {},
     })
+  }
 
-    // Degrade gracefully when R is not installed.
-    const bin = await findRscript()
-    if (!bin) {
-      const msg =
-        "Rscript not found. Install R from https://www.r-project.org (or `brew install r`) so `Rscript` is on PATH."
-      ctx.metadata({ metadata: { output: msg, ok: false } })
-      return {
-        title: "R kernel unavailable",
-        output: msg,
-        metadata: { kernel: name, language: "r", stopped: false, ok: false, available: false, output: msg },
-      }
-    }
-
-    const result = await KernelRuntime.execute(identity, params.code!, {
-      timeout: params.timeout,
-      signal: ctx.abort,
-      origin: { messageID: ctx.messageID, callID: ctx.callID, title, source: params.source },
-    })
-
-    const images = result.outputs.filter((o) => o.type === "display" && o.data?.["image/png"])
-    const dataUrls = images.map((o) => `data:image/png;base64,${o.data!["image/png"]}`)
-
-    const parts: string[] = []
-    if (result.stdout) parts.push(result.stdout)
-    if (result.stderr) parts.push(`${result.ok ? "[messages]" : "[ERROR]"}\n${result.stderr}`)
-    if (images.length) parts.push(`[figure] captured ${images.length} inline image(s)`)
-    if (!parts.length) parts.push("(no output)")
-    const output = clip(parts.join("\n"))
-
-    ctx.metadata({
-      title,
-      metadata: {
-        output,
-        ok: result.ok,
-        provenanceID: result.provenanceID,
-        kernel: name,
-        language: "r",
-        task: title,
-        ...(params.source ? { source: params.source } : {}),
+  let result: ExecuteResult
+  try {
+    result = await KernelRuntime.execute(
+      identity,
+      params.code!,
+      {
+        timeout: params.timeout,
+        signal: ctx.abort,
+        origin: { messageID: ctx.messageID, callID: ctx.callID, title, source: params.source },
       },
-    })
+      KernelEnvironmentMutation.rRuntime(!!mutation),
+    )
+  } catch (error) {
+    if (mutation) await KernelRuntime.release(identity).catch(() => undefined)
+    throw ToolRetryGuard.annotateKernelTimeout(ctx, retryInput, "r", "r", error)
+  }
 
-    return {
-      title: result.ok ? title : `${title} (error)`,
+  let restarted = false
+  if (mutation) {
+    if (result.ok) {
+      await KernelRuntime.restart(identity, KernelEnvironmentMutation.rRuntime())
+      restarted = true
+    } else {
+      await KernelRuntime.release(identity)
+    }
+  }
+
+  const images = result.outputs.filter((o) => o.type === "display" && o.data?.["image/png"])
+  const dataUrls = images.map((o) => `data:image/png;base64,${o.data!["image/png"]}`)
+
+  const parts: string[] = []
+  if (result.stdout) parts.push(result.stdout)
+  if (result.stderr) parts.push(`${result.ok ? "[messages]" : "[ERROR]"}\n${result.stderr}`)
+  if (images.length) parts.push(`[figure] captured ${images.length} inline image(s)`)
+  if (restarted) parts.push("[environment] R packages updated; R restarted with cleared in-memory state")
+  if (!parts.length) parts.push("(no output)")
+  const output = clip(parts.join("\n"))
+
+  ctx.metadata({
+    title,
+    metadata: {
       output,
-      metadata: {
-        stopped: false,
-        ok: result.ok,
-        available: true,
-        output,
-        kernel: name,
-        language: "r",
-        task: title,
-        ...(params.source ? { source: params.source } : {}),
-        provenanceID: result.provenanceID,
-        hasImages: images.length,
-        ...(images.length ? { artifact: { kind: "image", data: { images: dataUrls } } } : {}),
-      },
-    }
-  },
-})
+      ok: result.ok,
+      provenanceID: result.provenanceID,
+      kernel: name,
+      language: "r",
+      task: title,
+      restarted,
+      ...(mutation ? { environmentMutation: mutation } : {}),
+      ...(params.source ? { source: params.source } : {}),
+    },
+  })
+
+  return {
+    title: result.ok ? title : `${title} (error)`,
+    output,
+    metadata: {
+      stopped: false,
+      ok: result.ok,
+      available: true,
+      output,
+      kernel: name,
+      language: "r",
+      task: title,
+      restarted,
+      ...(mutation ? { environmentMutation: mutation } : {}),
+      ...(params.source ? { source: params.source } : {}),
+      provenanceID: result.provenanceID,
+      hasImages: images.length,
+      ...(images.length ? { artifact: { kind: "image", data: { images: dataUrls } } } : {}),
+    },
+  }
+}
+
+const RDefinition: Awaited<ReturnType<Tool.Info<typeof RParameters>["init"]>> = {
+  description: [
+    "Run R code in one long-lived managed process per conversation. Objects, attached packages, and state persist across calls; child conversations are isolated.",
+    "Treat persistent state as working memory, not reproducibility. For a material result, save the source, declared inputs, parameters, and outputs and clean-rerun when practical.",
+    "Always set `title` to a concise description of the scientific action, not a code fragment or import.",
+    "Set `source` when the execution belongs to a script so Activity can identify that source.",
+    "Use `action: stop` when its in-memory state should be cleared.",
+    "Use instead of `bash Rscript` for analysis — no need to re-source data or reload packages between executions.",
+    "Submit install.packages, renv, pak, BiocManager, removals, and updates as a separate execution. Package/environment changes require explicit approval and automatically restart R after success.",
+    "Print output is captured; base-graphics and ggplot2 plots are captured as inline PNG images where the platform supports it.",
+    "Requires Rscript on PATH; if R is not installed the tool reports a clear install hint.",
+  ].join("\n"),
+  parameters: RParameters,
+  execute: (params, ctx) => executeR(params, ctx, false),
+}
+
+const RKernelDefinition: Awaited<ReturnType<Tool.Info<typeof RKernelParameters>["init"]>> = {
+  ...RDefinition,
+  description: `${RDefinition.description}\nDeprecated compatibility alias: an existing call may still supply a runtime name.`,
+  parameters: RKernelParameters,
+  execute: (params, ctx) => executeR(params, ctx, true),
+}
+
+/** Canonical model-facing R tool. */
+export const RTool = Tool.define("r", async () => ({ ...RDefinition }))
+
+/** @deprecated Compatibility alias. Keep out of the advertised tool registry. */
+export const RKernelTool = Tool.define("rkernel", async () => ({ ...RKernelDefinition }))

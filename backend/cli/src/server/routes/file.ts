@@ -16,6 +16,7 @@ import { ArtifactAnnotation } from "../../file/annotations"
 import { PublicationReview } from "../../file/review"
 import { Identifier } from "../../id/id"
 import { ArtifactStore } from "../../artifact/store"
+import { FileTrash } from "../../file/trash"
 
 const LineageRun = z.object({
   id: z.string(),
@@ -245,6 +246,49 @@ export const FileRoutes = lazy(() =>
       },
     )
     .get(
+      "/file/trash",
+      describeRoute({
+        summary: "List recoverable source files",
+        description:
+          "List source and workspace files deleted by approved edit operations during the 30-day recovery window.",
+        operationId: "file.trash.list",
+        responses: {
+          200: {
+            description: "Recoverable files",
+            content: { "application/json": { schema: resolver(FileTrash.Record.array()) } },
+          },
+        },
+      }),
+      async (c) => c.json(await FileTrash.list(Instance.project.id)),
+    )
+    .post(
+      "/file/trash/:id/restore",
+      describeRoute({
+        summary: "Restore a deleted source file",
+        description:
+          "Restore a source or workspace file during its 30-day recovery window without overwriting an existing path.",
+        operationId: "file.trash.restore",
+        responses: {
+          200: {
+            description: "Restored file",
+            content: { "application/json": { schema: resolver(FileTrash.Record) } },
+          },
+          404: { description: "Recoverable file not found" },
+        },
+      }),
+      validator("param", z.object({ id: z.string().startsWith("ftr_") })),
+      validator("json", z.object({ sessionID: Identifier.schema("session") })),
+      async (c) => {
+        const result = await FileTrash.restore({
+          projectID: Instance.project.id,
+          sessionID: c.req.valid("json").sessionID,
+          id: c.req.valid("param").id,
+        })
+        if (!result) return c.json({ error: "Recoverable file not found" }, 404)
+        return c.json(result)
+      },
+    )
+    .get(
       "/file/inspect",
       describeRoute({
         summary: "Inspect a scientific binary file",
@@ -405,12 +449,12 @@ export const FileRoutes = lazy(() =>
     .get(
       "/file/artifact-store",
       describeRoute({
-        summary: "List saved artifacts",
+        summary: "List saved Results",
         description: "List active or recoverable trashed artifacts from this project's local artifact database.",
         operationId: "file.artifactStore.list",
         responses: {
           200: {
-            description: "Saved artifacts",
+            description: "Saved Results",
             content: { "application/json": { schema: resolver(ArtifactStore.Artifact.array()) } },
           },
         },
@@ -421,12 +465,12 @@ export const FileRoutes = lazy(() =>
     .get(
       "/file/artifact-store/:id",
       describeRoute({
-        summary: "Read one saved artifact record",
-        description: "Read immutable version metadata and the current execution record for a saved artifact.",
+        summary: "Read one saved Result record",
+        description: "Read immutable version metadata and the current execution record for a saved Result.",
         operationId: "file.artifactStore.get",
         responses: {
           200: {
-            description: "Saved artifact detail",
+            description: "Saved Result detail",
             content: { "application/json": { schema: resolver(ArtifactStore.Detail) } },
           },
           404: { description: "Artifact not found" },
@@ -442,7 +486,7 @@ export const FileRoutes = lazy(() =>
     .patch(
       "/file/artifact-store/:id",
       describeRoute({
-        summary: "Rename a saved artifact",
+        summary: "Rename a saved Result",
         description: "Rename the artifact record without changing any immutable version bytes.",
         operationId: "file.artifactStore.rename",
         responses: {
@@ -468,7 +512,7 @@ export const FileRoutes = lazy(() =>
     .delete(
       "/file/artifact-store/:id",
       describeRoute({
-        summary: "Move a saved artifact to trash",
+        summary: "Move a saved Result to trash",
         description: "Hide an artifact from active Files while retaining every version for 30 days.",
         operationId: "file.artifactStore.trash",
         responses: {

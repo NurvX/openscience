@@ -42,7 +42,11 @@ export namespace ExecutionAuthority {
     trustRevision: z.number().int().positive(),
     grantRevision: z.number().int().positive(),
     generation: z.string(),
+    /** Canonical project instance directory. Older persisted job decisions
+     * omitted this and recover through their historical workspace value. */
+    directory: z.string().optional(),
     workspace: z.string(),
+    readable: z.array(z.string()),
     writable: z.array(z.string()),
     sandbox: z.object({
       enabled: z.boolean(),
@@ -90,8 +94,11 @@ export namespace ExecutionAuthority {
     const unavailable = sandbox.enabled && !sandbox.available && sandbox.onUnavailable === "error"
     const reason = untrusted ? "project_untrusted" : unavailable ? "sandbox_unavailable" : "allowed"
     const mode = untrusted || unavailable ? "read_only" : sandbox.enabled ? "sandboxed" : "host"
-    const writable = await SessionFilesystem.processWriteRoots(input.sessionID)
-    const workspace = await SessionFilesystem.workspace(input.sessionID)
+    const [readable, writable, workspace] = await Promise.all([
+      SessionFilesystem.processReadRoots(input.sessionID),
+      SessionFilesystem.processWriteRoots(input.sessionID),
+      SessionFilesystem.workspace(input.sessionID),
+    ])
     const generation = crypto
       .createHash("sha256")
       .update(
@@ -115,7 +122,9 @@ export namespace ExecutionAuthority {
       trustRevision: trust.revision,
       grantRevision: filesystem.revision,
       generation,
+      directory: Instance.directory,
       workspace,
+      readable,
       writable,
       sandbox,
       remediation: trust.remediation,

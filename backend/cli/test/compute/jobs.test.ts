@@ -3,12 +3,16 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ComputeJobs, ComputeJobsCorruptError } from "../../src/compute/jobs"
+import { SshAdapter } from "../../src/compute/ssh/adapter"
 import { ModalAdapter } from "../../src/compute/modal/adapter"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
+import { SessionFilesystem } from "../../src/session/filesystem"
 import { OpenScience } from "../../src/openscience"
 import { Sandbox } from "../../src/sandbox/sandbox"
 import { ExecutionAuthority } from "../../src/project/execution"
+import { ArtifactStore } from "../../src/artifact/store"
+import { CredentialProcessLedger } from "../../src/credentials/process-ledger"
 import { tmpdir, trustProject } from "../fixture/fixture"
 
 type StartOptions = NonNullable<Parameters<typeof ComputeJobs.start>[1]>
@@ -36,14 +40,53 @@ function modalProvider(overrides: Partial<ComputeJobs.ModalProvider> = {}): Comp
 
 async function start(input: ComputeJobs.Input, options: StartOptions) {
   if (!options.workspace) throw new Error("Compute test start requires an explicit workspace")
+  const projectDirectory = options.workspace
   return Instance.provide({
-    directory: options.workspace,
+    directory: projectDirectory,
     fn: async () => {
       await trustProject()
       const session = await Session.create({})
-      return ComputeJobs.start({ ...input, sessionID: session.id }, options)
+      const workspace = await SessionFilesystem.workspace(session.id)
+      const grants = await SessionFilesystem.list(session.id)
+      for (const grant of grants) {
+        if (grant.source === "workspace" || grant.scope !== "session") continue
+        await SessionFilesystem.revoke(session.id, grant.id)
+      }
+      const excluded = [options.root, options.data]
+        .filter((value): value is string => !!value)
+        .map((value) => path.resolve(value))
+      await fs.cp(projectDirectory, workspace, {
+        recursive: true,
+        force: true,
+        filter: (source) => {
+          const resolved = path.resolve(source)
+          return !excluded.some((value) => resolved === value || resolved.startsWith(`${value}${path.sep}`))
+        },
+      })
+      const cwd = (() => {
+        if (!input.cwd || !path.isAbsolute(input.cwd)) return input.cwd
+        const relative = path.relative(projectDirectory, input.cwd)
+        if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+          return path.join(workspace, relative)
+        }
+        return input.cwd
+      })()
+      return ComputeJobs.start({ ...input, cwd, sessionID: session.id }, { ...options, projectDirectory, workspace })
     },
   })
+}
+
+async function hostDescendantPID(job: ComputeJobs.Job, options: StartOptions, reportedPID: number): Promise<number> {
+  if (process.platform !== "linux") return reportedPID
+  const stored = await ComputeJobs.get(job.id, options)
+  if (!stored?.pid || !stored.process_identity) throw new Error("Compute leader identity was not persisted")
+  const resolved = await CredentialProcessLedger.resolveLinuxNamespacePID({
+    leaderPID: stored.pid,
+    leaderIdentity: stored.process_identity,
+    namespacePID: reportedPID,
+  })
+  if (!resolved) throw new Error(`Could not resolve sandbox PID ${reportedPID} below compute leader ${stored.pid}`)
+  return resolved
 }
 
 describe("ComputeJobs command adapters", () => {
@@ -55,6 +98,7 @@ describe("ComputeJobs command adapters", () => {
     port: 2222,
     scheduler: "slurm" as const,
     workdir: "/scratch/team project",
+    concurrency: 4,
   }
 
   test("builds a non-interactive SSH command for a Slurm job", () => {
@@ -107,6 +151,237 @@ describe("ComputeJobs command adapters", () => {
     expect(pbs).toContain("select=1:ncpus=4:ngpus=1:mem=16gb")
     expect(pbs).toContain("walltime=00:30:00")
     expect(ComputeJobs.command(input, { ...host, scheduler: "none" }).argv.at(-1)).toContain("exec")
+  })
+
+  test("uses an imported config hostname directly without loading user SSH config", () => {
+    const imported = ComputeJobs.Host.parse({
+      id: "lab",
+      label: "lab",
+      host: "login.cluster.example",
+      user: "researcher",
+      port: 2222,
+      scheduler: "none",
+      concurrency: 4,
+    })
+    const argv = SshAdapter.argv(imported, "/tmp/known-hosts", "true")
+
+    expect(argv).toContain("/dev/null")
+    expect(argv).toContain("researcher@login.cluster.example")
+    expect(argv).not.toContain("lab")
+  })
+
+  test("binds SSH resources, modules, and container into the approved digest", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const pinned = ComputeJobs.Host.parse({
+      ...host,
+      scheduler: "none",
+      notes: "Use the research partition; installations belong under /scratch/team/envs.",
+      fingerprint: `SHA256:${"a".repeat(43)}`,
+      host_key: `hpc.example.org ssh-ed25519 ${Buffer.from("test-key").toString("base64")}`,
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const session = await Session.create({})
+        const workspace = await SessionFilesystem.workspace(session.id)
+        const request = {
+          sessionID: session.id,
+          name: "approved SSH contract",
+          command: "python3 train.py",
+          target: { kind: "ssh" as const, host_id: pinned.id },
+          resources: { cpus: 4, gpus: 1, memory_gb: 16, time_minutes: 20, partition: "research" },
+          modules: ["python/3.12"],
+          container: "/images/research.sif",
+        }
+        const approved = await ComputeJobs.plan(request, { root, workspace, hosts: [pinned] })
+        expect(approved.provider === "ssh" && approved.host_notes).toBe(pinned.notes)
+        expect(approved.warning).toContain("never executed automatically")
+        for (const mutation of [
+          { resources: { ...request.resources, gpus: 2 } },
+          { modules: ["python/3.13"] },
+          { container: "/images/unreviewed.sif" },
+        ]) {
+          await expect(
+            ComputeJobs.start(
+              { ...request, ...mutation, approval: approved.digest },
+              { root, workspace, hosts: [pinned] },
+            ),
+          ).rejects.toThrow("The SSH run must be approved using its current plan digest")
+        }
+        for (const changed of [
+          { ...pinned, user: "other" },
+          { ...pinned, port: 2200 },
+          { ...pinned, workdir: "/different/base" },
+          { ...pinned, notes: "Use a different partition." },
+        ]) {
+          await expect(
+            ComputeJobs.start({ ...request, approval: approved.digest }, { root, workspace, hosts: [changed] }),
+          ).rejects.toThrow("The SSH run must be approved using its current plan digest")
+        }
+        expect(await ComputeJobs.list({ root, workspace })).toEqual([])
+      },
+    })
+  })
+
+  test("returns the durable SSH handle before background staging finishes", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const bin = path.join(tmp.path, "bin")
+    const counter = path.join(tmp.path, "ssh-invocations")
+    const stageFinished = path.join(tmp.path, "ssh-stage-finished")
+    const fingerprint = "SHA256:Qhi22lbcPTt1frRtqU56iDRQ6YjdwJU8EDmi0QCdnbc"
+    const pinned = ComputeJobs.Host.parse({
+      ...host,
+      fingerprint,
+      host_key: "hpc.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUsmADCYwCBoe8869NDLxsh3Vvnsd3raFGoMF1h8fXB",
+    })
+    await fs.mkdir(bin)
+    await Bun.write(
+      path.join(bin, "ssh"),
+      `#!/bin/sh
+counter=${JSON.stringify(counter)}
+count=0
+if [ -f "$counter" ]; then count=$(cat "$counter"); fi
+count=$((count + 1))
+printf '%s' "$count" > "$counter"
+if [ "$count" -eq 1 ]; then
+  sleep 1
+  printf 'yes' > ${JSON.stringify(stageFinished)}
+  printf '%s\\n' '{"staged":true,"files":0}'
+  exit 0
+fi
+if [ "$count" -eq 2 ]; then
+  printf '%s\\n' '{"remote_id":"slurm:durable-123","reattached":false}'
+  exit 0
+fi
+printf '%s\\n' '{"exists":true}'
+`,
+    )
+    await fs.chmod(path.join(bin, "ssh"), 0o700)
+
+    const previousPath = process.env.PATH
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          await trustProject()
+          const session = await Session.create({})
+          const workspace = await SessionFilesystem.workspace(session.id)
+          const request = {
+            sessionID: session.id,
+            name: "background SSH dispatch",
+            purpose: "prove durable handoff",
+            command: "python3 train.py",
+            target: { kind: "ssh" as const, host_id: pinned.id },
+            resources: { cpus: 2, time_minutes: 10 },
+          }
+          const options = { root, workspace, hosts: [pinned] }
+          const plan = await ComputeJobs.plan(request, options)
+          const startedAt = performance.now()
+          const job = await ComputeJobs.start({ ...request, approval: plan.digest }, options)
+          const elapsed = performance.now() - startedAt
+
+          expect(elapsed).toBeLessThan(750)
+          expect(job).toMatchObject({ status: "queued", remote_id: undefined })
+          expect(await Bun.file(stageFinished).exists()).toBe(false)
+
+          for (let attempt = 0; attempt < 500; attempt++) {
+            const current = await ComputeJobs.get(job.id, options)
+            const events = await ComputeJobs.events(job.id, options)
+            if (current?.remote_id === "slurm:durable-123" && events.includes("Submitted slurm:durable-123")) {
+              expect(current.status).toBe("running")
+              return
+            }
+            if (current?.status === "failed") {
+              throw new Error(`Background SSH submission failed: ${current.error ?? "unknown"}\n${events}`)
+            }
+            await Bun.sleep(20)
+          }
+          const current = await ComputeJobs.get(job.id, options)
+          const events = await ComputeJobs.events(job.id, options)
+          const count = await Bun.file(counter)
+            .text()
+            .catch(() => "missing")
+          throw new Error(
+            `Timed out waiting for the background SSH submission: ${JSON.stringify(current)}\ncount=${count}\n${events}`,
+          )
+        },
+      })
+    } finally {
+      process.env.PATH = previousPath
+    }
+  })
+
+  test("rejects an SSH launch that fails before its first durable transport handoff", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const bin = path.join(tmp.path, "bin")
+    const invoked = path.join(tmp.path, "ssh-invoked")
+    const pinned = ComputeJobs.Host.parse({
+      ...host,
+      scheduler: "none",
+      fingerprint: "SHA256:Qhi22lbcPTt1frRtqU56iDRQ6YjdwJU8EDmi0QCdnbc",
+      host_key: "hpc.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAUsmADCYwCBoe8869NDLxsh3Vvnsd3raFGoMF1h8fXB",
+    })
+    await fs.mkdir(bin)
+    await Bun.write(
+      path.join(bin, "ssh"),
+      `#!/bin/sh
+printf invoked > ${JSON.stringify(invoked)}
+sleep 30
+`,
+    )
+    await fs.chmod(path.join(bin, "ssh"), 0o700)
+
+    const previousPath = process.env.PATH
+    const previousFailure = process.env.OPENSCIENCE_SSH_TEST_REGISTRATION_FAILURE
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`
+    process.env.OPENSCIENCE_SSH_TEST_REGISTRATION_FAILURE = "1"
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          await trustProject()
+          const session = await Session.create({})
+          const workspace = await SessionFilesystem.workspace(session.id)
+          const request = {
+            sessionID: session.id,
+            name: "failed SSH handoff",
+            purpose: "prove pre-registration failures are synchronous",
+            command: "python3 train.py",
+            target: { kind: "ssh" as const, host_id: pinned.id },
+          }
+          const options = { root, workspace, hosts: [pinned] }
+          const plan = await ComputeJobs.plan(request, options)
+
+          await expect(ComputeJobs.start({ ...request, approval: plan.digest }, options)).rejects.toThrow(
+            "Injected SSH control registration failure",
+          )
+
+          let failed: ComputeJobs.Job | undefined
+          for (let attempt = 0; attempt < 250; attempt++) {
+            failed = (await ComputeJobs.list(options)).at(0)
+            if (failed?.status === "failed") break
+            await Bun.sleep(20)
+          }
+          expect(failed).toMatchObject({
+            status: "failed",
+            error: "Injected SSH control registration failure",
+          })
+          // Every supported desktop launcher holds the actual SSH executable
+          // behind its ownership gate until registration has succeeded.
+          expect(await Bun.file(invoked).exists()).toBe(false)
+          await Bun.sleep(50)
+        },
+      })
+    } finally {
+      process.env.PATH = previousPath
+      if (previousFailure === undefined) delete process.env.OPENSCIENCE_SSH_TEST_REGISTRATION_FAILURE
+      else process.env.OPENSCIENCE_SSH_TEST_REGISTRATION_FAILURE = previousFailure
+    }
   })
 })
 
@@ -243,7 +518,7 @@ describe("ComputeJobs local lifecycle", () => {
       },
       input: {
         code: { status: "available", value: "printf 'alpha\\nbeta\\n'" },
-        cwd: { status: "available", value: tmp.path },
+        cwd: { status: "available", value: job.cwd },
         code_state: { status: "unavailable", reason: "not_captured" },
       },
       outputs: { status: "queued", items: [] },
@@ -314,10 +589,20 @@ describe("ComputeJobs local lifecycle", () => {
       size: 22,
     })
     expect(finished.artifacts?.[0]?.sha256).toMatch(/^[a-f0-9]{64}$/)
+    const artifactID = finished.artifacts?.[0]?.artifact_id
+    const versionID = finished.artifacts?.[0]?.version_id
+    expect(artifactID).toMatch(/^art_/)
+    expect(versionID).toMatch(/^ver_/)
+    expect(finished.artifacts?.[0]?.version).toBe(1)
     expect(finished.checkpoint).toMatchObject({
       path: "checkpoints/latest.ckpt",
       size: 5,
+      version: 1,
     })
+    expect(finished.checkpoint?.artifact_id).toMatch(/^art_/)
+    expect(finished.checkpoint?.version_id).toMatch(/^ver_/)
+    const immutable = await ArtifactStore.read(job.authority!.projectID, artifactID!, versionID!)
+    expect(await immutable?.content.text()).toBe("metric,value\nloss,0.1\n")
     expect(finished.reproducibility?.git?.dirty).toBe(true)
     expect(finished.reproducibility?.lockfiles).toContainEqual(
       expect.objectContaining({
@@ -331,15 +616,17 @@ describe("ComputeJobs local lifecycle", () => {
           kind: "artifact",
           path: { status: "available", value: "outputs/results.csv" },
           sha256: finished.artifacts?.[0]?.sha256,
-          version_id: { status: "unavailable", reason: "not_versioned" },
-          version: { status: "unavailable", reason: "not_versioned" },
+          artifact_id: { status: "available", value: finished.artifacts?.[0]?.artifact_id },
+          version_id: { status: "available", value: finished.artifacts?.[0]?.version_id },
+          version: { status: "available", value: 1 },
         }),
         expect.objectContaining({
           kind: "checkpoint",
           path: { status: "available", value: "checkpoints/latest.ckpt" },
           sha256: finished.checkpoint?.sha256,
-          version_id: { status: "unavailable", reason: "not_versioned" },
-          version: { status: "unavailable", reason: "not_versioned" },
+          artifact_id: { status: "available", value: finished.checkpoint?.artifact_id },
+          version_id: { status: "available", value: finished.checkpoint?.version_id },
+          version: { status: "available", value: 1 },
         }),
       ]),
     )
@@ -373,7 +660,7 @@ describe("ComputeJobs local lifecycle", () => {
       path: { status: "available", value: "result.txt" },
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     })
-    expect(await Bun.file(path.join(tmp.path, "result.txt")).exists()).toBe(true)
+    expect(await Bun.file(path.join(job.cwd!, "result.txt")).exists()).toBe(true)
   })
 
   test("redacts command and env-like job fields before durable persistence", async () => {
@@ -464,6 +751,125 @@ describe("ComputeJobs local lifecycle", () => {
     })
   })
 
+  test("cancels credential-bearing children when the host credential snapshot changes", async () => {
+    if (!Sandbox.available()) return
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const job = await start(
+      {
+        name: "credential snapshot",
+        command: "sleep 30",
+        cwd: tmp.path,
+        target: { kind: "local" },
+      },
+      { root, workspace: tmp.path },
+    )
+    for (const _ of Array.from({ length: 100 })) {
+      const current = await ComputeJobs.get(job.id, { root, workspace: tmp.path })
+      if (current?.status === "running") break
+      await Bun.sleep(20)
+    }
+
+    expect(await ComputeJobs.cancelCredentialProcesses()).toBe(1)
+    expect((await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })).status).toBe("cancelled")
+  })
+
+  const posixTest = process.platform === "win32" ? test.skip : test
+
+  posixTest("reaps same-group background work before completing a local job", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const marker = "compute-descendant.pid"
+    const release = "compute-release"
+    let descendantPID = 0
+    let descendantIdentity: string | undefined
+    let job: ComputeJobs.Job | undefined
+    try {
+      job = await start(
+        {
+          name: "background descendant regression",
+          command: [
+            "sleep 600 &",
+            'child="$!";',
+            `printf %s "$child" > ${ComputeJobs.quote(marker)};`,
+            `while [ ! -f ${ComputeJobs.quote(release)} ]; do sleep 0.02; done`,
+          ].join(" "),
+          target: { kind: "local" },
+        },
+        { root, workspace: tmp.path },
+      )
+      const ownedMarker = path.join(job.cwd!, marker)
+      const ownedRelease = path.join(job.cwd!, release)
+      for (let attempt = 0; attempt < 500 && !(await Bun.file(ownedMarker).exists()); attempt++) await Bun.sleep(10)
+      expect(await Bun.file(ownedMarker).exists()).toBe(true)
+      descendantPID = await hostDescendantPID(
+        job,
+        { root, workspace: tmp.path },
+        Number((await Bun.file(ownedMarker).text()).trim()),
+      )
+      descendantIdentity = await CredentialProcessLedger.identity(descendantPID)
+      expect(descendantIdentity).toMatch(/^[a-f0-9]{64}$/)
+
+      await Bun.write(ownedRelease, "release")
+      const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+
+      expect(finished.status).toBe("succeeded")
+      expect(await CredentialProcessLedger.owns(descendantPID, descendantIdentity)).toBe(false)
+    } finally {
+      if (job) await ComputeJobs.cancel(job.id, { root, workspace: tmp.path }).catch(() => undefined)
+      if (descendantPID && (await CredentialProcessLedger.owns(descendantPID, descendantIdentity))) {
+        process.kill(descendantPID, "SIGKILL")
+      }
+    }
+  })
+
+  posixTest("credential revocation reaps compute work that starts a new session", async () => {
+    const python = Bun.which("python3")
+    if (!python) return
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const marker = "compute-setsid.pid"
+    const script = [
+      "import subprocess, sys, time",
+      "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'], start_new_session=True)",
+      "open(sys.argv[1], 'w').write(str(child.pid))",
+      "time.sleep(600)",
+    ].join("; ")
+    let descendantPID = 0
+    let descendantIdentity: string | undefined
+    let job: ComputeJobs.Job | undefined
+    try {
+      job = await start(
+        {
+          name: "new session descendant regression",
+          command: `${ComputeJobs.quote(python)} -c ${ComputeJobs.quote(script)} ${ComputeJobs.quote(marker)}`,
+          target: { kind: "local" },
+        },
+        { root, workspace: tmp.path },
+      )
+      const ownedMarker = path.join(job.cwd!, marker)
+      for (let attempt = 0; attempt < 500 && !(await Bun.file(ownedMarker).exists()); attempt++) await Bun.sleep(10)
+      expect(await Bun.file(ownedMarker).exists()).toBe(true)
+      descendantPID = await hostDescendantPID(
+        job,
+        { root, workspace: tmp.path },
+        Number((await Bun.file(ownedMarker).text()).trim()),
+      )
+      descendantIdentity = await CredentialProcessLedger.identity(descendantPID)
+      expect(descendantIdentity).toMatch(/^[a-f0-9]{64}$/)
+
+      expect((await ComputeJobs.cancel(job.id, { root, workspace: tmp.path })).status).toBe("cancelled")
+      const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+      expect(finished.status).toBe("cancelled")
+      expect(await CredentialProcessLedger.owns(descendantPID, descendantIdentity)).toBe(false)
+    } finally {
+      if (job) await ComputeJobs.cancel(job.id, { root, workspace: tmp.path }).catch(() => undefined)
+      if (descendantPID && (await CredentialProcessLedger.owns(descendantPID, descendantIdentity))) {
+        process.kill(descendantPID, "SIGKILL")
+      }
+    }
+  })
+
   test("does not relabel a completed job when cancellation arrives late", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
@@ -525,6 +931,55 @@ describe("ComputeJobs local lifecycle", () => {
 })
 
 describe("ComputeJobs Modal governance", () => {
+  test("returns the approved dispatch before the remote workload finishes", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const provider = modalProvider({
+      run: async (_context, spec, hooks) => {
+        await hooks.created(`sandbox-${spec.id}`)
+        entered.resolve()
+        await gate.promise
+        return { code: 0, outputs: [] }
+      },
+    })
+    const request = {
+      name: "asynchronous modal job",
+      command: "sleep 3600",
+      target: { kind: "modal" as const },
+      gpu: "none",
+    }
+    const prepared = await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const session = await Session.create({})
+        const plan = await ComputeJobs.plan({ ...request, sessionID: session.id }, { root, workspace: tmp.path, modal })
+        return { session, plan }
+      },
+    })
+
+    const job = await Promise.race([
+      Instance.provide({
+        directory: tmp.path,
+        fn: () =>
+          ComputeJobs.start(
+            { ...request, sessionID: prepared.session.id, approval: prepared.plan.digest },
+            { root, workspace: tmp.path, modal, credentials, provider },
+          ),
+      }),
+      Bun.sleep(2_000).then(() => Promise.reject(new Error("approved dispatch waited for the remote workload"))),
+    ])
+
+    await entered.promise
+    expect(job.status).toBe("queued")
+    expect((await ComputeJobs.get(job.id, { root, workspace: tmp.path }))?.status).toBe("running")
+
+    gate.resolve()
+    expect((await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })).status).toBe("succeeded")
+  })
+
   test("records a Modal sandbox timeout as a terminal timed-out job", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
@@ -756,11 +1211,15 @@ describe("ComputeJobs Modal governance", () => {
   test("retries delivery from the durable Modal resource without rerunning the command", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
+    const entered = Promise.withResolvers<void>()
+    const finish = Promise.withResolvers<void>()
     const calls = { run: 0, recover: 0, release: 0 }
     const provider = modalProvider({
       run: async (_context, spec, hooks) => {
         calls.run++
         await hooks.created(`sandbox-${spec.id}`)
+        entered.resolve()
+        await finish.promise
         return { code: 0, outputs: [{ path: "../escape", staging: tmp.path, size: 0 }] }
       },
       recover: async (_context, spec, id, hooks) => {
@@ -800,21 +1259,21 @@ describe("ComputeJobs Modal governance", () => {
           { root, workspace: tmp.path, modal, credentials, provider },
         ),
     })
-    const delivery = async (attempts = 100): Promise<ComputeJobs.Job> => {
-      const current = await ComputeJobs.get(job.id, { root, workspace: tmp.path })
-      if (current?.lifecycle?.delivery === "failed") return current
-      if (!attempts) throw new Error("Timed out waiting for recoverable Modal output")
-      await Bun.sleep(20)
-      return delivery(attempts - 1)
-    }
-    const failed = await delivery()
-
-    expect(failed.status).toBe("succeeded")
-    expect(failed.lifecycle?.recoverable).toBe(true)
+    await entered.promise
     expect(calls).toEqual({ run: 1, recover: 0, release: 0 })
 
     await Bun.write(path.join(root, "jobs", `${job.id}.log`), "last visible output\n")
-    await ComputeJobs.retry(job.id, { root, workspace: tmp.path, credentials, provider })
+    const retry = ComputeJobs.retry(job.id, { root, workspace: tmp.path, credentials, provider })
+    const beforeFinish = await Promise.race([
+      retry.then(
+        () => "settled" as const,
+        () => "settled" as const,
+      ),
+      Bun.sleep(50).then(() => "waiting" as const),
+    ])
+    finish.resolve()
+    expect(beforeFinish).toBe("waiting")
+    await retry
     const complete = async (attempts = 100): Promise<ComputeJobs.Job> => {
       const current = await ComputeJobs.get(job.id, { root, workspace: tmp.path })
       if (current?.lifecycle?.resource === "closed") return current
@@ -827,7 +1286,7 @@ describe("ComputeJobs Modal governance", () => {
     expect(recovered.status).toBe("succeeded")
     expect(recovered.lifecycle).toMatchObject({ delivery: "complete", resource: "closed", recoverable: false })
     expect(await ComputeJobs.log(job.id, { root, workspace: tmp.path })).toBe("recovered output\n")
-    expect(await Bun.file(path.join(tmp.path, "result.txt")).text()).toBe("recovered")
+    expect(await Bun.file(path.join(job.cwd!, "result.txt")).text()).toBe("recovered")
     expect(calls).toEqual({ run: 1, recover: 1, release: 1 })
   })
 
@@ -1602,7 +2061,6 @@ describe("ComputeJobs project boundaries", () => {
     await using tmp = await tmpdir()
     const data = path.join(tmp.path, "data")
     const workspace = path.join(tmp.path, "project")
-    const inside = path.join(workspace, "inside.txt")
     const outside = path.join(os.homedir(), `.openscience-compute-escape-${process.pid}-${crypto.randomUUID()}`)
     await fs.mkdir(workspace)
     await fs.rm(outside, { force: true })
@@ -1610,7 +2068,7 @@ describe("ComputeJobs project boundaries", () => {
       start(
         {
           name: "sandbox",
-          command: `if printf escape > ${ComputeJobs.quote(outside)}; then exit 97; fi; printf safe > ${ComputeJobs.quote(inside)}`,
+          command: `if printf escape > ${ComputeJobs.quote(outside)}; then exit 97; fi; printf safe > inside.txt`,
           target: { kind: "local" },
         },
         { data, workspace },
@@ -1627,7 +2085,7 @@ describe("ComputeJobs project boundaries", () => {
       expect(job.sandbox).toMatchObject({ requested: true, enforced: true, backend: Sandbox.backend() })
       const finished = await ComputeJobs.wait(job.id, { data, workspace, timeout: 5_000 })
       expect(finished.status).toBe("succeeded")
-      expect(await Bun.file(inside).text()).toBe("safe")
+      expect(await Bun.file(path.join(job.cwd!, "inside.txt")).text()).toBe("safe")
       expect(await Bun.file(outside).exists()).toBe(false)
     } finally {
       await fs.rm(outside, { force: true })

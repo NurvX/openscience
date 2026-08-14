@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test"
 import { SystemPrompt } from "../../src/session/system"
-import { MAX_CHILD_AGENTS } from "../../src/tool/task"
+import {
+  DELEGATION_PROFILES,
+  MAX_CHILD_AGENTS,
+  NORMAL_CHILD_AGENTS,
+  TASK_WALL_CLOCK_MS,
+  isComputeDelegationProfile,
+} from "../../src/tool/task"
 
 const root = new URL("../../src/", import.meta.url)
 const read = (path: string) => Bun.file(new URL(path, root)).text()
@@ -9,9 +15,14 @@ test("every provider receives one compact product operating contract", () => {
   const instructions = SystemPrompt.instructions()
   expect(SystemPrompt.provider(undefined as never)[0]?.trim()).toBe(instructions)
   expect(instructions.length).toBeLessThan(4_000)
-  expect(instructions).toContain("Keep a simple question simple")
+  expect(instructions).toContain("Keep simple work simple")
   expect(instructions).toContain("Atlas is optional")
-  expect(instructions).toContain("Default to zero child agents")
+  expect(instructions).toContain("default to zero children")
+  expect(instructions).toContain("Explore, Execute, or Review")
+  expect(instructions).toContain("large or binary scientific data")
+  expect(instructions).toContain("output_path")
+  expect(instructions).not.toContain("data once with Shell")
+  expect(instructions).toContain("immutable release")
   expect(instructions).not.toContain("shared keys")
   expect(instructions).not.toContain("project init")
 })
@@ -30,9 +41,14 @@ test("the primary and domain prompts stay adaptive instead of procedural", async
     expect(prompt).not.toContain("methodology.md")
     expect(prompt).not.toContain("Create/link the graph")
   }
-  expect(research).toContain("A direct question should receive a direct answer")
-  expect(research).toContain("Default to no child agents")
+  expect(research).toContain("Answer a direct question directly")
+  expect(research).toContain("Default to zero children")
   expect(research).toContain("Atlas is optional")
+  expect(research).toContain("lazy skills")
+  expect(research).toContain("bounded pages")
+  expect(research).toContain("output_path")
+  expect(research).not.toContain("data once to the workspace with Shell")
+  expect(research).toContain("immutable data release")
   expect(ml).toContain("simplest method")
   expect(biology).toContain("multiple testing")
   expect(physics).toContain("dimensional consistency")
@@ -40,14 +56,27 @@ test("the primary and domain prompts stay adaptive instead of procedural", async
 
 test("delegation is rare, bounded, and observable", async () => {
   const [prompt, source] = await Promise.all([read("tool/task.txt"), read("tool/task.ts")])
-  expect(MAX_CHILD_AGENTS).toBe(2)
-  expect(prompt).toContain("Default to zero child agents")
-  expect(prompt).toContain("At most two child agents")
-  expect(prompt).toContain("failed child must not block")
+  expect(DELEGATION_PROFILES).toEqual(["explore", "execute", "review"])
+  expect(NORMAL_CHILD_AGENTS).toBe(2)
+  expect(MAX_CHILD_AGENTS).toBe(4)
+  expect(TASK_WALL_CLOCK_MS).toEqual({ normal: 600_000, ultra: 1_200_000 })
+  expect(DELEGATION_PROFILES.filter(isComputeDelegationProfile)).toEqual(["execute"])
+  expect(["biology", "ml", "physics"].some(isComputeDelegationProfile)).toBe(false)
+  expect(prompt).toContain("default to zero children")
+  expect(prompt).toContain("at most two")
+  expect(prompt).toContain("at most four")
+  expect(prompt).toContain("Task calls total per user turn")
+  expect(prompt).toContain("large or binary scientific data")
+  expect(prompt).toContain("output_path")
+  expect(prompt).not.toContain("data once to the workspace with Shell")
+  expect(prompt).toContain("immutable release")
+  expect(prompt).toContain("failed child")
   expect(prompt).not.toContain("trusted")
   expect(source).toContain("durationMs")
   expect(source).toContain("failedToolCalls")
   expect(source).toContain("usage")
+  expect(source).toContain("taskDispatchBudget")
+  expect(source).not.toContain("<task_result>")
 })
 
 test("Plan and Review use the observable record without mandatory delegation", async () => {

@@ -35,20 +35,17 @@ import { ReadTool } from "../tool/read"
 import { ListTool } from "../tool/ls"
 import { FileTime } from "../file/time"
 import { Flag } from "../flag/flag"
-import { RSITrajectory } from "./rsi/trajectory"
-import { RLMArtifacts } from "./rlm/artifacts"
 import { ulid } from "ulid"
 import { spawn } from "child_process"
 import { Command } from "../command"
-import { $, fileURLToPath } from "bun"
+import { fileURLToPath } from "bun"
 import { ConfigMarkdown } from "../config/markdown"
 import { Config } from "../config/config"
-import { computeBillingMode } from "./billing-gate"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@synsci/util/error"
 import { fn } from "@/util/fn"
 import { SessionProcessor } from "./processor"
-import { TaskTool } from "@/tool/task"
+import { DELEGATION_PROFILES, TaskTool } from "@/tool/task"
 import { Tool } from "@/tool/tool"
 import { PermissionNext } from "@/permission/next"
 import { SessionStatus } from "./status"
@@ -62,6 +59,11 @@ import { PlanMode } from "@/tool/plan-mode"
 import { Inference } from "@/provider/inference"
 import { OpenScience } from "@/openscience"
 import { assertExternalDirectory } from "@/tool/external-directory"
+import { CommandRuntime } from "@/science/command/registry"
+import { ExecutionAuthority } from "@/project/execution"
+import { AuthoritySignal } from "@/project/authority-signal"
+import { Sandbox } from "@/sandbox/sandbox"
+import { BashTool } from "@/tool/bash"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -69,12 +71,8 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
   export const OUTPUT_TOKEN_MAX = Flag.OPENSCIENCE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
-  // physics is a compute agent (see COMPUTE_AGENTS) that also produces artifacts
-  // (PDE solutions, fitted params, plots), so it participates in artifact-context
-  // re-injection + RSI trajectory capture like its peer compute agents.
-  const ARTIFACT_AGENTS = ["research", "biology", "physics", "ml"]
+  // Scientific agents can still consume session-scoped artifact references.
   // Science agents that dispatch GPU/compute work and should honor billing.compute.
-  const COMPUTE_AGENTS = new Set(["research", "biology", "physics", "ml"])
   const SKILL_ROUTING_AGENTS = new Set(["research", "biology", "physics", "ml"])
 
   const state = Instance.state(
@@ -136,6 +134,8 @@ export namespace SessionPrompt {
       .describe(
         "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
       ),
+    effort: MessageV2.ResearchEffort.optional(),
+    /** @deprecated Research effort now controls bounded delegation. */
     delegation: z.boolean().optional(),
     system: z.string().optional(),
     variant: z.string().optional(),
@@ -289,11 +289,12 @@ export namespace SessionPrompt {
     return controller.signal
   }
 
-  export function cancel(sessionID: string) {
+  export function cancel(sessionID: string, owner?: AbortSignal) {
     log.info("cancel", { sessionID })
     const s = state()
     const match = s[sessionID]
     if (!match) return
+    if (owner && match.abort.signal !== owner) return
     match.abort.abort()
     for (const item of match.callbacks) {
       item.reject()
@@ -308,6 +309,14 @@ export namespace SessionPrompt {
     return
   }
 
+  /** Snapshot the exact local controller currently owning a session. Callers
+   * that await cross-process coordination can pass this signal back to
+   * cancel(); if a newer prompt starts in the meantime, cancellation is a
+   * deliberate no-op rather than aborting the replacement controller. */
+  export function activeController(sessionID: string) {
+    return state()[sessionID]?.abort.signal
+  }
+
   export const loop = fn(Identifier.schema("session"), async (sessionID) => {
     const session = await Session.get(sessionID)
     const abort = start(sessionID)
@@ -318,7 +327,7 @@ export namespace SessionPrompt {
       })
     }
 
-    using _ = defer(() => cancel(sessionID))
+    using _ = defer(() => cancel(sessionID, abort))
 
     let step = 0
     // Consecutive context-overflow compactions for the current unanswered turn.
@@ -329,6 +338,7 @@ export namespace SessionPrompt {
     // threshold. Prevents an infinite compaction loop when fixed system+tool+
     // summary overhead alone already exceeds the 0.75 threshold.
     let compactionArmed = true
+    const workspace = await SessionFilesystem.workspace(sessionID)
     // Text doom-loop guard (#176): weak/local models sometimes emit a near-identical
     // "continuity summary" turn over and over instead of converging on an answer.
     // The processor's doom-loop guard can't catch it — the TOOL calls vary (or are
@@ -399,7 +409,7 @@ export namespace SessionPrompt {
           sessionID,
           mode: realUser.agent,
           agent: realUser.agent,
-          path: { cwd: Instance.directory, root: Instance.worktree },
+          path: { cwd: workspace, root: Instance.worktree },
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           modelID: realUser.model.modelID,
@@ -409,7 +419,14 @@ export namespace SessionPrompt {
         })
       }
       const compact = (trigger: "proactive" | "overflow" = "proactive") =>
-        SessionCompaction.create({ sessionID, agent: user.agent, model: user.model, auto: true, trigger })
+        SessionCompaction.create({
+          sessionID,
+          agent: user.agent,
+          model: user.model,
+          effort: MessageV2.resolveResearchEffort(user.effort),
+          auto: true,
+          trigger,
+        })
       // Latched compaction: fire once, then not again until context drops back under
       // the threshold (re-arm happens in the reactive branch). Returns whether it fired.
       const armedCompact = async () => {
@@ -433,10 +450,6 @@ export namespace SessionPrompt {
       const continuing = MessageV2.isContinuingTurn(lastAssistant?.finish, lastAssistantHasTool)
       if (lastAssistant?.finish && (!continuing || bareMode) && lastUser.id < lastAssistant.id) {
         log.info("exiting loop", { sessionID, bareMode })
-        // RSI: capture trajectory from ultra agent sessions (async, non-blocking)
-        if (lastUser.agent && RSITrajectory.ARTIFACT_AGENTS.includes(lastUser.agent as any)) {
-          RSITrajectory.pipeline(sessionID).catch(() => {})
-        }
         break
       }
 
@@ -481,7 +494,7 @@ export namespace SessionPrompt {
           mode: lastUser.agent,
           agent: lastUser.agent,
           path: {
-            cwd: Instance.directory,
+            cwd: workspace,
             root: Instance.worktree,
           },
           cost: 0,
@@ -506,6 +519,12 @@ export namespace SessionPrompt {
       // pending subtask
       // TODO: centralize "invoke tool" logic
       if (task?.type === "subtask") {
+        // Older saved command definitions may still name a domain-specific
+        // subagent. Keep those records runnable while funnelling all new work
+        // through the three bounded internal Research profiles.
+        const taskProfile = DELEGATION_PROFILES.includes(task.agent as (typeof DELEGATION_PROFILES)[number])
+          ? (task.agent as (typeof DELEGATION_PROFILES)[number])
+          : "execute"
         const taskTool = await TaskTool.init()
         const taskModel = task.model ? await Provider.getModel(task.model.providerID, task.model.modelID) : model
         const assistantMessage = (await Session.updateMessage({
@@ -513,10 +532,10 @@ export namespace SessionPrompt {
           role: "assistant",
           parentID: lastUser.id,
           sessionID,
-          mode: task.agent,
-          agent: task.agent,
+          mode: taskProfile,
+          agent: taskProfile,
           path: {
-            cwd: Instance.directory,
+            cwd: workspace,
             root: Instance.worktree,
           },
           cost: 0,
@@ -544,7 +563,7 @@ export namespace SessionPrompt {
             input: {
               prompt: task.prompt,
               description: task.description,
-              subagent_type: task.agent,
+              subagent_type: taskProfile,
               command: task.command,
             },
             time: {
@@ -555,7 +574,7 @@ export namespace SessionPrompt {
         const taskArgs = {
           prompt: task.prompt,
           description: task.description,
-          subagent_type: task.agent,
+          subagent_type: taskProfile,
           command: task.command,
         }
         await Plugin.trigger(
@@ -568,14 +587,17 @@ export namespace SessionPrompt {
           { args: taskArgs },
         )
         let executionError: Error | undefined
-        const taskAgent = await Agent.get(task.agent)
+        const taskAgent = await Agent.get(taskProfile)
         const taskCtx: Tool.Context = {
-          agent: task.agent,
+          agent: taskProfile,
           messageID: assistantMessage.id,
           sessionID: sessionID,
           abort,
           callID: part.callID,
-          extra: { bypassAgentCheck: true },
+          extra: {
+            bypassAgentCheck: true,
+            effort: MessageV2.resolveResearchEffort(lastUser.effort),
+          },
           messages: msgs,
           async metadata(input) {
             await Session.updatePart({
@@ -597,7 +619,7 @@ export namespace SessionPrompt {
         }
         const result = await taskTool.execute(taskArgs, taskCtx).catch((error) => {
           executionError = error
-          log.error("subtask execution failed", { error, agent: task.agent, description: task.description })
+          log.error("subtask execution failed", { error, agent: taskProfile, description: task.description })
           return undefined
         })
         await Plugin.trigger(
@@ -658,6 +680,7 @@ export namespace SessionPrompt {
             },
             agent: lastUser.agent,
             model: lastUser.model,
+            effort: MessageV2.resolveResearchEffort(lastUser.effort),
           }
           await Session.updateMessage(summaryUserMsg)
           await Session.updatePart({
@@ -773,7 +796,7 @@ export namespace SessionPrompt {
           mode: agent.name,
           agent: agent.name,
           path: {
-            cwd: Instance.directory,
+            cwd: workspace,
             root: Instance.worktree,
           },
           cost: 0,
@@ -805,7 +828,7 @@ export namespace SessionPrompt {
         session,
         model,
         tools: lastUser.tools,
-        delegation: lastUser.delegation,
+        effort: MessageV2.resolveResearchEffort(lastUser.effort),
         processor,
         bypassAgentCheck,
         messages: msgs,
@@ -841,29 +864,11 @@ export namespace SessionPrompt {
 
       await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: sessionMessages })
 
-      // Inject artifact context for ultra agents
-      const artifactContext: string[] = []
-      if (lastUser.agent && ARTIFACT_AGENTS.includes(lastUser.agent)) {
-        const artifacts = await RLMArtifacts.list(sessionID)
-        if (artifacts.length > 0) {
-          artifactContext.push(
-            [
-              "<rlm_context>",
-              "<artifacts>",
-              ...artifacts.map((a) => `- ${a.id}: ${a.summary} (${a.type})`),
-              "</artifacts>",
-              "</rlm_context>",
-            ].join("\n"),
-          )
-        }
-      }
-
       const system = [
-        ...(await SystemPrompt.environment(model)),
+        ...(await SystemPrompt.environment(model, sessionID)),
         ...(await SystemPrompt.compute()),
         ...(await InstructionPrompt.system()),
         ...(SKILL_ROUTING_AGENTS.has(agent.name) ? [await SystemPrompt.availableSkills(agent.permission)] : []),
-        ...artifactContext,
       ]
 
       // P0.1 telemetry: record what the working context is made of, by content type,
@@ -895,6 +900,13 @@ export namespace SessionPrompt {
         tools,
         model,
       })
+      // The final budgeted child turn is a structured partial outcome, not a
+      // normal completion. Persist that fact instead of relying on the model
+      // to repeat the MAX_STEPS prose correctly.
+      if (isLastStep && result === "continue" && !processor.message.error) {
+        processor.message.finish = "max-steps"
+        await Session.updateMessage(processor.message)
+      }
       if (result === "stop") break
       if (result === "overflow") {
         // Honor an explicit opt-out: if the user disabled auto-compaction, a hard
@@ -955,12 +967,20 @@ export namespace SessionPrompt {
     return Provider.defaultModel()
   }
 
+  async function lastResearchEffort(sessionID: string) {
+    for await (const item of MessageV2.stream(sessionID)) {
+      if (item.info.role !== "user") continue
+      return MessageV2.resolveResearchEffort(item.info.effort)
+    }
+    return "normal" as const
+  }
+
   async function resolveTools(input: {
     agent: Agent.Info
     model: Provider.Model
     session: Session.Info
     tools?: Record<string, boolean>
-    delegation?: boolean
+    effort: MessageV2.ResearchEffort
     processor: SessionProcessor.Info
     bypassAgentCheck: boolean
     messages: MessageV2.WithParts[]
@@ -973,25 +993,15 @@ export namespace SessionPrompt {
       abort: options.abortSignal!,
       messageID: input.processor.message.id,
       callID: options.toolCallId,
-      extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck },
+      extra: {
+        model: input.model,
+        bypassAgentCheck: input.bypassAgentCheck,
+        effort: input.effort,
+      },
       agent: input.agent.name,
       messages: input.messages,
-      metadata: async (val: { title?: string; metadata?: any }) => {
-        const match = input.processor.partFromToolCall(options.toolCallId)
-        if (match && match.state.status === "running") {
-          await Session.updatePart({
-            ...match,
-            state: {
-              title: val.title,
-              metadata: val.metadata,
-              status: "running",
-              input: args,
-              time: {
-                start: Date.now(),
-              },
-            },
-          })
-        }
+      metadata: (val: { title?: string; metadata?: any }) => {
+        input.processor.toolMetadata(options.toolCallId, args, val)
       },
       async ask(req) {
         await PermissionNext.ask({
@@ -1014,29 +1024,31 @@ export namespace SessionPrompt {
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
           const ctx = context(args, options)
-          return PlanMode.run(item.id, ctx.agent, async () => {
-            await Plugin.trigger(
-              "tool.execute.before",
-              {
-                tool: item.id,
-                sessionID: ctx.sessionID,
-                callID: ctx.callID,
-              },
-              {
-                args,
-              },
-            )
-            const result = await item.execute(args, ctx)
-            await Plugin.trigger(
-              "tool.execute.after",
-              {
-                tool: item.id,
-                sessionID: ctx.sessionID,
-                callID: ctx.callID,
-              },
-              result,
-            )
-            return result
+          return input.processor.executeTool(options.toolCallId, args, async () => {
+            return PlanMode.run(item.id, ctx.agent, async () => {
+              await Plugin.trigger(
+                "tool.execute.before",
+                {
+                  tool: item.id,
+                  sessionID: ctx.sessionID,
+                  callID: ctx.callID,
+                },
+                {
+                  args,
+                },
+              )
+              const result = await item.execute(args, ctx)
+              await Plugin.trigger(
+                "tool.execute.after",
+                {
+                  tool: item.id,
+                  sessionID: ctx.sessionID,
+                  callID: ctx.callID,
+                },
+                result,
+              )
+              return result
+            })
           })
         },
       })
@@ -1049,105 +1061,126 @@ export namespace SessionPrompt {
       // Wrap execute to add plugin hooks and format output
       item.execute = async (args, opts) => {
         const ctx = context(args, opts)
-        return PlanMode.run(key, ctx.agent, async () => {
-          await Plugin.trigger(
-            "tool.execute.before",
-            {
-              tool: key,
-              sessionID: ctx.sessionID,
-              callID: opts.toolCallId,
-            },
-            {
-              args,
-            },
-          )
+        return input.processor.executeTool(opts.toolCallId, args, async () => {
+          return PlanMode.run(key, ctx.agent, async () => {
+            await Plugin.trigger(
+              "tool.execute.before",
+              {
+                tool: key,
+                sessionID: ctx.sessionID,
+                callID: opts.toolCallId,
+              },
+              {
+                args,
+              },
+            )
 
-          await ctx.ask({
-            permission: "mcp",
-            metadata: {},
-            patterns: [key],
-            always: [key],
-          })
+            await ctx.ask({
+              permission: "mcp",
+              metadata: {},
+              patterns: [key],
+              always: [key],
+            })
 
-          const result = await execute(args, opts)
+            const result = await execute(args, opts)
 
-          await Plugin.trigger(
-            "tool.execute.after",
-            {
-              tool: key,
-              sessionID: ctx.sessionID,
-              callID: opts.toolCallId,
-            },
-            result,
-          )
+            await Plugin.trigger(
+              "tool.execute.after",
+              {
+                tool: key,
+                sessionID: ctx.sessionID,
+                callID: opts.toolCallId,
+              },
+              result,
+            )
 
-          const textParts: string[] = []
-          const attachments: MessageV2.FilePart[] = []
+            const textParts: string[] = []
+            const attachments: MessageV2.FilePart[] = []
 
-          for (const contentItem of result.content) {
-            if (contentItem.type === "text") {
-              textParts.push(contentItem.text)
-            } else if (contentItem.type === "image") {
-              const detectedMime = correctImageMime(
-                contentItem.mimeType,
-                Buffer.from(contentItem.data.slice(0, 24), "base64"),
-              )
-              attachments.push({
-                id: Identifier.ascending("part"),
-                sessionID: input.session.id,
-                messageID: input.processor.message.id,
-                type: "file",
-                mime: detectedMime,
-                url: `data:${detectedMime};base64,${contentItem.data}`,
-              })
-            } else if (contentItem.type === "resource") {
-              const { resource } = contentItem
-              if (resource.text) {
-                textParts.push(resource.text)
-              }
-              if (resource.blob) {
-                const blobMime = correctImageMime(
-                  resource.mimeType ?? "application/octet-stream",
-                  Buffer.from(resource.blob.slice(0, 24), "base64"),
+            for (const contentItem of result.content) {
+              if (contentItem.type === "text") {
+                textParts.push(contentItem.text)
+              } else if (contentItem.type === "image") {
+                const detectedMime = correctImageMime(
+                  contentItem.mimeType,
+                  Buffer.from(contentItem.data.slice(0, 24), "base64"),
                 )
                 attachments.push({
                   id: Identifier.ascending("part"),
                   sessionID: input.session.id,
                   messageID: input.processor.message.id,
                   type: "file",
-                  mime: blobMime,
-                  url: `data:${blobMime};base64,${resource.blob}`,
-                  filename: resource.uri,
+                  mime: detectedMime,
+                  url: `data:${detectedMime};base64,${contentItem.data}`,
                 })
+              } else if (contentItem.type === "resource") {
+                const { resource } = contentItem
+                if (resource.text) {
+                  textParts.push(resource.text)
+                }
+                if (resource.blob) {
+                  const blobMime = correctImageMime(
+                    resource.mimeType ?? "application/octet-stream",
+                    Buffer.from(resource.blob.slice(0, 24), "base64"),
+                  )
+                  attachments.push({
+                    id: Identifier.ascending("part"),
+                    sessionID: input.session.id,
+                    messageID: input.processor.message.id,
+                    type: "file",
+                    mime: blobMime,
+                    url: `data:${blobMime};base64,${resource.blob}`,
+                    filename: resource.uri,
+                  })
+                }
               }
             }
-          }
 
-          const truncated = await Truncate.output(textParts.join("\n\n"), {}, input.agent)
-          const metadata = {
-            ...(result.metadata ?? {}),
-            truncated: truncated.truncated,
-            ...(truncated.truncated && { outputPath: truncated.outputPath }),
-          }
+            const truncated = await Truncate.output(
+              textParts.join("\n\n"),
+              { sessionID: input.session.id },
+              input.agent,
+            )
+            const metadata = {
+              ...(result.metadata ?? {}),
+              truncated: truncated.truncated,
+              ...(truncated.truncated && { outputPath: truncated.outputPath }),
+            }
 
-          return {
-            title: "",
-            metadata,
-            output: truncated.content,
-            attachments,
-            content: result.content, // directly return content to preserve ordering when outputting to model
-          }
+            return {
+              title: "",
+              metadata,
+              output: truncated.content,
+              attachments,
+              content: result.content, // directly return content to preserve ordering when outputting to model
+            }
+          })
         })
       }
       tools[key] = item
     }
 
-    if (!allowsDelegation(input.delegation, input.bypassAgentCheck)) delete tools.task
     return tools
   }
 
-  export function allowsDelegation(enabled: boolean | undefined, explicit: boolean) {
-    return enabled !== false || explicit
+  /** @deprecated Both Research effort levels may delegate when it is useful. */
+  export function allowsDelegation(_enabled: boolean | undefined, _explicit: boolean) {
+    return true
+  }
+
+  export function researchEffortReminder(value: unknown) {
+    const effort = MessageV2.resolveResearchEffort(value)
+    const limit = MessageV2.childAgentLimit(effort)
+    const posture =
+      effort === "ultra"
+        ? "Investigate additional independent branches when they can materially change the result."
+        : "Stay focused; delegate only when one or two independent branches will materially help."
+    return [
+      "<system-reminder>",
+      `Research effort: ${effort.toUpperCase()}. ${posture}`,
+      `Delegation is optional and shallow: at most ${limit} Task calls total this user turn, including continuations.`,
+      "</system-reminder>",
+    ].join("\n")
   }
 
   async function createUserMessage(input: PromptInput) {
@@ -1174,6 +1207,7 @@ export namespace SessionPrompt {
         created: Date.now(),
       },
       tools: input.tools,
+      effort: input.effort ?? "normal",
       delegation: input.delegation,
       agent: agent.name,
       model,
@@ -1562,23 +1596,7 @@ export namespace SessionPrompt {
   async function insertReminders(input: { messages: MessageV2.WithParts[]; agent: Agent.Info; session: Session.Info }) {
     const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
     if (!userMessage) return input.messages
-
-    // Compute spend preference — make the user's explicit managed/BYOK choice
-    // authoritative for GPU work. Only injected when the toggle is explicitly set
-    // (unset = the agent's own atlas-doctor-driven default, unchanged).
-    if (COMPUTE_AGENTS.has(input.agent.name) && (await Config.get()).billing?.compute) {
-      const managed = (await computeBillingMode()) === "managed"
-      userMessage.parts.push({
-        id: Identifier.ascending("part"),
-        messageID: userMessage.info.id,
-        sessionID: userMessage.info.sessionID,
-        type: "text",
-        text: managed
-          ? "<system-reminder>Compute spend is set to MANAGED. Run GPU/training work through the bundled `atlas compute` CLI (e.g. `atlas compute:up`), which bills Credits. Do not fall back to the user's own GPU providers unless `atlas doctor` reports managed compute unavailable.</system-reminder>"
-          : "<system-reminder>Compute spend is set to BYOK. Run GPU/training work on the user's own connected providers (Modal, Tinker, TensorPool, …) via the cloud-compute skills — do not launch managed `atlas compute` leases that bill Credits.</system-reminder>",
-        synthetic: true,
-      })
-    }
+    const effort = userMessage.info.role === "user" ? userMessage.info.effort : undefined
 
     // Original logic when experimental plan mode is disabled
     if (!Flag.OPENSCIENCE_EXPERIMENTAL_PLAN_MODE) {
@@ -1618,7 +1636,7 @@ export namespace SessionPrompt {
           messageID: userMessage.info.id,
           sessionID: userMessage.info.sessionID,
           type: "text",
-          text: PROMPT_RESEARCH,
+          text: [PROMPT_RESEARCH, researchEffortReminder(effort)].join("\n\n"),
           synthetic: true,
         })
       }
@@ -1683,7 +1701,7 @@ export namespace SessionPrompt {
         messageID: userMessage.info.id,
         sessionID: userMessage.info.sessionID,
         type: "text",
-        text: PROMPT_RESEARCH,
+        text: [PROMPT_RESEARCH, researchEffortReminder(effort)].join("\n\n"),
         synthetic: true,
       })
     }
@@ -1778,11 +1796,16 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
   export async function shell(input: ShellInput) {
     const session = await Session.get(input.sessionID)
     const cwd = await SessionFilesystem.workspace(input.sessionID)
+    const authority = await ExecutionAuthority.require({
+      projectID: Instance.project.id,
+      sessionID: input.sessionID,
+      capability: "shell",
+    })
     const abort = start(input.sessionID)
     if (!abort) {
       throw new Session.BusyError(input.sessionID)
     }
-    using _ = defer(() => cancel(input.sessionID))
+    using _ = defer(() => cancel(input.sessionID, abort))
 
     if (session.revert) {
       await SessionRevert.cleanup(session)
@@ -1797,6 +1820,7 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
       },
       role: "user",
       agent: input.agent,
+      effort: await lastResearchEffort(input.sessionID),
       model: {
         providerID: model.providerID,
         modelID: model.modelID,
@@ -1911,18 +1935,76 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
     const matchingInvocation = invocations[shellName] ?? invocations[""]
     const args = matchingInvocation?.args
 
-    const proc = spawn(shell, args, {
-      cwd,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...(await OpenScience.subprocessEnv(process.env)),
-        TERM: "dumb",
-      },
-    })
-
     let output = ""
-
+    let aborted = false
+    let exited = false
+    const { proc, command, kill, sandbox, completion } = await AuthoritySignal.exclusive(async () => {
+      const current = await ExecutionAuthority.require({
+        projectID: Instance.project.id,
+        sessionID: input.sessionID,
+        capability: "shell",
+      })
+      if (current.generation !== authority.generation) {
+        throw new Error("Execution authority changed while the shell command was being prepared; retry it")
+      }
+      const sandbox = Sandbox.wrapArgv({
+        file: shell,
+        args: args ?? [],
+        workspace: current.writable,
+        readable: current.readable,
+        unreadable: OpenScience.kernelSensitivePaths(),
+        options: current.sandbox,
+      })
+      return OpenScience.withSubprocessEnv(process.env, async (env) => {
+        const wrapped = await CommandRuntime.wrap({
+          file: sandbox.file,
+          args: sandbox.args,
+        })
+        const child = spawn(wrapped.file, wrapped.args, {
+          cwd,
+          detached: process.platform !== "win32",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...env, TERM: "dumb" },
+        })
+        const completion = new Promise<void>((resolve, reject) => {
+          child.once("close", () => {
+            exited = true
+            resolve()
+          })
+          child.once("error", (error) => {
+            exited = true
+            reject(error)
+          })
+        })
+        const stop = () => Shell.killTree(child, { exited: () => exited, detached: process.platform !== "win32" })
+        try {
+          const registered = await CommandRuntime.start(
+            {
+              projectID: Instance.project.id,
+              sessionID: input.sessionID,
+              messageID: msg.id,
+              callID: part.callID,
+              description: "User shell command",
+              command: input.command,
+            },
+            child,
+            async () => {
+              aborted = true
+              await stop()
+            },
+            { authorityGeneration: current.generation, windowsRelease: wrapped.release },
+          )
+          const kill = async () => {
+            await CommandRuntime.stop(registered.id, registered.projectID, registered.sessionID)
+          }
+          return { proc: child, command: registered, kill, sandbox, completion }
+        } catch (error) {
+          await stop()
+          Sandbox.cleanup(sandbox)
+          throw error
+        }
+      })
+    })
     proc.stdout?.on("data", (chunk) => {
       output += chunk.toString()
       if (part.state.status === "running") {
@@ -1945,11 +2027,6 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
       }
     })
 
-    let aborted = false
-    let exited = false
-
-    const kill = () => Shell.killTree(proc, { exited: () => exited, detached: process.platform !== "win32" })
-
     if (abort.aborted) {
       aborted = true
       await kill()
@@ -1962,12 +2039,10 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
 
     abort.addEventListener("abort", abortHandler, { once: true })
 
-    await new Promise<void>((resolve) => {
-      proc.on("close", () => {
-        exited = true
-        abort.removeEventListener("abort", abortHandler)
-        resolve()
-      })
+    await completion.finally(() => {
+      abort.removeEventListener("abort", abortHandler)
+      CommandRuntime.finish(command.id)
+      Sandbox.cleanup(sandbox)
     })
 
     if (aborted) {
@@ -2054,10 +2129,12 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
       const model = input.model ? Provider.parseModel(input.model) : await lastModel(input.sessionID)
       const agentName = input.agent ?? (await Agent.defaultAgent())
       const focus = input.arguments.trim()
+      const effort = await lastResearchEffort(input.sessionID)
       await SessionCompaction.create({
         sessionID: input.sessionID,
         agent: agentName,
         model: { providerID: model.providerID, modelID: model.modelID },
+        effort,
         auto: false,
         focus: focus || undefined,
         trigger: "manual",
@@ -2080,10 +2157,12 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
     if (input.command === Command.Default.HANDOFF && !userDefinedHandoff) {
       const model = input.model ? Provider.parseModel(input.model) : await lastModel(input.sessionID)
       const agentName = input.agent ?? (await Agent.defaultAgent())
+      const effort = await lastResearchEffort(input.sessionID)
       await SessionCompaction.create({
         sessionID: input.sessionID,
         agent: agentName,
         model: { providerID: model.providerID, modelID: model.modelID },
+        effort,
         auto: false,
         handoffFile: input.arguments.trim() || undefined,
         trigger: "manual",
@@ -2131,12 +2210,41 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
       template = template + "\n\n" + input.arguments
     }
 
+    const commandMessageID = input.messageID ?? Identifier.ascending("message")
     const shell = ConfigMarkdown.shell(template)
     if (shell.length > 0) {
+      const commandAgent = await Agent.get(agentName)
+      if (!commandAgent) throw new Error(`Agent not found: "${agentName}"`)
+      const session = await Session.get(input.sessionID)
+      const messages = await Array.fromAsync(MessageV2.stream(input.sessionID))
+      const bash = await BashTool.init({ agent: commandAgent })
       const results = await Promise.all(
-        shell.map(async ([, cmd]) => {
+        shell.map(async ([, cmd], index) => {
           try {
-            return await $`${{ raw: cmd }}`.quiet().nothrow().text()
+            const result = await bash.execute(
+              {
+                command: cmd,
+                timeout: 30_000,
+                description: `Runs command template interpolation ${index + 1}`,
+              },
+              {
+                sessionID: input.sessionID,
+                messageID: commandMessageID,
+                callID: `command-interpolation-${index + 1}`,
+                agent: commandAgent.name,
+                abort: new AbortController().signal,
+                messages,
+                metadata() {},
+                async ask(req) {
+                  await PermissionNext.ask({
+                    ...req,
+                    sessionID: input.sessionID,
+                    ruleset: PermissionNext.merge(commandAgent.permission, session.permission ?? []),
+                  })
+                },
+              },
+            )
+            return result.output
           } catch (error) {
             return `Error executing command: ${error instanceof Error ? error.message : String(error)}`
           }
@@ -2219,7 +2327,7 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.
 
     const result = (await prompt({
       sessionID: input.sessionID,
-      messageID: input.messageID,
+      messageID: commandMessageID,
       model: userModel,
       agent: userAgent,
       parts,

@@ -4,6 +4,7 @@ import { Instance } from "../../src/project/instance"
 import { KernelExecutionError, KernelRuntime, type KernelIdentity } from "../../src/science/kernel/registry"
 import { Provenance } from "../../src/science/provenance/store"
 import { Session } from "../../src/session"
+import { SessionFilesystem } from "../../src/session/filesystem"
 import "../../src/tool/notebook"
 import { tmpdir, trustProject } from "../fixture/fixture"
 
@@ -27,7 +28,7 @@ test("canonical runtime records agent kernel executions with outputs", async () 
         expect(result.provenanceID).toMatch(/^[a-f0-9]{16}$/)
         expect(await Provenance.get(result.provenanceID!)).toMatchObject({
           kind: "run",
-          tool: "notebook",
+          tool: "python",
           sessionID: identity.sessionID,
           status: "ok",
           provenance: {
@@ -40,7 +41,7 @@ test("canonical runtime records agent kernel executions with outputs", async () 
             },
             input: {
               code: { status: "available", value: "40 + 2" },
-              cwd: { status: "available", value: tmp.path },
+              cwd: { status: "available", value: await SessionFilesystem.workspace(session.id) },
               code_state: {
                 status: "available",
                 value: {
@@ -61,6 +62,15 @@ test("canonical runtime records agent kernel executions with outputs", async () 
                 status: "available",
                 value: {
                   language: "python",
+                  environment_name: { status: "available", value: "python" },
+                  interpreter: {
+                    status: "available",
+                    value: {
+                      name: "python",
+                      binary: expect.any(String),
+                      version: { status: "available", value: expect.stringMatching(/^Python /) },
+                    },
+                  },
                   incarnation: { status: "available", value: 1 },
                   process_id: { status: "available", value: expect.any(Number) },
                   process_started_at: { status: "available", value: expect.any(String) },
@@ -99,6 +109,12 @@ test("canonical runtime records agent kernel executions with outputs", async () 
             messageID: "msg_kernel_origin",
             callID: "call_kernel_origin",
             kernelName: "agent",
+            kernelEnvironment: "python",
+            interpreter: {
+              name: "python",
+              binary: expect.any(String),
+              version: expect.stringMatching(/^Python /),
+            },
             executionCount: 1,
             stdout: "",
             stderr: "",
@@ -133,6 +149,21 @@ test("canonical runtime records agent kernel executions with outputs", async () 
             error: expect.stringContaining("ValueError: bad sample"),
           },
         })
+
+        const firstFile = await KernelRuntime.execute(identity, "open('first-result.txt', 'w').write('one')")
+        const secondFile = await KernelRuntime.execute(identity, "open('second-result.txt', 'w').write('two')")
+        const firstNode = await Provenance.get(firstFile.provenanceID!)
+        const secondNode = await Provenance.get(secondFile.provenanceID!)
+        const paths = (node: typeof firstNode) => {
+          if (!node || !("tool" in node)) return []
+          return (node.provenance?.outputs.items ?? []).flatMap((item) =>
+            item.path.status === "available" ? [item.path.value] : [],
+          )
+        }
+        expect(paths(firstNode)).toContain("first-result.txt")
+        expect(paths(firstNode)).not.toContain("second-result.txt")
+        expect(paths(secondNode)).toContain("second-result.txt")
+        expect(paths(secondNode)).not.toContain("first-result.txt")
 
         const secret = `kernel-provenance-${crypto.randomUUID()}`
         OpenScience.registerSecretValues([secret])
@@ -182,7 +213,7 @@ test("canonical runtime records agent kernel executions with outputs", async () 
           status: "error",
           provenance: {
             outputs: {
-              status: "failed",
+              status: "cancelled",
               items: [
                 {
                   kind: "error",
@@ -197,7 +228,7 @@ test("canonical runtime records agent kernel executions with outputs", async () 
             code: "import time\ntime.sleep(10)",
           },
           meta: {
-            error: "Execution aborted",
+            error: expect.stringContaining("Execution aborted"),
           },
         })
       } finally {

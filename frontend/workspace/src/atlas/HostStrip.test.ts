@@ -35,17 +35,16 @@ const capacity = {
   kernels: { live: 2, running: 1 },
 }
 
-// A live Bun.serve endpoint cannot stand in for the product server under this
+// A live test endpoint cannot stand in for the product server under this
 // suite: happydom.ts replaces globalThis.Response, so Bun.serve does not
 // recognise what a handler returns and answers with its own placeholder body
 // carrying a doubled content-length. Every request would then fail for a reason
 // that has nothing to do with the subject, and the degraded-state tests would
 // pass without the error status ever reaching the component. So the connection
-// failure uses a genuinely closed port over Bun's own fetch, and the statuses a
-// running server returns are real Response objects over fixture bodies.
-const closed = Bun.serve({ port: 0, fetch: () => new Response("") })
-const unreachable = `http://127.0.0.1:${closed.port}`
-await closed.stop(true)
+// failure uses an unbound high loopback port over Bun's own fetch, and the
+// statuses a running server returns are real Response objects over fixtures.
+// Avoid opening a listener here: restricted test runners may forbid all binds.
+const unreachable = "http://127.0.0.1:65535"
 
 const offline = (path: string) => Bun.fetch(`${unreachable}${path}`)
 const erroring = async () => new Response("kernel registry unavailable", { status: 503 })
@@ -131,7 +130,8 @@ describe("host strip", () => {
   test("names the block as machine resources", () => {
     const source = readFileSync(fileURLToPath(new URL("./HostStrip.tsx", import.meta.url)), "utf8")
 
-    expect(source).toContain('<span class="host-strip__label">Machine</span>')
+    expect(source).toContain('<span class="host-strip__label">Memory</span>')
+    expect(source).toContain('<span class="host-strip__label">Running</span>')
     expect(source).toContain('aria-label="Machine resources"')
   })
 
@@ -142,8 +142,14 @@ describe("host strip", () => {
 
     expect(host.querySelector("[data-boundary]")).toBeNull()
     expect(values(host)).toEqual(["412.0 MB", "~0.4 of 8"])
-    expect(host.textContent).toContain("of 16.0 GB memory")
-    expect(host.textContent).toContain("2kernels · 1 running")
+    expect(host.textContent).toContain("of 16.0 GB")
+    expect(host.textContent).toContain("1process")
+    expect(host.querySelector('[data-host-tile="kernels"] p')?.getAttribute("title")).toContain("2 kernels · 1 running")
+    expect(host.querySelector<HTMLDetailsElement>(".activity-surface__capacity")?.open).toBe(false)
+    expect(host.querySelector(".activity-surface__capacity-reading")?.textContent).toContain("412.0 MB")
+    expect(host.querySelector(".activity-surface__capacity-reading")?.textContent).toContain("~0.4/8")
+    expect(host.querySelector(".activity-surface__capacity-reading")?.textContent).toContain("Running1")
+    expect(host.querySelector(".activity-surface__capacity-title")?.textContent).toContain("Live")
   })
 
   test("asks the route the compute strip is served from, naming itself to the server", async () => {
@@ -155,10 +161,10 @@ describe("host strip", () => {
     guard(() => subject.HostStrip({ request: track }))
     await Bun.sleep(20)
 
-    expect(paths).toHaveLength(2)
-    expect(paths).toContain("/settings/compute/jobs")
-    const asked = new URL(paths.find((path) => path.startsWith("/notebook/compute")) ?? "", "http://host")
-    expect(asked.pathname).toBe("/notebook/compute")
+    expect(paths).toHaveLength(1)
+    expect(paths).not.toContain("/settings/compute/jobs")
+    const asked = new URL(paths.find((path) => path.startsWith("/kernels/compute")) ?? "", "http://host")
+    expect(asked.pathname).toBe("/kernels/compute")
 
     // Both CPU figures the route serves are measured across the window since
     // the SAME client's previous poll, so a second tab sharing this identity
@@ -179,8 +185,8 @@ describe("host strip", () => {
     )
     await Bun.sleep(20)
 
-    expect(others).toHaveLength(2)
-    const other = others.find((path) => path.startsWith("/notebook/compute")) ?? ""
+    expect(others).toHaveLength(1)
+    const other = others.find((path) => path.startsWith("/kernels/compute")) ?? ""
     expect(new URL(other, "http://host").searchParams.get("client")).not.toBe(client)
   })
 
@@ -307,13 +313,13 @@ describe("host strip", () => {
     document.dispatchEvent(new Event("visibilitychange"))
     await settle(calls)
 
-    expect(calls.length).toBe(polled + 2)
+    expect(calls.length).toBe(polled + 1)
 
     cleanups.splice(0).forEach((cleanup) => cleanup())
     document.dispatchEvent(new Event("visibilitychange"))
     // Longer than the 2.5s poll, so a surviving interval would show up here.
     await Bun.sleep(2_700)
 
-    expect(calls.length).toBe(polled + 2)
+    expect(calls.length).toBe(polled + 1)
   })
 })

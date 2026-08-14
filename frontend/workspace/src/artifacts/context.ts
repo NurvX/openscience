@@ -37,7 +37,6 @@ interface PersistedArtifacts {
 const STORAGE_KEY = "openscience-artifact-context-v1"
 
 const kinds: Partial<Record<string, ArtifactContextKind>> = {
-  ipynb: "notebook",
   csv: "dataset",
   tsv: "dataset",
   jsonl: "dataset",
@@ -143,6 +142,14 @@ function extension(value: string): string {
   const name = cleanPath(value).split("/").pop() ?? ""
   const index = name.lastIndexOf(".")
   return index > 0 ? name.slice(index + 1).toLowerCase() : ""
+}
+
+/** Resolve a persisted project-relative tab path for session-authorized I/O. */
+export function resolveArtifactPath(directory: string, value: string): string {
+  const file = cleanPath(value)
+  if (file.startsWith("/") || /^[A-Za-z]:\//.test(file)) return file
+  const root = cleanDirectory(directory)
+  return root === "/" ? `/${file}` : `${root}/${file}`
 }
 
 export function inferArtifactKind(path: string, scienceKind?: string): ArtifactContextKind {

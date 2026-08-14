@@ -4,7 +4,6 @@ import { Provider } from "../provider/provider"
 import { generateObject, streamObject, type ModelMessage } from "ai"
 import { SystemPrompt } from "../session/system"
 import { Instance } from "../project/instance"
-import { Truncate } from "../tool/truncation"
 import { Auth } from "../auth"
 import { ProviderTransform } from "../provider/transform"
 
@@ -21,6 +20,7 @@ import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@/global"
 import path from "path"
 import { Plugin } from "@/plugin"
+import { State } from "@/project/state"
 
 export namespace Agent {
   export const Info = z
@@ -49,8 +49,8 @@ export namespace Agent {
     })
   export type Info = z.infer<typeof Info>
 
-  const state = Instance.state(async () => {
-    const cfg = await Config.get()
+  const compute = async () => {
+    const cfg = await Config.getExecution()
 
     const defaults = PermissionNext.fromConfig({
       "*": "allow",
@@ -58,8 +58,6 @@ export namespace Agent {
       doom_loop: "ask",
       external_directory: {
         "*": "ask",
-        [Truncate.DIR]: "allow",
-        [Truncate.GLOB]: "allow",
       },
       question: "deny",
       plan_enter: "deny",
@@ -81,7 +79,7 @@ export namespace Agent {
         name: "research",
         description: "Primary research agent for focused questions, analysis, synthesis, and durable outputs.",
         options: {},
-        color: "#06b6d4",
+        color: "#d48765",
         permission: PermissionNext.merge(
           defaults,
           PermissionNext.fromConfig({
@@ -108,6 +106,7 @@ export namespace Agent {
         ),
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       // --- Physics ---
       physics: {
@@ -125,6 +124,7 @@ export namespace Agent {
         ),
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       // --- Machine learning ---
       ml: {
@@ -142,6 +142,7 @@ export namespace Agent {
         ),
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       // --- Utilities ---
       write: {
@@ -159,6 +160,7 @@ export namespace Agent {
         ),
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       plan: {
         name: "plan",
@@ -182,8 +184,54 @@ export namespace Agent {
         ),
         mode: "primary",
         native: true,
+        hidden: true,
       },
-      // --- Subagents (not shown in picker) ---
+      // --- Internal delegation profiles ---
+      // The product exposes capabilities and effort, not a catalog of domain
+      // personas. Research loads domain knowledge lazily through skills and
+      // delegates only by the kind of work that needs doing.
+      execute: {
+        name: "execute",
+        steps: 16,
+        description:
+          "Bounded implementation or computational work with the active project permissions. Returns concrete results to Research.",
+        permission: PermissionNext.merge(
+          defaults,
+          PermissionNext.fromConfig({
+            todoread: "deny",
+            todowrite: "deny",
+          }),
+          user,
+        ),
+        options: {},
+        mode: "subagent",
+        native: true,
+        hidden: true,
+      },
+      review: {
+        name: "review",
+        steps: 12,
+        description:
+          "Proportionate, read-only review of observable files, results, citations, and provenance when the risk justifies it.",
+        permission: PermissionNext.merge(
+          defaults,
+          PermissionNext.fromConfig({
+            "*": "deny",
+            read: "allow",
+            glob: "allow",
+            grep: "allow",
+            provenance_query: "allow",
+            provenance_review: "allow",
+          }),
+          user,
+        ),
+        prompt: PROMPT_REVIEWER,
+        options: {},
+        mode: "subagent",
+        native: true,
+        hidden: true,
+      },
+      // --- Compatibility aliases (retrievable, never advertised) ---
       task: {
         name: "task",
         description:
@@ -199,9 +247,11 @@ export namespace Agent {
         options: {},
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       explore: {
         name: "explore",
+        steps: 12,
         permission: PermissionNext.merge(
           defaults,
           PermissionNext.fromConfig({
@@ -214,10 +264,6 @@ export namespace Agent {
             websearch: "allow",
             codesearch: "allow",
             read: "allow",
-            external_directory: {
-              [Truncate.DIR]: "allow",
-              [Truncate.GLOB]: "allow",
-            },
           }),
           user,
         ),
@@ -226,6 +272,7 @@ export namespace Agent {
         options: {},
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       "literature-review": {
         name: "literature-review",
@@ -251,6 +298,7 @@ export namespace Agent {
         color: "#818cf8",
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       critique: {
         name: "critique",
@@ -273,6 +321,7 @@ export namespace Agent {
         color: "#ef4444",
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       "physics-critique": {
         name: "physics-critique",
@@ -295,6 +344,7 @@ export namespace Agent {
         color: "#c084fc",
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       reviewer: {
         name: "reviewer",
@@ -318,6 +368,7 @@ export namespace Agent {
         color: "#f59e0b",
         mode: "subagent",
         native: true,
+        hidden: true,
       },
       "artifact-reviewer": {
         name: "artifact-reviewer",
@@ -407,31 +458,22 @@ export namespace Agent {
       if (key === "docs") item.mode = "subagent"
     }
 
-    // Ensure Truncate.DIR is allowed unless explicitly configured
-    for (const name in result) {
-      const agent = result[name]
-      const explicit = agent.permission.some((r) => {
-        if (r.permission !== "external_directory") return false
-        if (r.action !== "deny") return false
-        return r.pattern === Truncate.DIR || r.pattern === Truncate.GLOB
-      })
-      if (explicit) continue
-
-      result[name].permission = PermissionNext.merge(
-        result[name].permission,
-        PermissionNext.fromConfig({ external_directory: { [Truncate.DIR]: "allow", [Truncate.GLOB]: "allow" } }),
-      )
-    }
-
     return result
-  })
+  }
+
+  const state = Instance.state(compute)
+
+  /** Rebuild project-defined specialists and permissions after trust changes. */
+  export function invalidate() {
+    State.clear(Instance.directory, compute)
+  }
 
   export async function get(agent: string) {
     return state().then((x) => x[agent])
   }
 
   export async function list() {
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     return pipe(
       await state(),
       values(),
@@ -440,14 +482,19 @@ export namespace Agent {
   }
 
   export async function defaultAgent() {
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     const agents = await state()
 
     if (cfg.default_agent) {
       const agent = agents[cfg.default_agent]
       if (!agent) throw new Error(`default agent "${cfg.default_agent}" not found`)
       if (agent.mode === "subagent") throw new Error(`default agent "${cfg.default_agent}" is a subagent`)
-      if (agent.hidden === true) throw new Error(`default agent "${cfg.default_agent}" is hidden`)
+      // Plan is no longer advertised, but an older trusted config may still
+      // name it explicitly. Keep that deliberate compatibility path working;
+      // arbitrary hidden agents remain invalid defaults.
+      if (agent.hidden === true && agent.name !== "plan") {
+        throw new Error(`default agent "${cfg.default_agent}" is hidden`)
+      }
       return agent.name
     }
 
@@ -459,7 +506,7 @@ export namespace Agent {
   }
 
   export async function generate(input: { description: string; model?: { providerID: string; modelID: string } }) {
-    const cfg = await Config.get()
+    const cfg = await Config.getExecution()
     const defaultModel = input.model ?? (await Provider.defaultModel())
     const model = await Provider.getModel(defaultModel.providerID, defaultModel.modelID)
     const language = await Provider.getLanguage(model)

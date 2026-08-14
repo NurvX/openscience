@@ -7,9 +7,10 @@ import { FileTime } from "../file/time"
 import DESCRIPTION from "./read.txt"
 import { Instance } from "../project/instance"
 import { Identifier } from "../id/id"
-import { assertExternalDirectory } from "./external-directory"
+import { assertExternalDirectory, sessionToolDirectory } from "./external-directory"
 import { InstructionPrompt } from "../session/instruction"
 import { readImageDimensions } from "../util/image"
+import { SafeFileIO } from "@/file/safe-io"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -30,9 +31,8 @@ export const ReadTool = Tool.define("read", {
     limit: z.coerce.number().describe("The number of lines to read (defaults to 2000)").optional(),
   }),
   async execute(params, ctx) {
-    const requested = path.isAbsolute(params.filePath)
-      ? params.filePath
-      : path.resolve(Instance.directory, params.filePath)
+    const directory = await sessionToolDirectory(ctx)
+    const requested = path.isAbsolute(params.filePath) ? params.filePath : path.resolve(directory, params.filePath)
     const authorized = await assertExternalDirectory(ctx, requested, {
       bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
       access: "read",
@@ -40,15 +40,17 @@ export const ReadTool = Tool.define("read", {
     const filepath = authorized?.path ?? requested
     const title = path.relative(Instance.worktree, filepath)
 
-    await ctx.ask({
-      permission: "read",
-      patterns: [filepath],
-      always: ["*"],
-      metadata: {},
-    })
+    if (!authorized?.managedToolOutput) {
+      await ctx.ask({
+        permission: "read",
+        patterns: [filepath],
+        always: ["*"],
+        metadata: {},
+      })
+    }
 
-    const file = Bun.file(filepath)
-    if (!(await file.exists())) {
+    const snapshot = await SafeFileIO.optional(filepath)
+    if (!snapshot) {
       const dir = path.dirname(filepath)
       const base = path.basename(filepath)
 
@@ -67,6 +69,7 @@ export const ReadTool = Tool.define("read", {
 
       throw new Error(`File not found: ${filepath}`)
     }
+    const file = Bun.file(filepath)
 
     const instructions = await InstructionPrompt.resolve(ctx.messages, filepath, ctx.messageID)
 
@@ -76,10 +79,9 @@ export const ReadTool = Tool.define("read", {
     const isPdf = file.type === "application/pdf"
     if (isImage || isPdf) {
       const kind = isImage ? "Image" : "PDF"
-      const attachStat = await file.stat()
-      if (attachStat.size > MAX_ATTACHMENT_BYTES) {
+      if (snapshot.bytes.byteLength > MAX_ATTACHMENT_BYTES) {
         throw new Error(
-          `${kind} too large to attach (${attachStat.size} bytes > ${MAX_ATTACHMENT_BYTES}). ` +
+          `${kind} too large to attach (${snapshot.bytes.byteLength} bytes > ${MAX_ATTACHMENT_BYTES}). ` +
             `Anthropic's API caps base64 attachments at ~32 MB. ` +
             (isPdf
               ? "Use the liteparse skill to extract text via the `lit` CLI instead " +
@@ -88,7 +90,7 @@ export const ReadTool = Tool.define("read", {
         )
       }
       const mime = file.type
-      const fileBytes = await file.bytes()
+      const fileBytes = snapshot.bytes
       if (isImage) {
         const dims = readImageDimensions(fileBytes)
         if (dims && Math.max(dims.width, dims.height) > MAX_IMAGE_DIMENSION) {
@@ -122,12 +124,12 @@ export const ReadTool = Tool.define("read", {
       }
     }
 
-    const isBinary = await isBinaryFile(filepath, file)
+    const isBinary = isBinaryFile(filepath, snapshot.bytes)
     if (isBinary) throw new Error(`Cannot read binary file: ${filepath}`)
 
     const limit = params.limit ?? DEFAULT_READ_LIMIT
     const offset = params.offset || 0
-    const lines = await file.text().then((text) => text.split("\n"))
+    const lines = snapshot.bytes.toString("utf8").split("\n")
 
     const raw: string[] = []
     let bytes = 0
@@ -185,7 +187,7 @@ export const ReadTool = Tool.define("read", {
   },
 })
 
-async function isBinaryFile(filepath: string, file: Bun.BunFile): Promise<boolean> {
+function isBinaryFile(filepath: string, buffer: Uint8Array): boolean {
   const ext = path.extname(filepath).toLowerCase()
   // binary check for common non-text extensions
   switch (ext) {
@@ -222,16 +224,11 @@ async function isBinaryFile(filepath: string, file: Bun.BunFile): Promise<boolea
       break
   }
 
-  const stat = await file.stat()
-  const fileSize = stat.size
+  const fileSize = buffer.byteLength
   if (fileSize === 0) return false
 
-  // Only read the header, not the whole file — a 2 GB binary would OOM otherwise.
   const bufferSize = Math.min(4096, fileSize)
-  const head = file.slice(0, bufferSize)
-  const buffer = await head.arrayBuffer()
-  if (buffer.byteLength === 0) return false
-  const bytes = new Uint8Array(buffer)
+  const bytes = buffer.subarray(0, bufferSize)
 
   let nonPrintableCount = 0
   for (let i = 0; i < bytes.length; i++) {

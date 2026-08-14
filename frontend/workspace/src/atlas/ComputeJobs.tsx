@@ -10,8 +10,10 @@ import {
   createComputeJobsAPI,
   type Artifact,
   type Job,
+  type ModalPlan,
   type Plan,
   type Resources,
+  type SshPlan,
   type Status,
   serial,
   stableJobs,
@@ -56,6 +58,7 @@ export function ComputeJobs(
     cache.value = value
     return value
   })
+  const [compute] = createResource(() => api.settings())
   const seeded = { value: false }
   const [state, setState] = createStore({
     selected: undefined as string | undefined,
@@ -63,9 +66,10 @@ export function ComputeJobs(
     reviewed: false,
     busy: false,
     name: "",
+    purpose: "",
     command: "",
     cwd: "",
-    target: "local" as "local" | "modal",
+    target: "local" as "local" | "modal" | `ssh:${string}`,
     image: "",
     gpu: "T4",
     uploads: "",
@@ -100,12 +104,14 @@ export function ComputeJobs(
   const setBusy: Setter<boolean> = (value) => setState("busy", value)
   const name = () => state.name
   const setName: Setter<string> = (value) => setState("name", value)
+  const purpose = () => state.purpose
+  const setPurpose: Setter<string> = (value) => setState("purpose", value)
   const command = () => state.command
   const setCommand: Setter<string> = (value) => setState("command", value)
   const cwd = () => state.cwd
   const setCwd: Setter<string> = (value) => setState("cwd", value)
   const target = () => state.target
-  const setTarget: Setter<"local" | "modal"> = (value) => setState("target", value)
+  const setTarget: Setter<"local" | "modal" | `ssh:${string}`> = (value) => setState("target", value)
   const image = () => state.image
   const setImage: Setter<string> = (value) => setState("image", value)
   const gpu = () => state.gpu
@@ -113,6 +119,8 @@ export function ComputeJobs(
   const uploads = () => state.uploads
   const setUploads: Setter<string> = (value) => setState("uploads", value)
   const plan = () => state.plan
+  const modalPlan = createMemo(() => (plan()?.provider === "modal" ? (plan() as ModalPlan) : undefined))
+  const sshPlan = createMemo(() => (plan()?.provider === "ssh" ? (plan() as SshPlan) : undefined))
   const setPlan = (value: Plan | undefined) => {
     setState("plan", value)
     return value
@@ -147,7 +155,12 @@ export function ComputeJobs(
   const setOutputBusy: Setter<boolean> = (value) => setState("outputBusy", value)
   const eventsBusy = () => state.eventsBusy
   const setEventsBusy: Setter<boolean> = (value) => setState("eventsBusy", value)
-  const authority = useExecutionAuthority(() => (target() === "modal" ? "remote_job" : "local_job"))
+  const authority = useExecutionAuthority(() => (target() === "local" ? "local_job" : "remote_job"))
+  const selectedHost = createMemo(() => {
+    const value = target()
+    if (!value.startsWith("ssh:")) return undefined
+    return compute()?.ssh_hosts.find((host) => host.id === value.slice(4))
+  })
   const current = createMemo(() => jobs()?.find((job) => job.id === selected()))
   const active = createMemo(() => jobs()?.filter((job) => !terminal.has(job.status)).length ?? 0)
 
@@ -253,6 +266,7 @@ export function ComputeJobs(
 
   const reset = () => {
     setName("")
+    setPurpose("")
     setCommand("")
     setCwd("")
     setTarget("local")
@@ -288,9 +302,20 @@ export function ComputeJobs(
 
   const staged = () => {
     return {
+      purpose: purpose().trim(),
       command: command().trim(),
       cwd: cwd().trim() || "Session workspace",
-      target: target() === "modal" ? "Modal" : "This computer",
+      remote:
+        target() === "modal"
+          ? { kind: "modal" as const, label: "Modal", host: "Your Modal account", scheduler: "none" as const }
+          : selectedHost()
+            ? {
+                kind: "ssh" as const,
+                label: selectedHost()!.label,
+                host: selectedHost()!.host,
+                scheduler: selectedHost()!.scheduler,
+              }
+            : undefined,
       resources: resources(),
       modules: listValue(modules()),
       container: container().trim() || undefined,
@@ -300,6 +325,7 @@ export function ComputeJobs(
   const signature = () =>
     JSON.stringify({
       name: name().trim(),
+      purpose: purpose().trim(),
       command: command().trim(),
       cwd: cwd().trim(),
       target: target(),
@@ -314,7 +340,8 @@ export function ComputeJobs(
     })
 
   const approved = () => reviewed() && stamp() === signature()
-  const ready = () => dispatchReady({ name: name(), command: command(), reviewed: approved(), busy: busy() })
+  const ready = () =>
+    dispatchReady({ name: name(), purpose: purpose(), command: command(), reviewed: approved(), busy: busy() })
 
   const review = async () => {
     if (target() === "local") {
@@ -330,10 +357,13 @@ export function ComputeJobs(
       .plan({
         sessionID,
         name: name().trim(),
+        purpose: purpose().trim(),
         command: command().trim(),
         cwd: cwd().trim() || undefined,
-        target: { kind: "modal" },
+        target: selectedHost() ? { kind: "ssh", host_id: selectedHost()!.id } : { kind: "modal" },
         resources: resources(),
+        modules: listValue(modules()),
+        container: container().trim() || undefined,
         artifacts: listValue(artifacts()),
         checkpoint: checkpoint().trim() || undefined,
         uploads: listValue(uploads()),
@@ -341,7 +371,7 @@ export function ComputeJobs(
         gpu: gpu().trim(),
       })
       .catch((error) => {
-        toast.error("Modal plan unavailable", error instanceof Error ? error.message : String(error))
+        toast.error("Remote plan unavailable", error instanceof Error ? error.message : String(error))
         return undefined
       })
     setBusy(false)
@@ -367,18 +397,23 @@ export function ComputeJobs(
       .start({
         sessionID,
         name: name().trim(),
+        purpose: purpose().trim(),
         command: command().trim(),
         cwd: cwd().trim() || undefined,
-        target: target() === "modal" ? { kind: "modal" } : { kind: "local" },
+        target: selectedHost()
+          ? { kind: "ssh", host_id: selectedHost()!.id }
+          : target() === "modal"
+            ? { kind: "modal" }
+            : { kind: "local" },
         resources: resources(),
         modules: listValue(modules()),
         container: container().trim() || undefined,
         artifacts: listValue(artifacts()),
         checkpoint: checkpoint().trim() || undefined,
-        uploads: target() === "modal" ? listValue(uploads()) : undefined,
+        uploads: target() !== "local" ? listValue(uploads()) : undefined,
         image: target() === "modal" ? image().trim() || undefined : undefined,
         gpu: target() === "modal" ? gpu().trim() : undefined,
-        approval: target() === "modal" ? plan()?.digest : undefined,
+        approval: target() !== "local" ? plan()?.digest : undefined,
       })
       .catch((error) => {
         toast.error("job did not start", error instanceof Error ? error.message : String(error))
@@ -429,21 +464,30 @@ export function ComputeJobs(
     void refresh()
   }
 
+  const release = async (job: Job) => {
+    setBusy(true)
+    const next = await api.release(job.id).catch((error) => {
+      toast.error("remote resources were not released", error instanceof Error ? error.message : String(error))
+      return undefined
+    })
+    setBusy(false)
+    if (!next) return
+    jobsApi.mutate((list) => {
+      const value = list?.map((item) => (item.id === next.id ? next : item))
+      cache.value = value
+      return value
+    })
+    void streams(job.id)
+  }
+
   const rerun = (job: Job) => {
-    if (job.target.kind === "ssh") {
-      toast.error(
-        "remote rerun unavailable",
-        "SSH dispatch stays disabled until staging, reattachment, cancellation, logs, and outputs pass real-host validation.",
-      )
-      return
-    }
     setName(job.name)
     setCommand(job.command)
     setCwd("")
-    setTarget(job.target.kind === "modal" ? "modal" : "local")
+    setTarget(job.target.kind === "ssh" ? `ssh:${job.target.host_id}` : job.target.kind === "modal" ? "modal" : "local")
     setImage(job.modal?.image ?? "")
     setGpu(job.modal?.gpu ?? "T4")
-    setUploads(job.modal?.uploads.map((file) => file.path).join(", ") ?? "")
+    setUploads((job.modal?.uploads ?? job.ssh?.uploads)?.map((file) => file.path).join(", ") ?? "")
     setPlan(undefined)
     setStamp("")
     setCpus(job.resources?.cpus?.toString() ?? "")
@@ -552,6 +596,15 @@ export function ComputeJobs(
               onInput={(event) => setName(event.currentTarget.value)}
             />
           </Field>
+          <Field label="Purpose">
+            <input
+              aria-label="Job purpose"
+              style={input}
+              value={purpose()}
+              placeholder="What this run should establish or produce"
+              onInput={(event) => setPurpose(event.currentTarget.value)}
+            />
+          </Field>
           <div
             style={{ display: "grid", "grid-template-columns": "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px" }}
           >
@@ -561,13 +614,21 @@ export function ComputeJobs(
                 style={input}
                 value={target()}
                 onChange={(event) => {
-                  setTarget(event.currentTarget.value as "local" | "modal")
+                  setTarget(event.currentTarget.value as "local" | "modal" | `ssh:${string}`)
                   setReviewed(false)
                   setPlan(undefined)
                 }}
               >
                 <option value="local">This computer</option>
                 <option value="modal">Modal</option>
+                <For each={compute()?.ssh_hosts}>
+                  {(host) => (
+                    <option value={`ssh:${host.id}`} disabled={!host.fingerprint}>
+                      {host.label} · {host.scheduler === "none" ? "SSH" : host.scheduler.toUpperCase()}
+                      {host.fingerprint ? "" : " · test first"}
+                    </option>
+                  )}
+                </For>
               </select>
             </Field>
             <Field label="Working directory">
@@ -613,9 +674,11 @@ export function ComputeJobs(
                 />
               </Field>
             </div>
+          </Show>
+          <Show when={target() !== "local"}>
             <Field label="Files to upload">
               <input
-                aria-label="Modal upload patterns"
+                aria-label="Remote upload patterns"
                 style={input}
                 value={uploads()}
                 placeholder="train.py, src/**/*.py, data/sample.csv"
@@ -683,7 +746,7 @@ export function ComputeJobs(
                 />
               </Field>
             </div>
-            <Show when={target() === "local"}>
+            <Show when={target().startsWith("ssh:")}>
               <Field label="Queue or partition">
                 <input
                   aria-label="Queue or partition"
@@ -737,7 +800,7 @@ export function ComputeJobs(
           <Show when={approved() && command().trim()}>
             <DispatchPreview staged={staged()} />
           </Show>
-          <Show when={target() === "modal" && approved() && plan()}>
+          <Show when={target() === "modal" && approved() && modalPlan()}>
             {(value) => (
               <div data-testid="modal-plan" style={captureCard}>
                 <div style={cardTitle}>
@@ -747,6 +810,8 @@ export function ComputeJobs(
                 <div style={manifestGrid}>
                   <span>App</span>
                   <strong>{value().app}</strong>
+                  <span>Purpose</span>
+                  <strong>{value().purpose}</strong>
                   <span>Image</span>
                   <strong>{value().image}</strong>
                   <span>GPU</span>
@@ -768,6 +833,47 @@ export function ComputeJobs(
               </div>
             )}
           </Show>
+          <Show when={target().startsWith("ssh:") && approved() && sshPlan()}>
+            {(value) => (
+              <div data-testid="ssh-plan" style={captureCard}>
+                <div style={cardTitle}>
+                  <span>SSH approval</span>
+                  <span>{bytes(value().upload_bytes)} upload</span>
+                </div>
+                <div style={manifestGrid}>
+                  <span>Host</span>
+                  <strong>{value().label}</strong>
+                  <span>Purpose</span>
+                  <strong>{value().purpose}</strong>
+                  <span>Scheduler</span>
+                  <strong>{value().scheduler === "none" ? "Direct SSH" : value().scheduler.toUpperCase()}</strong>
+                  <span>Host key</span>
+                  <strong>{value().fingerprint}</strong>
+                  <Show when={value().host_notes}>
+                    {(notes) => (
+                      <>
+                        <span>Host notes</span>
+                        <strong>{notes()}</strong>
+                      </>
+                    )}
+                  </Show>
+                  <span>Remote folder</span>
+                  <strong>{value().remote_root}</strong>
+                  <span>Inputs</span>
+                  <strong>
+                    {value().uploads.length
+                      ? value()
+                          .uploads.map((file) => file.path)
+                          .join(", ")
+                      : "None"}
+                  </strong>
+                  <span>Outputs</span>
+                  <strong>{value().outputs.length ? value().outputs.join(", ") : "None"}</strong>
+                </div>
+                <span style={{ color: "var(--color-warning)", "font-size": "12px" }}>{value().warning}</span>
+              </div>
+            )}
+          </Show>
           <div style={{ display: "flex", "justify-content": "flex-end", gap: "8px", "padding-top": "2px" }}>
             <button type="button" style={secondaryButton} onClick={reset}>
               Cancel
@@ -776,10 +882,10 @@ export function ComputeJobs(
               <button
                 type="button"
                 style={secondaryButton}
-                disabled={!name().trim() || !command().trim()}
+                disabled={!name().trim() || !purpose().trim() || !command().trim()}
                 onClick={() => void review()}
               >
-                {target() === "modal" && busy() ? "Preparing plan…" : "Review command"}
+                {target() !== "local" && busy() ? "Preparing plan…" : "Review command"}
               </button>
             </Show>
             <Show when={approved()}>
@@ -898,14 +1004,14 @@ export function ComputeJobs(
                             >
                               {job().id} · {duration(job())}
                             </span>
-                            <Show when={!terminal.has(job().status) && job().target.kind !== "ssh"}>
+                            <Show when={!terminal.has(job().status)}>
                               <Action title="Cancel job" onClick={() => void cancel(job())}>
                                 <IconStop size={16} />
                               </Action>
                             </Show>
                             <Show
                               when={
-                                job().target.kind === "modal" &&
+                                (job().target.kind === "modal" || job().target.kind === "ssh") &&
                                 terminal.has(job().status) &&
                                 job().lifecycle?.recoverable
                               }
@@ -913,7 +1019,7 @@ export function ComputeJobs(
                               <button
                                 type="button"
                                 style={secondaryButton}
-                                title="Retry collecting and delivering outputs from the retained Modal volume"
+                                title="Retry collecting and delivering outputs from the retained remote workspace"
                                 onClick={() => void retry(job())}
                               >
                                 Retry delivery
@@ -921,31 +1027,25 @@ export function ComputeJobs(
                             </Show>
                             <Show
                               when={
-                                job().target.kind === "modal" &&
                                 terminal.has(job().status) &&
-                                !job().lifecycle?.recoverable &&
-                                job().lifecycle?.resource === "unknown"
+                                job().lifecycle?.resource === "unknown" &&
+                                job().target.kind !== "local"
                               }
                             >
                               <button
                                 type="button"
                                 style={secondaryButton}
-                                title="Retry stopping the Modal sandbox and releasing its volume"
-                                onClick={() => void cancel(job())}
+                                title="Retry releasing the retained remote workspace"
+                                onClick={() => void release(job())}
                               >
-                                Retry cleanup
+                                Retry release
                               </button>
                             </Show>
                             <Show when={props.manual}>
                               <button
                                 type="button"
                                 style={secondaryButton}
-                                disabled={job().target.kind === "ssh"}
-                                title={
-                                  job().target.kind !== "ssh"
-                                    ? `Rerun this command on ${job().target.kind === "modal" ? "Modal" : "this computer"}`
-                                    : "Remote dispatch is unavailable until its full lifecycle passes real-host validation"
-                                }
+                                title={`Rerun this command on ${job().target_label}`}
                                 onClick={() => rerun(job())}
                               >
                                 Rerun
@@ -1294,7 +1394,7 @@ const mark: JSX.CSSProperties = {
 const title: JSX.CSSProperties = {
   color: "var(--color-text)",
   "font-size": "14px",
-  "font-weight": 600,
+  "font-weight": "var(--font-weight-emphasis)",
   "letter-spacing": "-0.01em",
   "line-height": 1.2,
 }
@@ -1331,7 +1431,7 @@ const formHeader: JSX.CSSProperties = {
 const formTitle: JSX.CSSProperties = {
   color: "var(--color-text)",
   "font-size": "14px",
-  "font-weight": 600,
+  "font-weight": "var(--font-weight-emphasis)",
   "letter-spacing": "-0.01em",
 }
 
@@ -1371,7 +1471,7 @@ const advancedToggle: JSX.CSSProperties = {
   color: "var(--color-text-muted)",
   "font-family": FONT_SANS,
   "font-size": "14px",
-  "font-weight": 550,
+  "font-weight": "var(--font-weight-emphasis)",
   padding: "0 10px",
   "text-align": "left",
 }
@@ -1400,7 +1500,7 @@ const primaryButton: JSX.CSSProperties = {
   padding: "0 13px",
   "font-family": FONT_SANS,
   "font-size": "14px",
-  "font-weight": 600,
+  "font-weight": "var(--font-weight-emphasis)",
   transition: "filter 140ms ease, transform 140ms ease",
 }
 
@@ -1414,7 +1514,7 @@ const secondaryButton: JSX.CSSProperties = {
   padding: "0 10px",
   "font-family": FONT_SANS,
   "font-size": "14px",
-  "font-weight": 550,
+  "font-weight": "var(--font-weight-emphasis)",
 }
 
 const empty: JSX.CSSProperties = {
@@ -1447,7 +1547,7 @@ const emptyMark: JSX.CSSProperties = {
 const emptyTitle: JSX.CSSProperties = {
   color: "var(--color-text)",
   "font-size": "14px",
-  "font-weight": 600,
+  "font-weight": "var(--font-weight-emphasis)",
   "letter-spacing": "-0.01em",
 }
 
@@ -1467,7 +1567,7 @@ const listHeader: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
   "font-size": "12px",
-  "font-weight": 600,
+  "font-weight": "var(--font-weight-emphasis)",
 }
 
 const textButton: JSX.CSSProperties = {
@@ -1675,7 +1775,7 @@ const cardTitle: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
   "font-size": "12px",
-  "font-weight": 600,
+  "font-weight": "var(--font-weight-emphasis)",
 }
 
 const artifactRow: JSX.CSSProperties = {
@@ -1713,7 +1813,7 @@ const exportButton: JSX.CSSProperties = {
   color: "var(--color-text-muted)",
   "font-family": FONT_SANS,
   "font-size": "12px",
-  "font-weight": 550,
+  "font-weight": "var(--font-weight-emphasis)",
 }
 
 const logHeader: JSX.CSSProperties = {
@@ -1724,7 +1824,7 @@ const logHeader: JSX.CSSProperties = {
   color: "var(--color-text-faint)",
   "font-family": FONT_SANS,
   "font-size": "12px",
-  "font-weight": 600,
+  "font-weight": "var(--font-weight-emphasis)",
   "margin-top": "4px",
 }
 

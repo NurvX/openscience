@@ -8,7 +8,7 @@ import fs from "fs/promises"
 import { Global } from "../../../global"
 import { errors } from "../../error"
 import { lazy } from "../../../util/lazy"
-import { ComputeJobs } from "../../../compute/jobs"
+import { JobBroker } from "../../../compute/job-broker"
 import { Instance } from "../../../project/instance"
 import { InstanceBootstrap } from "../../../project/bootstrap"
 import { HTTPException } from "hono/http-exception"
@@ -18,9 +18,9 @@ import { JsonStore } from "../../../util/jsonstore"
 import { SecretFile } from "../../../util/secret-file"
 import { OpenScience } from "../../../openscience"
 import { ModalAdapter } from "../../../compute/modal/adapter"
-import { ModalPlan } from "../../../compute/modal/plan"
 import { ModalVolume } from "../../../compute/modal/volume"
 import { Env } from "../../../env"
+import { SessionFilesystem } from "../../../session/filesystem"
 
 const Directory = z.object({
   directory: z.string().trim().min(1).optional(),
@@ -62,8 +62,7 @@ async function project<T>(context: Context, fn: () => T): Promise<T> {
 //     Vast.ai, RunPod). The provider API key is encrypted AT REST with a
 //     machine-local AES-256-GCM key (mirroring the credentials route) and is
 //     NEVER returned to the client — only presence + metadata are surfaced.
-//   • Legacy SSH host profiles retained for migration. Public dispatch stays
-//     unavailable until the full remote lifecycle is verified end to end.
+//   • SSH host profiles with pinned host-key identity and governed dispatch.
 //
 // Modal credentials are inert and resolve only inside its trusted adapter.
 // Providers that still run through shipped CLI skills retain their legacy
@@ -127,8 +126,17 @@ export namespace ComputeSettings {
   ]
 
   // ── Schemas ──
-  export const SshHost = ComputeJobs.Host
+  export const SshHost = JobBroker.Host
   export type SshHost = z.infer<typeof SshHost>
+  export const SshHostPatch = z.object({ notes: z.string().trim().max(4_000) })
+  export type SshHostPatch = z.infer<typeof SshHostPatch>
+  export const SshConfigHost = z.object({
+    alias: z.string().trim().min(1).max(253).regex(/^\S+$/),
+    hostname: z.string().trim().min(1).max(253).regex(/^\S+$/).optional(),
+    user: z.string().trim().min(1).max(120).regex(/^\S+$/).optional(),
+    port: z.number().int().min(1).max(65_535).optional(),
+  })
+  export type SshConfigHost = z.infer<typeof SshConfigHost>
 
   export const Provider = z.object({
     id: z.string(),
@@ -176,6 +184,7 @@ export namespace ComputeSettings {
   export const Info = z.object({
     providers: Provider.array().default([]),
     ssh_hosts: SshHost.array().default([]),
+    ssh_config_hosts: SshConfigHost.array().default([]),
     modal: Modal.default(() => Modal.parse({})),
     modal_file: ModalFile,
   })
@@ -361,8 +370,92 @@ export namespace ComputeSettings {
     OpenScience.registerSecretValues(secrets)
   }
 
+  function sshConfigTokens(value: string) {
+    const tokens: string[] = []
+    let token = ""
+    let quote: "'" | '"' | undefined
+    let escaped = false
+    for (const char of value) {
+      if (escaped) {
+        token += char
+        escaped = false
+        continue
+      }
+      if (char === "\\") {
+        escaped = true
+        continue
+      }
+      if (quote) {
+        if (char === quote) quote = undefined
+        else token += char
+        continue
+      }
+      if (char === "'" || char === '"') {
+        quote = char
+        continue
+      }
+      if (char === "#") break
+      if (/\s/.test(char)) {
+        if (token) tokens.push(token)
+        token = ""
+        continue
+      }
+      token += char
+    }
+    if (escaped) token += "\\"
+    if (token) tokens.push(token)
+    return tokens
+  }
+
+  /** Read literal Host stanzas without executing ssh(1), Match exec, Include,
+   *  ProxyCommand, or any other user-configured program. Import copies only
+   *  host, user, and port into the fixed broker transport; wildcard/negated
+   *  entries and identity/proxy directives are deliberately ignored. */
+  export async function sshConfigHosts(filepath = path.join(os.homedir(), ".ssh", "config")): Promise<SshConfigHost[]> {
+    const text = await Bun.file(filepath)
+      .text()
+      .catch(() => undefined)
+    if (!text) return []
+    const found = new Map<string, SshConfigHost>()
+    let aliases: string[] = []
+    let values: Omit<SshConfigHost, "alias"> = {}
+    const flush = () => {
+      for (const alias of aliases) {
+        if (found.has(alias)) continue
+        const parsed = SshConfigHost.safeParse({ alias, ...values })
+        if (parsed.success) found.set(alias, parsed.data)
+      }
+      aliases = []
+      values = {}
+    }
+    for (const line of text.split(/\r?\n/)) {
+      const match = line.trim().match(/^([^\s=]+)(?:\s+|\s*=\s*)(.*)$/)
+      if (!match) continue
+      const key = match[1]!.toLowerCase()
+      const tokens = sshConfigTokens(match[2]!)
+      if (key === "host") {
+        flush()
+        aliases = tokens.filter((alias) => alias && !alias.startsWith("!") && !/[*?\[\]]/.test(alias))
+        continue
+      }
+      if (key === "match") {
+        flush()
+        continue
+      }
+      if (!aliases.length || !tokens[0]) continue
+      if (key === "hostname" && !tokens[0].includes("%")) values.hostname ??= tokens[0]
+      if (key === "user" && !tokens[0].includes("%") && !tokens[0].includes("@")) values.user ??= tokens[0]
+      if (key === "port") {
+        const port = Number(tokens[0])
+        if (Number.isInteger(port) && port >= 1 && port <= 65_535) values.port ??= port
+      }
+    }
+    flush()
+    return [...found.values()].toSorted((a, b) => a.alias.localeCompare(b.alias))
+  }
+
   // Build the client-facing view — never includes the encrypted key.
-  async function view(stored: Stored, file = modalFile()): Promise<Info> {
+  async function view(stored: Stored, file = modalFile(), configHosts = sshConfigHosts()): Promise<Info> {
     const providers = CATALOG.map((spec) => {
       const entry = stored.providers[spec.id]
       return {
@@ -378,7 +471,13 @@ export namespace ComputeSettings {
         last_used: entry?.last_used ?? null,
       }
     })
-    return { providers, ssh_hosts: stored.ssh_hosts, modal: stored.modal, modal_file: await file }
+    return {
+      providers,
+      ssh_hosts: stored.ssh_hosts,
+      ssh_config_hosts: await configHosts,
+      modal: stored.modal,
+      modal_file: await file,
+    }
   }
 
   export async function get(): Promise<Info> {
@@ -475,7 +574,7 @@ export namespace ComputeSettings {
 
   export async function addSshHost(input: Omit<SshHost, "id">): Promise<Info> {
     const stored = await update((current) => {
-      current.ssh_hosts.push({ id: id(), ...input })
+      current.ssh_hosts.push({ id: id(), ...input, notes: input.notes?.trim() || undefined })
     })
     return view(stored)
   }
@@ -487,8 +586,35 @@ export namespace ComputeSettings {
     return view(stored)
   }
 
+  export async function updateSshHost(target: string, patch: SshHostPatch): Promise<Info> {
+    const stored = await update((current) => {
+      const index = current.ssh_hosts.findIndex((host) => host.id === target)
+      if (index < 0) throw new Error(`SSH host ${target} was not found`)
+      current.ssh_hosts[index] = SshHost.parse({
+        ...current.ssh_hosts[index]!,
+        ...patch,
+        notes: patch.notes?.trim() || undefined,
+      })
+    })
+    return view(stored)
+  }
+
   export async function findSshHost(target: string): Promise<SshHost | undefined> {
     return (await read()).ssh_hosts.find((host) => host.id === target)
+  }
+
+  export async function verifySshHost(target: string, probe: JobBroker.Probe): Promise<Info> {
+    if (!probe.ok || !probe.host_key || !probe.fingerprint) throw new Error(`SSH host ${target} was not verified`)
+    const stored = await update((current) => {
+      const index = current.ssh_hosts.findIndex((host) => host.id === target)
+      if (index < 0) throw new Error(`SSH host ${target} was not found`)
+      current.ssh_hosts[index] = SshHost.parse({
+        ...current.ssh_hosts[index]!,
+        host_key: probe.host_key,
+        fingerprint: probe.fingerprint,
+      })
+    })
+    return view(stored)
   }
 }
 
@@ -704,17 +830,7 @@ export const ComputeSettingsRoutes = lazy(() =>
           ...errors(400),
         },
       }),
-      validator(
-        "json",
-        z.object({
-          label: z.string().min(1),
-          host: z.string().min(1),
-          user: z.string().optional(),
-          port: z.number().int().positive().optional(),
-          scheduler: ComputeJobs.Scheduler.default("none"),
-          workdir: z.string().optional(),
-        }),
-      ),
+      validator("json", ComputeSettings.SshHost.omit({ id: true, fingerprint: true, host_key: true })),
       async (c) => c.json(await ComputeSettings.addSshHost(c.req.valid("json"))),
     )
     .post(
@@ -725,7 +841,7 @@ export const ComputeSettingsRoutes = lazy(() =>
         responses: {
           200: {
             description: "Connection result",
-            content: { "application/json": { schema: resolver(ComputeJobs.Probe) } },
+            content: { "application/json": { schema: resolver(JobBroker.Probe) } },
           },
           ...errors(404),
         },
@@ -734,7 +850,27 @@ export const ComputeSettingsRoutes = lazy(() =>
       async (c) => {
         const host = await ComputeSettings.findSshHost(c.req.valid("param").id)
         if (!host) return c.json({ error: "SSH host not found" }, 404)
-        return c.json(await ComputeJobs.probe(host))
+        const probe = await JobBroker.probe(host)
+        if (probe.ok) await ComputeSettings.verifySshHost(host.id, probe)
+        return c.json(probe)
+      },
+    )
+    .patch(
+      "/ssh/:id",
+      describeRoute({
+        summary: "Update SSH host notes",
+        operationId: "settings.compute.ssh.update",
+        responses: {
+          200: { description: "Updated", content: { "application/json": { schema: resolver(ComputeSettings.Info) } } },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      validator("json", ComputeSettings.SshHostPatch),
+      async (c) => {
+        const target = c.req.valid("param").id
+        if (!(await ComputeSettings.findSshHost(target))) return c.json({ error: "SSH host not found" }, 404)
+        return c.json(await ComputeSettings.updateSshHost(target, c.req.valid("json")))
       },
     )
     .delete(
@@ -757,7 +893,7 @@ export const ComputeSettingsRoutes = lazy(() =>
         responses: {
           200: {
             description: "Compute jobs",
-            content: { "application/json": { schema: resolver(ComputeJobs.Job.array()) } },
+            content: { "application/json": { schema: resolver(JobBroker.Job.array()) } },
           },
         },
       }),
@@ -767,59 +903,70 @@ export const ComputeSettingsRoutes = lazy(() =>
           const settings = await ComputeSettings.get()
           const provider = settings.providers.find((item) => item.id === "modal")
           const resolveCredentials = provider?.enabled ? ComputeSettings.modalResolver() : undefined
-          return c.json(await ComputeJobs.list({ resolveCredentials }))
+          return c.json(await JobBroker.list({ resolveCredentials }))
         }),
     )
     .post(
       "/jobs/plan",
       describeRoute({
-        summary: "Prepare an exact Modal run plan for approval",
+        summary: "Prepare an exact remote run plan for approval",
         operationId: "settings.compute.jobs.plan",
         responses: {
           200: {
-            description: "Modal run plan",
-            content: { "application/json": { schema: resolver(ModalPlan.Schema) } },
+            description: "Remote run plan",
+            content: { "application/json": { schema: resolver(JobBroker.Plan) } },
           },
           ...errors(400, 409),
         },
       }),
       validator("query", Directory),
-      validator("json", ComputeJobs.Request),
+      validator("json", JobBroker.Request),
       async (c) => {
         return project(c, async () => {
           const input = c.req.valid("json")
-          return c.json(await ComputeJobs.plan(input, { modal: await ComputeSettings.modalConfig() }))
+          const settings = await ComputeSettings.get()
+          return c.json(
+            await JobBroker.plan(input, {
+              projectDirectory: Instance.directory,
+              workspace: await SessionFilesystem.workspace(input.sessionID),
+              hosts: settings.ssh_hosts,
+              modal: input.target.kind === "modal" ? await ComputeSettings.modalConfig() : undefined,
+            }),
+          )
         })
       },
     )
     .post(
       "/jobs",
       describeRoute({
-        summary: "Start a local compute job",
+        summary: "Start a compute job",
         operationId: "settings.compute.jobs.start",
         responses: {
-          200: { description: "Started job", content: { "application/json": { schema: resolver(ComputeJobs.Job) } } },
+          200: { description: "Started job", content: { "application/json": { schema: resolver(JobBroker.Job) } } },
           ...errors(400, 409),
         },
       }),
       validator("query", Directory),
-      validator("json", ComputeJobs.Request),
+      validator("json", JobBroker.Request),
       async (c) => {
         return project(c, async () => {
           const input = c.req.valid("json")
-          if (input.target.kind === "ssh") {
-            return c.json(
-              {
-                error: "remote_compute_unavailable",
-                message:
-                  "SSH dispatch is unavailable until staged inputs, durable remote IDs, reattachment, cancellation, logs, and outputs pass real-host validation.",
-              },
-              409,
-            )
+          const settings = input.target.kind === "ssh" ? await ComputeSettings.get() : undefined
+          const sshHostID = input.target.kind === "ssh" ? input.target.host_id : undefined
+          if (sshHostID && !settings?.ssh_hosts.some((host) => host.id === sshHostID)) {
+            throw new HTTPException(400, { message: "The selected SSH compute profile was not found." })
           }
           const modal = input.target.kind === "modal" ? await ComputeSettings.modalConfig() : undefined
           const resolveCredentials = input.target.kind === "modal" ? ComputeSettings.modalResolver() : undefined
-          return c.json(await ComputeJobs.start(input, { modal, resolveCredentials }))
+          return c.json(
+            await JobBroker.start(input, {
+              projectDirectory: Instance.directory,
+              workspace: await SessionFilesystem.workspace(input.sessionID),
+              hosts: settings?.ssh_hosts,
+              modal,
+              resolveCredentials,
+            }),
+          )
         })
       },
     )
@@ -840,7 +987,7 @@ export const ComputeSettingsRoutes = lazy(() =>
       validator("query", Directory),
       async (c) =>
         project(c, async () => {
-          return c.json({ cleared: await ComputeJobs.clear() })
+          return c.json({ cleared: await JobBroker.clear() })
         }),
     )
     .get(
@@ -860,9 +1007,9 @@ export const ComputeSettingsRoutes = lazy(() =>
       validator("query", Directory),
       async (c) => {
         return project(c, async () => {
-          const job = await ComputeJobs.get(c.req.valid("param").id)
+          const job = await JobBroker.get(c.req.valid("param").id)
           if (!job) return c.json({ error: "Compute job not found" }, 404)
-          return c.json({ log: await ComputeJobs.log(job.id) })
+          return c.json({ log: await JobBroker.log(job.id) })
         })
       },
     )
@@ -883,21 +1030,21 @@ export const ComputeSettingsRoutes = lazy(() =>
       validator("query", Directory),
       async (c) => {
         return project(c, async () => {
-          const job = await ComputeJobs.get(c.req.valid("param").id)
+          const job = await JobBroker.get(c.req.valid("param").id)
           if (!job) return c.json({ error: "Compute job not found" }, 404)
-          return c.json({ events: await ComputeJobs.events(job.id) })
+          return c.json({ events: await JobBroker.events(job.id) })
         })
       },
     )
     .post(
       "/jobs/:id/retry",
       describeRoute({
-        summary: "Retry delivery from a retained Modal resource",
+        summary: "Retry output delivery from a retained remote resource",
         operationId: "settings.compute.jobs.retry",
         responses: {
           200: {
             description: "Recovery started",
-            content: { "application/json": { schema: resolver(ComputeJobs.Job) } },
+            content: { "application/json": { schema: resolver(JobBroker.Job) } },
           },
           ...errors(400, 404, 409),
         },
@@ -906,9 +1053,36 @@ export const ComputeSettingsRoutes = lazy(() =>
       validator("query", Directory),
       async (c) => {
         return project(c, async () => {
-          const job = await ComputeJobs.get(c.req.valid("param").id)
+          const job = await JobBroker.get(c.req.valid("param").id)
           if (!job) return c.json({ error: "Compute job not found" }, 404)
-          return c.json(await ComputeJobs.retry(job.id, { resolveCredentials: ComputeSettings.modalResolver() }))
+          return c.json(await JobBroker.retry(job.id, { resolveCredentials: ComputeSettings.modalResolver() }))
+        })
+      },
+    )
+    .post(
+      "/jobs/:id/release",
+      describeRoute({
+        summary: "Release retained compute resources",
+        operationId: "settings.compute.jobs.release",
+        responses: {
+          200: {
+            description: "Resources released",
+            content: { "application/json": { schema: resolver(JobBroker.Job) } },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      validator("query", Directory),
+      async (c) => {
+        return project(c, async () => {
+          const job = await JobBroker.get(c.req.valid("param").id)
+          if (!job) return c.json({ error: "Compute job not found" }, 404)
+          const settings = await ComputeSettings.get()
+          const provider = settings.providers.find((item) => item.id === "modal")
+          const resolveCredentials =
+            job.target.kind === "modal" && provider?.enabled ? ComputeSettings.modalResolver() : undefined
+          return c.json(await JobBroker.release(job.id, { hosts: settings.ssh_hosts, resolveCredentials }))
         })
       },
     )
@@ -918,7 +1092,7 @@ export const ComputeSettingsRoutes = lazy(() =>
         summary: "Cancel a compute job",
         operationId: "settings.compute.jobs.cancel",
         responses: {
-          200: { description: "Cancelled job", content: { "application/json": { schema: resolver(ComputeJobs.Job) } } },
+          200: { description: "Cancelled job", content: { "application/json": { schema: resolver(JobBroker.Job) } } },
           ...errors(404),
         },
       }),
@@ -927,12 +1101,12 @@ export const ComputeSettingsRoutes = lazy(() =>
       async (c) => {
         return project(c, async () => {
           const settings = await ComputeSettings.get()
-          const job = await ComputeJobs.get(c.req.valid("param").id)
+          const job = await JobBroker.get(c.req.valid("param").id)
           if (!job) return c.json({ error: "Compute job not found" }, 404)
           const provider = settings.providers.find((item) => item.id === "modal")
           const resolveCredentials =
             job.target.kind === "modal" && provider?.enabled ? ComputeSettings.modalResolver() : undefined
-          return c.json(await ComputeJobs.cancel(job.id, { hosts: settings.ssh_hosts, resolveCredentials }))
+          return c.json(await JobBroker.cancel(job.id, { hosts: settings.ssh_hosts, resolveCredentials }))
         })
       },
     ),

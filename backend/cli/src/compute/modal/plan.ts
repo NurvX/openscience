@@ -12,6 +12,7 @@ export namespace ModalPlan {
   export const Schema = z.object({
     digest: z.string().length(64),
     provider: z.literal("modal"),
+    purpose: z.string(),
     app: z.string(),
     environment: z.string().optional(),
     image: z.string(),
@@ -28,6 +29,7 @@ export namespace ModalPlan {
     network: z.enum(["unrestricted", "none"]),
     command: z.string(),
     cwd: z.string(),
+    workspace_cwd: z.string(),
     uploads: z.array(
       z.object({
         path: z.string(),
@@ -42,8 +44,10 @@ export namespace ModalPlan {
   export type Schema = z.infer<typeof Schema>
 
   export type Input = {
+    purpose?: string
     command: string
     cwd: string
+    workspaceCwd?: string
     image: string
     packages: string[]
     gpu: string
@@ -57,6 +61,14 @@ export namespace ModalPlan {
   export type Prepared = { plan: Schema; files: ModalAdapter.File[] }
 
   const posix = (value: string) => value.split(path.sep).join("/").replace(/^\.\//, "")
+
+  function workspaceCwd(value: string | undefined) {
+    const current = posix(value?.trim() || ".")
+    if (path.posix.isAbsolute(current) || current.split("/").includes("..")) {
+      throw new Error(`Modal working directory must stay inside the session workspace: ${value}`)
+    }
+    return current || "."
+  }
 
   async function hash(file: string) {
     const data = await Bun.file(file).arrayBuffer()
@@ -95,14 +107,14 @@ export namespace ModalPlan {
     return new Set(files.filter((file) => matcher.ignores(file)))
   }
 
-  async function inputs(root: string, patterns: string[]) {
+  export async function files(root: string, patterns: string[], label = "Modal") {
     const project = await Filesystem.canonical(root)
-    if (!project) throw new Error(`Modal project directory is unavailable: ${root}`)
+    if (!project) throw new Error(`${label} project directory is unavailable: ${root}`)
     const files = new Map<string, ModalAdapter.File>()
     const found = new Set<string>()
     for (const pattern of patterns) {
       if (path.isAbsolute(pattern) || pattern.split(/[\\/]/).includes("..")) {
-        throw new Error(`Modal upload pattern must stay inside the project: ${pattern}`)
+        throw new Error(`${label} upload pattern must stay inside the project: ${pattern}`)
       }
       const scan = new Bun.Glob(pattern).scan({ cwd: project, dot: true, onlyFiles: true, followSymlinks: true })
       for await (const file of scan) found.add(posix(file))
@@ -110,16 +122,16 @@ export namespace ModalPlan {
     const excludes = await ignored(project, [...found])
     for (const relative of found) {
       if (excludes.has(relative)) continue
-      if (forbidden(relative)) throw new Error(`Modal upload policy denied: ${relative}`)
+      if (forbidden(relative)) throw new Error(`${label} upload policy denied: ${relative}`)
       const canonical = await Filesystem.canonical(path.resolve(project, relative))
       if (!canonical || !Filesystem.contains(project, canonical)) {
-        throw new Error(`Modal upload escaped the project: ${relative}`)
+        throw new Error(`${label} upload escaped the project: ${relative}`)
       }
       const resolved = posix(path.relative(project, canonical))
       const canonicalIgnored =
         resolved === relative ? excludes.has(resolved) : (await ignored(project, [resolved])).has(resolved)
       if (canonicalIgnored) continue
-      if (forbidden(resolved)) throw new Error(`Modal upload policy denied: ${relative}`)
+      if (forbidden(resolved)) throw new Error(`${label} upload policy denied: ${relative}`)
       const info = await fs.stat(canonical)
       files.set(canonical, {
         path: resolved,
@@ -130,14 +142,15 @@ export namespace ModalPlan {
     }
     const result = [...files.values()].toSorted((a, b) => a.path.localeCompare(b.path))
     const bytes = result.reduce((sum, file) => sum + file.size, 0)
-    if (bytes > 104_857_600) throw new Error("Modal uploads exceed the 100 MiB approval limit")
+    if (bytes > 104_857_600) throw new Error(`${label} uploads exceed the 100 MiB approval limit`)
     return { files: result, bytes }
   }
 
   export async function prepare(input: Input): Promise<Prepared> {
-    const upload = await inputs(input.cwd, input.uploads)
+    const upload = await files(input.cwd, input.uploads)
     const value = {
       provider: "modal" as const,
+      purpose: input.purpose?.trim() || "Research computation",
       app: input.context.app,
       environment: input.context.environment,
       image: input.image,
@@ -148,12 +161,16 @@ export namespace ModalPlan {
       network: input.context.network,
       command: input.command,
       cwd: input.cwd,
+      workspace_cwd: workspaceCwd(input.workspaceCwd),
       uploads: upload.files.map((file) => ({ path: file.path, size: file.size, sha256: file.sha256 })),
       upload_bytes: upload.bytes,
       outputs: input.outputs.toSorted(),
       warning: "This run uses your Modal account and may incur charges until it exits, times out, or is cancelled.",
     }
-    const digest = new Bun.CryptoHasher("sha256").update(JSON.stringify(value)).digest("hex")
+    // The absolute cwd is a per-conversation scratch path. Bind the stable
+    // workspace-relative cwd plus reviewed input paths and hashes so exact
+    // project/global approvals can carry across isolated conversations.
+    const digest = new Bun.CryptoHasher("sha256").update(JSON.stringify({ ...value, cwd: undefined })).digest("hex")
     return { plan: Schema.parse({ digest, ...value }), files: upload.files }
   }
 }
