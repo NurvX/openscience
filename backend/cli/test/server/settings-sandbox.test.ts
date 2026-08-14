@@ -1,13 +1,47 @@
 import { describe, expect, test } from "bun:test"
 import { SandboxSettingsRoutes } from "../../src/server/routes/settings/sandbox"
 import { Sandbox } from "../../src/sandbox/sandbox"
+import { Config } from "../../src/config/config"
+import { Global } from "../../src/global"
+import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 const app = SandboxSettingsRoutes()
+const configFiles = ["openscience.jsonc", "openscience.json", "config.json"].map((name) =>
+  path.join(Global.Path.config, name),
+)
 
-// GET / and POST /test are read-only / write-to-temp-only, so these never touch
-// the real global config (PUT does — that path is covered by the CLI e2e).
+async function snapshotGlobalConfig() {
+  return Promise.all(
+    configFiles.map(async (file) => ({
+      file,
+      content: await Bun.file(file)
+        .text()
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return
+          throw error
+        }),
+    })),
+  )
+}
+
+async function restoreGlobalConfig(snapshot: Awaited<ReturnType<typeof snapshotGlobalConfig>>) {
+  await Promise.all(
+    snapshot.map(async (item) => {
+      if (item.content === undefined) {
+        await fs.rm(item.file, { force: true })
+        return
+      }
+      await Bun.write(item.file, item.content)
+    }),
+  )
+  Config.global.reset()
+}
+
+// GET / and POST /test are read-only / write-to-temp-only. The PUT regression
+// snapshots and restores every candidate global config file byte-for-byte,
+// including restoring absence, so it cannot leak config into another test.
 describe("/settings/sandbox routes", () => {
   test("GET / reports backend availability and a config object", async () => {
     const res = await app.request("/")
@@ -54,5 +88,21 @@ describe("/settings/sandbox routes", () => {
       expect(await response.json()).toMatchObject({ error: expect.stringContaining("invalid or over-broad") })
     }
     expect(await (await app.request("/")).json()).toEqual(before)
+  })
+
+  test("PUT persists the machine-wide explicit project-trust policy", async () => {
+    const snapshot = await snapshotGlobalConfig()
+    try {
+      const response = await app.request("/", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requireProjectTrust: true }),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ config: { requireProjectTrust: true } })
+      expect((await Config.trustedSandbox()).requireProjectTrust).toBe(true)
+    } finally {
+      await restoreGlobalConfig(snapshot)
+    }
   })
 })

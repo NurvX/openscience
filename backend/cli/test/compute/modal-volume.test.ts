@@ -1,13 +1,47 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { ModalVolume } from "../../src/compute/modal/volume"
+import { CredentialProcessLedger } from "../../src/credentials/process-ledger"
 
 const roots: string[] = []
+
+type LedgerEntry = {
+  id: string
+  kind: string
+  pid: number
+  identity: string
+}
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
+
+async function ledger(): Promise<LedgerEntry[]> {
+  return Bun.file(CredentialProcessLedger.pathForTests())
+    .json()
+    .catch(() => []) as Promise<LedgerEntry[]>
+}
+
+async function waitText(file: string) {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const value = await Bun.file(file)
+      .text()
+      .catch(() => undefined)
+    if (value?.trim()) return value.trim()
+    await Bun.sleep(10)
+  }
+  throw new Error(`Timed out waiting for ${file}`)
+}
+
+async function waitEntry(previous: Set<string>) {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const entry = (await ledger()).find((item) => item.kind === "modal-volume" && !previous.has(item.id))
+    if (entry) return entry
+    await Bun.sleep(10)
+  }
+  throw new Error("Timed out waiting for the Modal Volume bridge ledger entry")
+}
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "openscience-modal-volume-"))
@@ -176,6 +210,60 @@ describe("ModalVolume", () => {
     expect(await Bun.file(path.join(item.staging, "outputs", "model.bin")).text()).toBe("weights")
   }, 30_000)
 
+  test("request abort revokes a blocked durable download bridge before rejecting", async () => {
+    const item = await fixture()
+    const python = Bun.which("python3") ?? Bun.which("python")
+    if (!python) throw new Error("Python is required for the Modal Volume driver test")
+    const blocker = path.join(item.root, "blocked-download.py")
+    const marker = path.join(item.staging, "started")
+    await Bun.write(
+      blocker,
+      [
+        "import json, os, sys, time",
+        "request = json.load(sys.stdin)",
+        "marker = os.path.join(request['staging'], 'started')",
+        "with open(marker, 'w') as handle:",
+        "    handle.write(str(os.getpid()))",
+        "    handle.flush()",
+        "    os.fsync(handle.fileno())",
+        "time.sleep(600)",
+      ].join("\n"),
+    )
+    const previous = new Set((await ledger()).map((entry) => entry.id))
+    const controller = new AbortController()
+    const reason = new DOMException("browser disconnected", "AbortError")
+    const running = ModalVolume.download(
+      { ...item.context, command: [python, "-I", blocker] },
+      "job-volume",
+      ["outputs/model.bin"],
+      item.staging,
+      { signal: controller.signal },
+    ).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+    let entry: LedgerEntry | undefined
+
+    try {
+      const active = await Promise.all([waitText(marker), waitEntry(previous)]).then(([, value]) => value)
+      entry = active
+      expect(await CredentialProcessLedger.owns(active.pid, active.identity)).toBe(true)
+      controller.abort(reason)
+      const result = await running
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error("The blocked Modal Volume download unexpectedly completed")
+      expect(result.error).toBe(reason)
+      expect(await CredentialProcessLedger.owns(active.pid, active.identity)).toBe(false)
+      expect((await ledger()).some((item) => item.id === active.id)).toBe(false)
+    } finally {
+      controller.abort(reason)
+      await running
+      if (entry) {
+        await CredentialProcessLedger.revoke({ id: entry.id, kind: "modal-volume" }).catch(() => undefined)
+      }
+    }
+  }, 30_000)
+
   test("waits for a durable marker inside one driver process", async () => {
     const item = await fixture()
     const marker = path.join(item.root, "volume", ".openscience-exit-code")
@@ -194,6 +282,109 @@ describe("ModalVolume", () => {
       /unsafe path/,
     )
   })
+
+  test("rejects a declared aggregate above live safe capacity before launching the provider bridge", async () => {
+    const item = await fixture()
+    const launched = path.join(item.root, "provider-launched")
+    const python = Bun.which("python3") ?? Bun.which("python")
+    if (!python) throw new Error("Python is required for the Modal Volume driver test")
+    const statfs = spyOn(fs, "statfs").mockResolvedValue({
+      bavail: ModalVolume.DOWNLOAD_DISK_RESERVE_BYTES + 6,
+      bsize: 1,
+    } as Awaited<ReturnType<typeof fs.statfs>>)
+
+    try {
+      const error = await ModalVolume.download(
+        {
+          ...item.context,
+          command: [
+            python,
+            "-I",
+            "-c",
+            `from pathlib import Path; Path(${JSON.stringify(launched)}).write_text('launched')`,
+          ],
+        },
+        "job-volume",
+        ["outputs/model.bin"],
+        item.staging,
+        { declaredBytes: 7 },
+      ).catch((value) => value)
+
+      expect(error).toBeInstanceOf(ModalVolume.DownloadCapacityError)
+      expect((error as ModalVolume.DownloadCapacityError).safeCapacityBytes).toBe(6)
+      expect((error as ModalVolume.DownloadCapacityError).responseBytes).toBe(7)
+      expect((error as Error).message).toContain("512 MiB")
+      expect(await Bun.file(launched).exists()).toBe(false)
+      expect(await Bun.file(item.staging).exists()).toBe(false)
+    } finally {
+      statfs.mockRestore()
+    }
+  })
+
+  test("bounds understated provider bytes and removes partial staging", async () => {
+    const item = await fixture()
+    const statfs = spyOn(fs, "statfs").mockResolvedValue({
+      bavail: ModalVolume.DOWNLOAD_DISK_RESERVE_BYTES + 6,
+      bsize: 1,
+    } as Awaited<ReturnType<typeof fs.statfs>>)
+
+    try {
+      const error = await ModalVolume.download(item.context, "job-volume", ["outputs/model.bin"], item.staging, {
+        declaredBytes: 1,
+      }).catch((value) => value)
+
+      expect(error).toBeInstanceOf(ModalVolume.DownloadCapacityError)
+      expect((error as ModalVolume.DownloadCapacityError).safeCapacityBytes).toBe(6)
+      expect((error as ModalVolume.DownloadCapacityError).responseBytes).toBe(7)
+      expect(await Bun.file(item.staging).exists()).toBe(false)
+    } finally {
+      statfs.mockRestore()
+    }
+  }, 30_000)
+
+  test("classifies an ENOSPC staging write and removes the partial tree", async () => {
+    const item = await fixture()
+    const python = Bun.which("python3") ?? Bun.which("python")
+    if (!python) throw new Error("Python is required for the Modal Volume driver test")
+    const wrapper = path.join(item.root, "enospc-download.py")
+    await Bun.write(
+      wrapper,
+      [
+        "import builtins, errno, os, runpy, sys",
+        "real_open = builtins.open",
+        `staging = os.path.realpath(${JSON.stringify(item.staging)})`,
+        "def guarded_open(file, mode='r', *args, **kwargs):",
+        "    target = os.path.realpath(os.fspath(file))",
+        "    if 'w' in mode and (target == staging or target.startswith(staging + os.sep)):",
+        "        raise OSError(errno.ENOSPC, 'injected staging exhaustion')",
+        "    return real_open(file, mode, *args, **kwargs)",
+        "builtins.open = guarded_open",
+        "sys.path.insert(0, sys.argv[1])",
+        "runpy.run_path(sys.argv[2], run_name='__main__')",
+      ].join("\n"),
+    )
+    const statfs = spyOn(fs, "statfs").mockResolvedValue({
+      bavail: ModalVolume.DOWNLOAD_DISK_RESERVE_BYTES + 64,
+      bsize: 1,
+    } as Awaited<ReturnType<typeof fs.statfs>>)
+
+    try {
+      const error = await ModalVolume.download(
+        { ...item.context, command: [python, "-I", wrapper, item.root, await ModalVolume.driverPath()] },
+        "job-volume",
+        ["outputs/model.bin"],
+        item.staging,
+        { declaredBytes: 7 },
+      ).catch((value) => value)
+
+      expect(error).toBeInstanceOf(ModalVolume.DownloadCapacityError)
+      expect((error as ModalVolume.DownloadCapacityError).storageCode).toBe("ENOSPC")
+      expect((error as Error).message).toContain("staging storage returned ENOSPC")
+      expect(await Bun.file(item.staging).exists()).toBe(false)
+    } finally {
+      statfs.mockRestore()
+    }
+  }, 30_000)
 
   test("accepts downloads when a staging parent is reached through a symlink", async () => {
     const item = await fixture()
