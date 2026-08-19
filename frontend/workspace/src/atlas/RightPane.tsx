@@ -55,7 +55,12 @@ const labels: Record<ContextTab, string> = {
 
 export function RightPaneGate(props: { children: JSX.Element }): JSX.Element {
   createEffect(() => uiStore.syncArtifact(Boolean(artifactContext.active())))
-  const retained = () => uiStore.workTabs().some((tab) => tab.kind === "file")
+  const [terminal, setTerminal] = createSignal(uiStore.rightPaneOpen() && uiStore.context() === "terminal")
+  createEffect(() => {
+    if (!uiStore.rightPaneOpen() || uiStore.context() !== "terminal") return
+    setTerminal(true)
+  })
+  const retained = () => terminal() || uiStore.workTabs().some((tab) => tab.kind === "file")
   return (
     <Show when={uiStore.rightPaneOpen() || retained()}>
       <div class="right-pane-gate" data-open={uiStore.rightPaneOpen() ? "true" : "false"}>
@@ -241,6 +246,12 @@ export function RightPane(
   const fileTabs = createMemo(() =>
     uiStore.workTabs().filter((tab): tab is Extract<WorkTab, { kind: "file" }> => tab.kind === "file"),
   )
+  const terminal = () => uiStore.workTabs().some((tab) => tab.kind === "view" && tab.context === "terminal")
+  const [terminalSeen, setTerminalSeen] = createSignal(terminal())
+  createEffect(() => {
+    if (terminal()) setTerminalSeen(true)
+  })
+  const terminalVisible = () => uiStore.rightPaneOpen() && terminal() && context() === "terminal"
   const selectedFile = (tab: Extract<WorkTab, { kind: "file" }>) => {
     const current = uiStore.file()
     return current?.directory === tab.file.directory && current.path === tab.file.path
@@ -307,17 +318,14 @@ export function RightPane(
     frame.pane = element
     const parent = element.parentElement
     if (!parent) return
-    const main = element.previousElementSibling
-    const measure = () => {
-      const center = main instanceof HTMLElement ? main.clientWidth + element.clientWidth : 0
-      setWorkspace(center || parent.clientWidth || window.innerWidth)
-    }
+    // The parent is the actual split boundary. Adding the two children feeds
+    // overflow back into the resize limit, so a wide pane can grow the value
+    // used to clamp itself and push the inspector beyond the viewport.
+    const measure = () => setWorkspace(parent.clientWidth || window.innerWidth)
     measure()
     if (typeof ResizeObserver === "undefined") return
     frame.observer = new ResizeObserver(measure)
     frame.observer.observe(parent)
-    frame.observer.observe(element)
-    if (main instanceof HTMLElement) frame.observer.observe(main)
   }
 
   const onHandlePointerDown = (event: PointerEvent) => {
@@ -384,6 +392,7 @@ export function RightPane(
             on:pointerup={onHandlePointerUp}
             on:pointercancel={onHandlePointerUp}
             onDblClick={splitEvenly}
+            title="Drag to resize. Double-click to split evenly."
             aria-hidden={narrow() ? "true" : undefined}
             hidden={narrow() || expanded()}
             class="research-inspector__resize"
@@ -495,15 +504,28 @@ export function RightPane(
                 <FilesPane />
               </div>
             </Show>
+            <Show when={terminalSeen()}>
+              <div
+                data-component="terminal-context"
+                aria-hidden={terminalVisible() ? undefined : "true"}
+                hidden={!terminalVisible()}
+                style={{
+                  flex: 1,
+                  "min-height": 0,
+                  "min-width": 0,
+                  display: terminalVisible() ? "flex" : "none",
+                  "flex-direction": "column",
+                }}
+              >
+                <TerminalSurface active={terminalVisible()} />
+              </div>
+            </Show>
             <Switch>
               <Match when={context() === "artifact" && artifact()}>
                 {(current) => <ArtifactInspector context={current()} />}
               </Match>
               <Match when={context() === "files" && uiStore.saved()}>
                 {(current) => <StoredArtifactView artifact={current()} />}
-              </Match>
-              <Match when={context() === "terminal"}>
-                <TerminalSurface />
               </Match>
               <Match when={context() === "canvas"}>
                 <AtlasCanvas />

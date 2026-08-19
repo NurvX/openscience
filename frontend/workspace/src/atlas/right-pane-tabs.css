@@ -52,8 +52,7 @@
   -webkit-backdrop-filter: blur(3px);
 }
 
-/* The pane border is the single structural separator. The wide invisible
-   handle only strengthens that same line while it is being targeted. */
+/* Keep the hit target forgiving without adding a detached control to the edge. */
 .research-inspector__resize {
   position: absolute;
   top: 0;
@@ -72,7 +71,7 @@
   position: absolute;
   inset: 0 auto 0 8px;
   width: 1px;
-  background: transparent;
+  background: var(--color-border);
   transition: background-color 140ms var(--agent-ease);
 }
 
@@ -90,11 +89,11 @@
 .research-inspector__header {
   box-sizing: border-box;
   min-width: 0;
-  min-height: 44px;
-  height: 44px;
+  min-height: 40px;
+  height: 40px;
   display: flex;
   align-items: stretch;
-  flex: 0 0 44px;
+  flex: 0 0 40px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg-subtle);
 }
@@ -126,15 +125,15 @@
   align-items: center;
   flex: 0 0 auto;
   gap: 2px;
-  padding: 6px;
+  padding: 5px;
 }
 
 .research-inspector__control {
   appearance: none;
   box-sizing: border-box;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
   display: inline-grid;
   place-items: center;
   padding: 0;
@@ -168,12 +167,12 @@
 
 .inspector-tabs {
   min-width: 0;
-  height: 44px;
+  height: 40px;
   flex: 1 1 auto;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 6px 4px 6px 8px;
+  gap: 1px;
+  padding: 5px 3px 5px 6px;
   overflow-x: auto;
   overflow-y: hidden;
   border: 0;
@@ -185,12 +184,12 @@
 }
 
 .inspector-tab-pair {
-  min-width: 88px;
-  max-width: 208px;
-  min-height: 32px;
+  min-width: 0;
+  max-width: 180px;
+  min-height: 30px;
   display: inline-flex;
   align-items: stretch;
-  flex: 0 1 208px;
+  flex: 0 1 auto;
   overflow: hidden;
   border: 0;
   border-radius: var(--atlas-radius-xs);
@@ -214,11 +213,11 @@
 .inspector-tab-pair .inspector-tab {
   appearance: none;
   min-width: 0;
-  min-height: 32px;
+  min-height: 30px;
   flex: 1 1 auto;
   display: inline-flex;
   align-items: center;
-  padding: 0 4px 0 10px;
+  padding: 0 8px;
   overflow: hidden;
   border: 0;
   border-radius: 0;
@@ -246,12 +245,13 @@
 
 .inspector-tab-pair .inspector-tab__close {
   appearance: none;
-  width: 32px;
-  min-width: 32px;
-  min-height: 32px;
+  width: 0;
+  min-width: 0;
+  min-height: 30px;
   display: inline-grid;
   place-items: center;
   padding: 0;
+  overflow: hidden;
   border: 0;
   border-radius: var(--atlas-radius-xs);
   background: transparent;
@@ -268,6 +268,8 @@
 .inspector-tab-pair:hover .inspector-tab__close,
 .inspector-tab-pair:focus-within .inspector-tab__close,
 .inspector-tab-pair[data-active="true"] .inspector-tab__close {
+  width: 28px;
+  min-width: 28px;
   opacity: 0.72;
 }
 

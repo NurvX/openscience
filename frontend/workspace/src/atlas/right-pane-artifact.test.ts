@@ -33,6 +33,7 @@ afterAll(() => server.close())
 // asserts against a state it actually established, rather than against
 // whatever the previous file happened to leave behind.
 const reset = () => {
+  state.uiStore.workTabs().forEach((tab) => state.uiStore.closeWorkTab(tab.id))
   state.uiStore.closeContext()
   state.uiStore.setRightPaneMode("tools")
   state.uiStore.setRightPaneTab("canvas")
@@ -45,9 +46,7 @@ afterEach(() => {
   document.body.replaceChildren()
   const active = artifacts.artifactContext.active()
   if (active) artifacts.artifactContext.clear(active.id)
-  state.uiStore.closeContext()
-  state.uiStore.setRightPaneMode("tools")
-  state.uiStore.setRightPaneTab("canvas")
+  reset()
 })
 
 const mount = (view: () => JSX.Element) => {
@@ -76,6 +75,22 @@ test("keeps the Files pane absent until it is opened, then mounts it contextuall
   expect(state.uiStore.context()).toBe("files")
   expect(state.uiStore.open()).toBe(true)
   expect(host.querySelector('[aria-label="Research inspector"]')).not.toBeNull()
+})
+
+test("parks a previously opened terminal when its parent tab closes", async () => {
+  const host = mountGate()
+
+  state.uiStore.openContext("terminal")
+  await Promise.resolve()
+  const inspector = host.querySelector('[aria-label="Research inspector"]')
+  expect(inspector).not.toBeNull()
+
+  state.uiStore.closeWorkTab("view:terminal")
+  await Promise.resolve()
+
+  expect(state.uiStore.open()).toBe(false)
+  expect(host.querySelector('[aria-label="Research inspector"]')).toBe(inspector)
+  expect(inspector?.parentElement?.dataset.open).toBe("false")
 })
 
 test("closes the mounted Details pane when its artifact ownership clears", async () => {

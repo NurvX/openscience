@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 
 const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8")
 
-test("closed right pane renders no collapsed launcher and retains open file editors without showing the pane", () => {
+test("closed right pane renders no collapsed launcher and retains stateful surfaces without showing the pane", () => {
   const source = read("./RightPane.tsx")
   const styles = read("./right-pane-tabs.css")
 
@@ -13,8 +13,10 @@ test("closed right pane renders no collapsed launcher and retains open file edit
   expect(styles).toContain('.right-pane-gate[data-open="false"]')
   expect(styles).toContain("display: none")
   expect(source).not.toContain("CollapsedRail")
-  expect(source).toContain('when={context() === "terminal"}')
-  expect(source).toContain("<TerminalSurface />")
+  expect(source).toContain("const retained = () => terminal() ||")
+  expect(source).toContain("<Show when={terminalSeen()}>")
+  expect(source).toContain("<TerminalSurface active={terminalVisible()} />")
+  expect(source).not.toContain('<Match when={context() === "terminal"}>')
   expect(source).not.toContain("<TerminalTab")
   expect(source).not.toContain("panel settings")
 })
@@ -65,8 +67,23 @@ test("resize separator exposes keyboard and range semantics", () => {
   expect(source).toContain("aria-valuemax={limit()}")
   expect(source).toContain("aria-valuenow={paneWidth()}")
   expect(source).toContain("onDblClick={splitEvenly}")
+  expect(source).toContain('title="Drag to resize. Double-click to split evenly."')
+  expect(source).not.toContain('class="research-inspector__resize-grip"')
   expect(source).toContain('aria-label="Split workspace evenly"')
   expect(source).toContain("new ResizeObserver(measure)")
+  expect(source).toContain("setWorkspace(parent.clientWidth || window.innerWidth)")
+  expect(source).not.toContain("main.clientWidth + element.clientWidth")
+})
+
+test("uses a compact tab strip that reveals close controls only when relevant", () => {
+  const styles = read("./right-pane-tabs.css")
+
+  expect(styles).toMatch(/\.research-inspector__header\s*\{[^}]*height: 40px/s)
+  expect(styles).toMatch(/\.inspector-tab-pair\s*\{[^}]*max-width: 180px;[^}]*min-height: 30px/s)
+  expect(styles).toMatch(/\.inspector-tab-pair \.inspector-tab__close\s*\{[^}]*width: 0;[^}]*min-width: 0/s)
+  expect(styles).toMatch(
+    /\.inspector-tab-pair\[data-active="true"\] \.inspector-tab__close\s*\{[^}]*width: 28px;[^}]*min-width: 28px/s,
+  )
 })
 
 test("uses an inline desktop pane and a full-width narrow overlay, never a pane stacked below chat", () => {
