@@ -27,9 +27,9 @@ export function terminalEnv(
   const shell = shellName(command)
   const prompt: Record<string, string> =
     shell === "zsh"
-      ? { PROMPT: `%n@${host} %1~ %# `, RPROMPT: "", PROMPT_EOL_MARK: "" }
+      ? { PROMPT: `${host} %1~ %# `, RPROMPT: "", PROMPT_EOL_MARK: "" }
       : shell === "bash" || shell === "sh" || shell === "dash" || shell === "ksh"
-        ? { PS1: `\\u@${host} \\W \\$ ` }
+        ? { PS1: `${host} \\W \\$ ` }
         : {}
   return {
     ...env,
@@ -46,7 +46,10 @@ export function terminalEnv(
 
 export function terminalArgs(command: string) {
   const shell = shellName(command)
-  if (shell === "zsh") return ["-d", "-f", "-i"]
+  // Sandboxed zsh cannot own the host PTY's foreground process group. Disable
+  // job control before interactive startup so it does not print a false
+  // `can't set tty pgrp` warning; foreground commands remain fully interactive.
+  if (shell === "zsh") return ["-d", "-f", "+m", "-i"]
   if (shell === "bash") return ["--noprofile", "--norc", "-i"]
   if (shell === "fish") return ["--no-config", "--interactive"]
   if (shell === "sh" || shell === "dash" || shell === "ksh") return ["-i"]

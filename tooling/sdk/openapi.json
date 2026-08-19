@@ -17744,6 +17744,10 @@
                       "default": false,
                       "type": "boolean"
                     },
+                    "show_local_models": {
+                      "default": true,
+                      "type": "boolean"
+                    },
                     "atlas_enabled": {
                       "default": false,
                       "type": "boolean"
@@ -17814,6 +17818,10 @@
                       "default": false,
                       "type": "boolean"
                     },
+                    "show_local_models": {
+                      "default": true,
+                      "type": "boolean"
+                    },
                     "atlas_enabled": {
                       "default": false,
                       "type": "boolean"
@@ -17870,6 +17878,10 @@
                   },
                   "show_trace": {
                     "default": false,
+                    "type": "boolean"
+                  },
+                  "show_local_models": {
+                    "default": true,
                     "type": "boolean"
                   },
                   "atlas_enabled": {
@@ -17969,6 +17981,59 @@
         ]
       }
     },
+    "/settings/local/ssh": {
+      "post": {
+        "operationId": "postSettingsLocalSsh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9][a-z0-9._@:%+-]*$"
+                  },
+                  "remotePort": {
+                    "default": 11434,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "localPort": {
+                    "default": 12434,
+                    "type": "integer",
+                    "minimum": 1024,
+                    "maximum": 65535
+                  },
+                  "key": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  }
+                },
+                "required": [
+                  "host"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {}
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.postSettingsLocalSsh({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/settings/local/context": {
       "post": {
         "operationId": "postSettingsLocalContext",
@@ -18036,6 +18101,15 @@
                     "minItems": 1,
                     "type": "array",
                     "items": {
+                      "type": "string"
+                    }
+                  },
+                  "aliases": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
                       "type": "string"
                     }
                   },
@@ -50252,6 +50326,7 @@
             "type": "string",
             "enum": [
               "env",
+              "synced",
               "config",
               "custom",
               "api",

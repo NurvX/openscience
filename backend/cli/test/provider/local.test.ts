@@ -118,12 +118,28 @@ describe("LocalProvider.buildProviderConfig", () => {
     const block = LocalProvider.buildProviderConfig({
       name: "Ollama (local)",
       baseURL: "http://localhost:11434/v1",
-      models: ["openscience/qwen3-8b-ctx-65536"],
+      models: ["qwen3:8b"],
+      modelAliases: { "qwen3:8b": "openscience/qwen3-8b-ctx-65536" },
       contextLimit: 65_536,
       runtime: "ollama",
     }) as any
     expect(block.options.localRuntime).toBe("ollama")
-    expect(block.models["openscience/qwen3-8b-ctx-65536"].limit.context).toBe(65_536)
+    expect(block.models["qwen3:8b"]).toMatchObject({
+      id: "openscience/qwen3-8b-ctx-65536",
+      name: "qwen3:8b",
+      limit: { context: 65_536 },
+    })
+  })
+
+  test("marks explicitly registered remote endpoints as self-hosted", () => {
+    const block = LocalProvider.buildProviderConfig({
+      name: "Research GPU",
+      baseURL: "https://gpu.example.org/v1",
+      models: ["lab-model"],
+      selfHosted: true,
+    }) as { options: Record<string, unknown> }
+
+    expect(block.options.selfHosted).toBe(true)
   })
 })
 

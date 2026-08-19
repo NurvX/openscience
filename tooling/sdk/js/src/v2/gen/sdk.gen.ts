@@ -162,6 +162,7 @@ import type {
   PostSettingsLocalContextResponses,
   PostSettingsLocalModelsResponses,
   PostSettingsLocalResponses,
+  PostSettingsLocalSshResponses,
   PostSettingsLocalStartResponses,
   ProjectCurrentResponses,
   ProjectExecutionErrors,
@@ -1690,6 +1691,7 @@ export class Preferences extends HeyApiClient {
       intent?: "commercial" | "non-commercial"
       extra_budget_usd?: number
       show_trace?: boolean
+      show_local_models?: boolean
       atlas_enabled?: boolean
       delegation_enabled?: boolean
       delegation_specialist?: string | null
@@ -1705,6 +1707,7 @@ export class Preferences extends HeyApiClient {
             { in: "body", key: "intent" },
             { in: "body", key: "extra_budget_usd" },
             { in: "body", key: "show_trace" },
+            { in: "body", key: "show_local_models" },
             { in: "body", key: "atlas_enabled" },
             { in: "body", key: "delegation_enabled" },
             { in: "body", key: "delegation_specialist" },
@@ -7410,6 +7413,42 @@ export class OpenScienceClient extends HeyApiClient {
     })
   }
 
+  public postSettingsLocalSsh<ThrowOnError extends boolean = false>(
+    parameters?: {
+      host?: string
+      remotePort?: number
+      localPort?: number
+      key?: string
+      name?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "host" },
+            { in: "body", key: "remotePort" },
+            { in: "body", key: "localPort" },
+            { in: "body", key: "key" },
+            { in: "body", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PostSettingsLocalSshResponses, unknown, ThrowOnError>({
+      url: "/settings/local/ssh",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   public postSettingsLocalContext<ThrowOnError extends boolean = false>(
     parameters?: {
       url?: string
@@ -7449,6 +7488,9 @@ export class OpenScienceClient extends HeyApiClient {
       name?: string
       key?: string
       models?: Array<string>
+      aliases?: {
+        [key: string]: string
+      }
       contextLimit?: number
       runtime?: "ollama"
       merge?: boolean
@@ -7466,6 +7508,7 @@ export class OpenScienceClient extends HeyApiClient {
             { in: "body", key: "name" },
             { in: "body", key: "key" },
             { in: "body", key: "models" },
+            { in: "body", key: "aliases" },
             { in: "body", key: "contextLimit" },
             { in: "body", key: "runtime" },
             { in: "body", key: "merge" },

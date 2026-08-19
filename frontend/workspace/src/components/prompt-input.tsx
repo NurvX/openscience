@@ -35,6 +35,7 @@ import { useComments } from "@/context/comments"
 import { FileIcon } from "@synsci/ui/file-icon"
 import { Button } from "@synsci/ui/button"
 import { Icon } from "@synsci/ui/icon"
+import { Switch as Toggle } from "@synsci/ui/switch"
 import { Tooltip } from "@synsci/ui/tooltip"
 import { IconButton } from "@synsci/ui/icon-button"
 import { getDirectory, getFilename, getFilenameTruncated } from "@synsci/util/path"
@@ -47,12 +48,21 @@ import { Worktree as WorktreeState } from "@/utils/worktree"
 import { useLanguage } from "@/context/language"
 import { useGlobalSync } from "@/context/global-sync"
 import { usePlatform } from "@/context/platform"
+import {
+  displayProviderForModel,
+  groupModelRoutes,
+  inferenceSource,
+  inferenceSourceLabel,
+  logicalModelKey,
+  modelDisplayName,
+} from "@/context/model-catalog"
 import { createOpenScienceClient, type Message, type Part } from "@synsci/sdk/v2/client"
 import { Binary } from "@synsci/util/binary"
 import { showToast } from "@synsci/ui/toast"
 import { uiStore } from "@/atlas/store/ui"
 import { projectHref, projectPathname } from "@/utils/project-route"
 import { ModelSettingsPopover } from "./model-settings-popover"
+import { modelControl } from "./model-presentation"
 import { DialogSettings } from "./dialog-settings"
 import "./prompt-input.css"
 import {
@@ -63,14 +73,16 @@ import {
   attachmentSize,
 } from "./prompt-attachment"
 import {
-  migrateResearchEffortState,
-  normalizeResearchEffort,
-  researchEffortLabel,
-  type ResearchEffort,
+  delegatedSpecialist,
+  isCoreSpecialist,
+  specialistLabel,
+  type CapabilityPreferences,
+  type ReviewPreferences,
 } from "./prompt-capabilities"
 import { canRestoreFailedSubmission } from "./prompt-submission"
 import {
   RESEARCH_ACCESS_OPTIONS,
+  researchAccessLabel as accessLabel,
   researchAccessMode,
   researchAccessMutations,
   type ResearchAccessMode,
@@ -110,6 +122,21 @@ interface SandboxSettingsPayload {
   config: { enabled?: boolean }
 }
 
+const requestDetail = (kind: "effort" | "speed", id: string) => {
+  if (kind === "speed") {
+    if (id === "fast") return "Faster model responses"
+    if (id === "priority") return "Provider priority processing"
+    return "Standard provider latency"
+  }
+  if (id === "max") return "Deepest available analysis"
+  if (id === "xhigh") return "Extensive analysis"
+  if (id === "high") return "Thorough analysis"
+  if (id === "medium") return "Balanced depth and latency"
+  if (id === "low") return "Brief, faster reasoning"
+  if (id === "minimal") return "Minimal reasoning"
+  return "Use the model default"
+}
+
 export const PromptInput: Component<PromptInputProps> = (props) => {
   const navigate = useNavigate()
   const sdk = useSDK()
@@ -131,32 +158,172 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   let scrollRef!: HTMLDivElement
   let slashPopoverRef!: HTMLDivElement
   let researchToolsRef: HTMLDetailsElement | undefined
-  const [efforts, setEfforts] = persisted(
-    {
-      ...Persist.workspace(sdk.scope, "research-effort", ["research-effort.v1"]),
-      migrate: migrateResearchEffortState,
-    },
-    createStore<{
-      workspace: ResearchEffort
-      sessions: Record<string, ResearchEffort>
-    }>({
-      workspace: "normal",
-      sessions: {},
+  const settings = async <T,>(path: string, init?: RequestInit) => {
+    const response = await sdk.request(path, init)
+    const text = await response.text()
+    if (!response.ok) throw new Error(text || `${response.status} ${response.statusText}`)
+    return JSON.parse(text) as T
+  }
+  const [capabilities, capabilityActions] = createResource(() =>
+    settings<CapabilityPreferences>("/settings/preferences"),
+  )
+  const [review, reviewActions] = createResource(() => settings<ReviewPreferences>("/settings/review"))
+  const saveCapabilities = (patch: Partial<CapabilityPreferences>) => {
+    const previous = capabilities()
+    if (!previous) return
+    const next = { ...previous, ...patch }
+    capabilityActions.mutate(next)
+    void settings<CapabilityPreferences>("/settings/preferences", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    })
+      .then(capabilityActions.mutate)
+      .catch((error) => {
+        capabilityActions.mutate(previous)
+        showToast({
+          title: "Couldn't update research preferences",
+          description: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }
+  const saveReview = (patch: Partial<ReviewPreferences>) => {
+    const previous = review()
+    if (!previous) return
+    const next = { ...previous, ...patch }
+    reviewActions.mutate(next)
+    void settings<ReviewPreferences>("/settings/review", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(next),
+    })
+      .then(reviewActions.mutate)
+      .catch((error) => {
+        reviewActions.mutate(previous)
+        showToast({
+          title: "Couldn't update reviewer preferences",
+          description: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }
+  const specialists = createMemo(() =>
+    sync.data.agent.filter((agent) => agent.mode === "subagent" && isCoreSpecialist(agent.name)),
+  )
+  const [reviewerQuery, setReviewerQuery] = createSignal("")
+  const [reviewerRoute, setReviewerRoute] = createSignal("")
+  const reviewerModels = createMemo(() => {
+    const models = [
+      local.model.current(),
+      ...local.model.pinned(),
+      ...local.model.recent(),
+      ...local.model.list(),
+    ].filter((model) => model !== undefined)
+    return [...new Map(models.map((model) => [`${model.provider.id}/${model.id}`, model])).values()]
+  })
+  const reviewerSources = createMemo(
+    () =>
+      new Map(
+        reviewerModels().map((model) => {
+          const provider = displayProviderForModel(model.provider, model.id)
+          const source = inferenceSourceLabel(
+            inferenceSource({
+              providerID: model.provider.id,
+              credential: model.provider.source,
+              billing: sync.data.config.billing?.llm,
+            }),
+            model.provider.id === "openrouter" ? "Automatic" : model.provider.name,
+          )
+          return [`${model.provider.id}/${model.id}`, `${provider.name} · ${source}`] as const
+        }),
+      ),
+  )
+  const reviewerGroups = createMemo(() => {
+    const current = local.model.current()
+    return groupModelRoutes({
+      models: reviewerModels(),
+      current: review()?.model ?? (current ? { providerID: current.provider.id, modelID: current.id } : undefined),
+      recent: [],
+    })
+  })
+  const reviewerChoices = createMemo(() => {
+    const query = reviewerQuery().trim().toLowerCase()
+    if (!query) return reviewerGroups()
+    return reviewerGroups().filter((choice) =>
+      choice.routes.some((model) =>
+        `${model.name} ${reviewerSources().get(`${model.provider.id}/${model.id}`) ?? ""}`
+          .toLowerCase()
+          .includes(query),
+      ),
+    )
+  })
+  const reviewerRouteChoice = createMemo(() => reviewerGroups().find((choice) => choice.key === reviewerRoute()))
+  const reviewerChoiceName = (choice: ReturnType<typeof reviewerGroups>[number]) =>
+    modelDisplayName(choice.model.name, choice.model.provider.id, choice.model.id)
+  const reviewerModel = createMemo(() => {
+    const selected = review()?.model
+    if (!selected) return
+    return reviewerModels().find((model) => model.provider.id === selected.providerID && model.id === selected.modelID)
+  })
+  const reviewerLabel = createMemo(() => {
+    const model = reviewerModel()
+    return model ? modelDisplayName(model.name, model.provider.id, model.id) : (review()?.model?.modelID ?? "Default")
+  })
+  const specialistSelection = createMemo(() => {
+    const selected = capabilities()?.delegation_specialist
+    return selected ? specialistLabel(selected) : "Automatic"
+  })
+  const controls = createMemo(() =>
+    modelControl({
+      name: local.model.current()?.name ?? "Select model",
+      variants: local.model.variant.list(),
+      modes: local.model.tier.list(),
+      currentEffort: local.model.variant.current(),
+      currentSpeed: local.model.tier.current(),
+      advanced: [],
     }),
   )
-  const effortSession = createMemo(() => {
-    const id = params.id
-    if (!id || id === "new") return undefined
-    return id
+  const fastMode = createMemo(() => {
+    const current = local.model.current()
+    if (!current) return
+    const key = logicalModelKey(current.provider.id, current.id)
+    const routes = local.model
+      .list()
+      .filter(
+        (model) =>
+          logicalModelKey(model.provider.id, model.id) === key &&
+          Object.keys(model.modes ?? {}).includes("fast") &&
+          (local.model.pin.has({ providerID: model.provider.id, modelID: model.id }) ||
+            local.model.visible({ providerID: model.provider.id, modelID: model.id })),
+      )
+    const route =
+      routes.find((model) => model.provider.id === current.provider.id && model.id === current.id) ?? routes[0]
+    if (!route) return
+    return {
+      active:
+        route.provider.id === current.provider.id && route.id === current.id && local.model.tier.current() === "fast",
+      route,
+    }
   })
-  const effort = createMemo(() => {
-    const id = effortSession()
-    return normalizeResearchEffort((id ? efforts.sessions[id] : undefined) ?? efforts.workspace)
-  })
-  const setEffort = (value: ResearchEffort, sessionID = effortSession()) => {
-    setEfforts("workspace", value)
-    if (sessionID) setEfforts("sessions", sessionID, value)
+  const toggleFastMode = () => {
+    const mode = fastMode()
+    if (!mode) return
+    if (mode.active) {
+      local.model.tier.set("standard")
+      return
+    }
+    const current = local.model.current()
+    if (current?.provider.id === mode.route.provider.id && current.id === mode.route.id) {
+      local.model.tier.set("fast")
+      return
+    }
+    local.model.set({ providerID: mode.route.provider.id, modelID: mode.route.id }, { recent: true })
+    queueMicrotask(() => local.model.tier.set("fast"))
   }
+  createEffect(() => {
+    const value = controls()
+    if (value.reset.effort) local.model.variant.set(value.reset.effort)
+    if (value.reset.speed) local.model.tier.set(value.reset.speed)
+  })
 
   const readSandboxSettings = async (init?: RequestInit) => {
     const response = await sdk.request("/settings/sandbox", init)
@@ -184,9 +351,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const current = researchAccess()
     return current ? researchAccessMode(current) : "full"
   })
-  const researchAccessLabel = createMemo(
-    () => RESEARCH_ACCESS_OPTIONS.find((option) => option.value === selectedResearchAccess())?.label ?? "Full access",
-  )
+  const researchAccessLabel = createMemo(() => accessLabel(selectedResearchAccess()))
 
   const applyResearchAccess = async (mode: ResearchAccessMode, target: HTMLButtonElement) => {
     target.focus()
@@ -230,11 +395,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       if (effective !== mode) {
         showToast({
           title: "Access is limited by managed settings",
-          description: `The effective mode remains ${RESEARCH_ACCESS_OPTIONS.find((option) => option.value === effective)?.label}.`,
+          description: `The effective mode remains ${accessLabel(effective)}.`,
         })
         return
       }
-      showToast({ variant: "success", title: `${researchAccessLabel()} enabled` })
+      showToast({ variant: "success", title: `${accessLabel(effective)} enabled` })
     } catch (error) {
       showToast({
         title: "Couldn't update action approval",
@@ -297,56 +462,32 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     queueMicrotask(() => fileInputRef.click())
   }
 
+  const resetResearchTools = () => {
+    for (const choice of researchToolsRef?.querySelectorAll<HTMLDetailsElement>(
+      ".workspace-composer__research-choice[open]",
+    ) ?? []) {
+      choice.open = false
+    }
+    setReviewerQuery("")
+    setReviewerRoute("")
+  }
+
   const closeResearchTools = () => {
+    resetResearchTools()
     if (researchToolsRef) researchToolsRef.open = false
   }
 
-  const openCompute = () => {
-    closeResearchTools()
-    uiStore.openContext("kernels")
-    queueMicrotask(() => researchToolsRef?.querySelector("summary")?.focus())
+  const toggleResearchChoice = (event: Event) => {
+    const choice = event.currentTarget
+    if (!(choice instanceof HTMLDetailsElement) || !choice.open) return
+    for (const item of researchToolsRef?.querySelectorAll<HTMLDetailsElement>(
+      ".workspace-composer__research-choice[open]",
+    ) ?? []) {
+      if (item !== choice) item.open = false
+    }
   }
 
-  const manageSkills = () => {
-    closeResearchTools()
-    queueMicrotask(() => dialog.show(() => <DialogSettings initial="skills" />))
-  }
-
-  const manageConnectors = () => {
-    closeResearchTools()
-    queueMicrotask(() => dialog.show(() => <DialogSettings initial="connectors" />))
-  }
-
-  const selectResearchEffort = (value: ResearchEffort, target: HTMLButtonElement) => {
-    setEffort(value)
-    target.focus()
-  }
-
-  const navigateResearchEffort = (event: KeyboardEvent) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return
-    const target = event.target
-    const scope = event.currentTarget
-    if (!(target instanceof HTMLButtonElement) || target.getAttribute("role") !== "radio") return
-    if (!(scope instanceof HTMLElement)) return
-    const choices = Array.from(scope.querySelectorAll<HTMLButtonElement>('[role="radio"]'))
-    const index = choices.indexOf(target)
-    if (index < 0 || choices.length === 0) return
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? choices.length - 1
-          : event.key === "ArrowRight" || event.key === "ArrowDown"
-            ? (index + 1) % choices.length
-            : (index <= 0 ? choices.length : index) - 1
-    const choice = choices[next]
-    const value = choice?.dataset.researchEffort
-    if (!choice || (value !== "normal" && value !== "ultra")) return
-    event.preventDefault()
-    selectResearchEffort(value, choice)
-  }
-
-  const navigateResearchAccess = (event: KeyboardEvent) => {
+  const navigateResearchChoices = (event: KeyboardEvent) => {
     if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return
     const target = event.target
     const scope = event.currentTarget
@@ -364,10 +505,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             ? (index + 1) % choices.length
             : (index <= 0 ? choices.length : index) - 1
     const choice = choices[next]
-    const value = choice?.dataset.researchAccess
-    if (!choice || (value !== "ask" && value !== "approve" && value !== "full")) return
+    if (!choice) return
     event.preventDefault()
-    void applyResearchAccess(value, choice)
+    choice.focus()
+    choice.click()
   }
 
   const dismissResearchTools = (event: PointerEvent) => {
@@ -1420,7 +1561,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const agent = currentAgent.name
     const variant = local.model.variant.prompt()
     const tier = local.model.tier.prompt()
-    const researchEffort = effort()
+    const researchEffort = "normal" as const
 
     const errorMessage = (err: unknown) => {
       if (err && typeof err === "object" && "data" in err) {
@@ -1542,8 +1683,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       restoreBootstrap()
       return
     }
-    setEffort(researchEffort, session.id)
-
     props.onSubmit?.()
 
     if (mode === "shell") {
@@ -1638,6 +1777,21 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         end: attachment.end,
       },
     }))
+    const specialist = delegatedSpecialist(
+      capabilities()?.delegation_enabled ?? false,
+      capabilities()?.delegation_specialist ?? null,
+      agentAttachments.map((attachment) => attachment.name),
+    )
+    const delegationParts = specialist
+      ? [
+          {
+            id: Identifier.ascending("part"),
+            type: "agent" as const,
+            name: specialist,
+            source: { value: `@${specialist}`, start: 0, end: 0 },
+          },
+        ]
+      : []
 
     const usedUrls = new Set(fileAttachmentParts.map((part) => part.url))
 
@@ -1724,6 +1878,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       textPart,
       ...fileAttachmentParts,
       ...contextParts,
+      ...delegationParts,
       ...agentAttachmentParts,
       ...imageAttachmentParts,
     ]
@@ -1880,7 +2035,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const send = async () => {
       const ok = await waitForWorktree()
       if (!ok) return
-      const request: Parameters<typeof client.session.prompt>[0] & { effort: ResearchEffort } = {
+      const request: Parameters<typeof client.session.prompt>[0] & { effort: "normal" } = {
         sessionID: session.id,
         agent,
         model,
@@ -2258,6 +2413,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 <details
                   ref={(element) => (researchToolsRef = element)}
                   class="workspace-composer__research-tools"
+                  onToggle={(event) => {
+                    if (event.currentTarget.open) return
+                    resetResearchTools()
+                  }}
                   onKeyDown={(event) => {
                     if (event.key !== "Escape") return
                     event.preventDefault()
@@ -2265,56 +2424,341 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     researchToolsRef?.querySelector("summary")?.focus()
                   }}
                 >
-                  <summary
-                    aria-label={`Research tools, ${researchEffortLabel(effort())} effort, ${researchAccessLabel()}`}
-                  >
+                  <summary aria-label="Research tools">
                     <span class="workspace-composer__research-tools-label">Research</span>
-                    <span class="workspace-composer__research-tools-separator" aria-hidden="true">
-                      ·
-                    </span>
-                    <strong>{researchEffortLabel(effort())}</strong>
                     <Icon name="chevron-down" size="small" />
                   </summary>
                   <div class="workspace-composer__research-tools-menu" role="group" aria-label="Research tools">
-                    <section class="workspace-composer__research-effort" aria-label="Research effort">
-                      <div class="workspace-composer__research-tools-heading">
-                        <strong>Research effort</strong>
-                        <span>{researchEffortLabel(effort())}</span>
+                    <section class="workspace-composer__research-controls" aria-label="Research roles">
+                      <Show when={controls().effort}>
+                        {(effort) => (
+                          <details
+                            class="workspace-composer__research-choice"
+                            data-research-control="effort"
+                            onToggle={toggleResearchChoice}
+                          >
+                            <summary aria-label={`Reasoning effort, ${effort().value}`}>
+                              <span>Reasoning effort</span>
+                              <strong>{effort().value}</strong>
+                              <Icon name="chevron-right" size="small" />
+                            </summary>
+                            <div
+                              class="workspace-composer__research-choice-menu"
+                              role="radiogroup"
+                              aria-label="Reasoning effort"
+                              onKeyDown={navigateResearchChoices}
+                            >
+                              <For each={effort().options}>
+                                {(option) => (
+                                  <button
+                                    type="button"
+                                    role="radio"
+                                    data-research-effort={option.id}
+                                    aria-checked={effort().current.id === option.id}
+                                    tabindex={effort().current.id === option.id ? 0 : -1}
+                                    onClick={(event) => {
+                                      local.model.variant.set(option.id)
+                                      event.currentTarget.closest("details")?.removeAttribute("open")
+                                    }}
+                                  >
+                                    <span>
+                                      <strong>{option.label}</strong>
+                                      <small>{requestDetail("effort", option.id)}</small>
+                                    </span>
+                                    <Show when={effort().current.id === option.id}>
+                                      <Icon name="check" size="small" />
+                                    </Show>
+                                  </button>
+                                )}
+                              </For>
+                            </div>
+                          </details>
+                        )}
+                      </Show>
+                      <Show when={controls().speed}>
+                        {(speed) => (
+                          <details
+                            class="workspace-composer__research-choice"
+                            data-research-control="speed"
+                            onToggle={toggleResearchChoice}
+                          >
+                            <summary aria-label={`Speed, ${speed().value}`}>
+                              <span>Speed</span>
+                              <strong>{speed().value}</strong>
+                              <Icon name="chevron-right" size="small" />
+                            </summary>
+                            <div
+                              class="workspace-composer__research-choice-menu"
+                              role="radiogroup"
+                              aria-label="Speed"
+                              onKeyDown={navigateResearchChoices}
+                            >
+                              <For each={speed().options}>
+                                {(option) => (
+                                  <button
+                                    type="button"
+                                    role="radio"
+                                    data-research-speed={option.id}
+                                    aria-checked={speed().current.id === option.id}
+                                    tabindex={speed().current.id === option.id ? 0 : -1}
+                                    onClick={(event) => {
+                                      local.model.tier.set(option.id)
+                                      event.currentTarget.closest("details")?.removeAttribute("open")
+                                    }}
+                                  >
+                                    <span>
+                                      <strong>{option.label}</strong>
+                                      <small>{requestDetail("speed", option.id)}</small>
+                                    </span>
+                                    <Show when={speed().current.id === option.id}>
+                                      <Icon name="check" size="small" />
+                                    </Show>
+                                  </button>
+                                )}
+                              </For>
+                            </div>
+                          </details>
+                        )}
+                      </Show>
+                      <Show when={controls().effort || controls().speed}>
+                        <div class="workspace-composer__research-divider" />
+                      </Show>
+                      <div class="workspace-composer__research-control">
+                        <strong>Delegation</strong>
+                        <Toggle
+                          hideLabel
+                          disabled={!capabilities()}
+                          checked={capabilities()?.delegation_enabled ?? false}
+                          onChange={(checked) => saveCapabilities({ delegation_enabled: checked })}
+                        >
+                          Delegation
+                        </Toggle>
                       </div>
-                      <div
-                        class="workspace-composer__research-effort-options"
-                        role="radiogroup"
-                        aria-label="Research effort"
-                        onKeyDown={navigateResearchEffort}
+                      <div class="workspace-composer__research-control">
+                        <strong>Auto-review</strong>
+                        <Toggle
+                          hideLabel
+                          disabled={!review()}
+                          checked={review()?.auto ?? false}
+                          onChange={(checked) => saveReview({ auto: checked })}
+                        >
+                          Auto-review
+                        </Toggle>
+                      </div>
+                      <details
+                        class="workspace-composer__research-choice"
+                        data-research-control="reviewer"
+                        onToggle={(event) => {
+                          toggleResearchChoice(event)
+                          if (!event.currentTarget.open) return
+                          setReviewerQuery("")
+                          setReviewerRoute("")
+                        }}
                       >
-                        <button
-                          type="button"
-                          role="radio"
-                          data-research-effort="normal"
-                          aria-checked={effort() === "normal"}
-                          tabindex={effort() === "normal" ? 0 : -1}
-                          onClick={(event) => selectResearchEffort("normal", event.currentTarget)}
+                        <summary aria-label={`Reviewer model, ${reviewerLabel()}`}>
+                          <span>Reviewer model</span>
+                          <strong>{reviewerLabel()}</strong>
+                          <Icon name="chevron-right" size="small" />
+                        </summary>
+                        <div class="workspace-composer__research-choice-menu workspace-composer__reviewer-menu">
+                          <Show
+                            when={reviewerRouteChoice()}
+                            fallback={
+                              <>
+                                <label class="workspace-composer__reviewer-search">
+                                  <Icon name="magnifying-glass" size="small" aria-hidden="true" />
+                                  <input
+                                    type="search"
+                                    value={reviewerQuery()}
+                                    onInput={(event) => setReviewerQuery(event.currentTarget.value)}
+                                    placeholder="Find a reviewer model"
+                                    aria-label="Find a reviewer model"
+                                  />
+                                </label>
+                                <div
+                                  class="workspace-composer__reviewer-options"
+                                  role="radiogroup"
+                                  aria-label="Reviewer model"
+                                  onKeyDown={navigateResearchChoices}
+                                >
+                                  <button
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={!review()?.model}
+                                    tabindex={!review()?.model ? 0 : -1}
+                                    onClick={(event) => {
+                                      saveReview({ model: null })
+                                      event.currentTarget.closest("details")?.removeAttribute("open")
+                                    }}
+                                  >
+                                    <span>
+                                      <strong>Default</strong>
+                                      <small>Use the response model</small>
+                                    </span>
+                                    <Show when={!review()?.model}>
+                                      <Icon name="check" size="small" />
+                                    </Show>
+                                  </button>
+                                  <For each={reviewerChoices()}>
+                                    {(choice) => {
+                                      const selected = () =>
+                                        choice.routes.some(
+                                          (model) =>
+                                            review()?.model?.providerID === model.provider.id &&
+                                            review()?.model?.modelID === model.id,
+                                        )
+                                      return (
+                                        <button
+                                          type="button"
+                                          role="radio"
+                                          aria-checked={selected()}
+                                          aria-haspopup={choice.routes.length > 1 ? "menu" : undefined}
+                                          tabindex={selected() ? 0 : -1}
+                                          onClick={(event) => {
+                                            if (choice.routes.length > 1) {
+                                              setReviewerRoute(choice.key)
+                                              return
+                                            }
+                                            const model = choice.model
+                                            saveReview({ model: { providerID: model.provider.id, modelID: model.id } })
+                                            event.currentTarget.closest("details")?.removeAttribute("open")
+                                          }}
+                                        >
+                                          <span>
+                                            <strong>{reviewerChoiceName(choice)}</strong>
+                                            <small>
+                                              {reviewerSources().get(`${choice.model.provider.id}/${choice.model.id}`)}
+                                              {choice.routes.length > 1 ? ` · ${choice.routes.length} access` : ""}
+                                            </small>
+                                          </span>
+                                          <Show
+                                            when={choice.routes.length > 1}
+                                            fallback={
+                                              <Show when={selected()}>
+                                                <Icon name="check" size="small" />
+                                              </Show>
+                                            }
+                                          >
+                                            <Icon name="chevron-right" size="small" />
+                                          </Show>
+                                        </button>
+                                      )
+                                    }}
+                                  </For>
+                                  <Show when={reviewerChoices().length === 0}>
+                                    <p class="workspace-composer__reviewer-empty">No matching models</p>
+                                  </Show>
+                                </div>
+                              </>
+                            }
+                          >
+                            {(choice) => (
+                              <>
+                                <button
+                                  type="button"
+                                  class="workspace-composer__reviewer-back"
+                                  onClick={() => setReviewerRoute("")}
+                                >
+                                  <Icon name="chevron-left" size="small" aria-hidden="true" />
+                                  <span>
+                                    <strong>{reviewerChoiceName(choice())}</strong>
+                                    <small>Choose access</small>
+                                  </span>
+                                </button>
+                                <div
+                                  class="workspace-composer__reviewer-options"
+                                  role="radiogroup"
+                                  aria-label={`${reviewerChoiceName(choice())} access`}
+                                  onKeyDown={navigateResearchChoices}
+                                >
+                                  <For each={choice().routes}>
+                                    {(model) => {
+                                      const selected = () =>
+                                        review()?.model?.providerID === model.provider.id &&
+                                        review()?.model?.modelID === model.id
+                                      return (
+                                        <button
+                                          type="button"
+                                          role="radio"
+                                          aria-checked={selected()}
+                                          tabindex={selected() ? 0 : -1}
+                                          onClick={(event) => {
+                                            saveReview({ model: { providerID: model.provider.id, modelID: model.id } })
+                                            event.currentTarget.closest("details")?.removeAttribute("open")
+                                          }}
+                                        >
+                                          <span>
+                                            <strong>{reviewerSources().get(`${model.provider.id}/${model.id}`)}</strong>
+                                          </span>
+                                          <Show when={selected()}>
+                                            <Icon name="check" size="small" />
+                                          </Show>
+                                        </button>
+                                      )
+                                    }}
+                                  </For>
+                                </div>
+                              </>
+                            )}
+                          </Show>
+                        </div>
+                      </details>
+                      <div class="workspace-composer__research-divider" />
+                      <details class="workspace-composer__research-choice" onToggle={toggleResearchChoice}>
+                        <summary aria-label={`Specialist, ${specialistSelection()}`}>
+                          <span>Specialist</span>
+                          <strong>{specialistSelection()}</strong>
+                          <Icon name="chevron-right" size="small" />
+                        </summary>
+                        <div
+                          class="workspace-composer__research-choice-menu"
+                          role="radiogroup"
+                          aria-label="Delegation specialist"
+                          onKeyDown={navigateResearchChoices}
                         >
-                          Normal
-                        </button>
-                        <button
-                          type="button"
-                          role="radio"
-                          data-research-effort="ultra"
-                          aria-checked={effort() === "ultra"}
-                          tabindex={effort() === "ultra" ? 0 : -1}
-                          onClick={(event) => selectResearchEffort("ultra", event.currentTarget)}
-                        >
-                          Ultra
-                        </button>
-                      </div>
-                      <p>Ultra uses more parallel research when it is useful.</p>
-                    </section>
-                    <section class="workspace-composer__research-access" aria-label="Action approval">
-                      <div class="workspace-composer__research-tools-heading">
-                        <strong>Action approval</strong>
-                        <span aria-live="polite">{researchAccessSaving() ? "Saving…" : researchAccessLabel()}</span>
-                      </div>
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={!capabilities()?.delegation_specialist}
+                            tabindex={!capabilities()?.delegation_specialist ? 0 : -1}
+                            disabled={!capabilities()}
+                            onClick={(event) => {
+                              saveCapabilities({ delegation_specialist: null })
+                              event.currentTarget.closest("details")?.removeAttribute("open")
+                            }}
+                          >
+                            <span>
+                              <strong>Automatic</strong>
+                              <small>Route to the best match</small>
+                            </span>
+                            <Show when={!capabilities()?.delegation_specialist}>
+                              <Icon name="check" size="small" />
+                            </Show>
+                          </button>
+                          <For each={specialists()}>
+                            {(specialist) => (
+                              <button
+                                type="button"
+                                role="radio"
+                                aria-checked={capabilities()?.delegation_specialist === specialist.name}
+                                tabindex={capabilities()?.delegation_specialist === specialist.name ? 0 : -1}
+                                disabled={!capabilities()}
+                                onClick={(event) => {
+                                  saveCapabilities({ delegation_specialist: specialist.name })
+                                  event.currentTarget.closest("details")?.removeAttribute("open")
+                                }}
+                              >
+                                <span>
+                                  <strong>{specialistLabel(specialist.name)}</strong>
+                                </span>
+                                <Show when={capabilities()?.delegation_specialist === specialist.name}>
+                                  <Icon name="check" size="small" />
+                                </Show>
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                      </details>
                       <Show
                         when={!researchAccess.error}
                         fallback={
@@ -2327,78 +2771,76 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                           </button>
                         }
                       >
-                        <div
-                          class="workspace-composer__research-access-options"
-                          role="radiogroup"
-                          aria-label="How should OpenScience actions be approved?"
-                          aria-busy={researchAccessSaving() ? "true" : undefined}
-                          onKeyDown={navigateResearchAccess}
-                        >
-                          <For each={RESEARCH_ACCESS_OPTIONS}>
-                            {(option) => (
-                              <button
-                                type="button"
-                                role="radio"
-                                data-research-access={option.value}
-                                data-tone={option.value === "full" ? "warning" : undefined}
-                                aria-checked={selectedResearchAccess() === option.value}
-                                tabindex={selectedResearchAccess() === option.value ? 0 : -1}
-                                disabled={researchAccess.loading || researchAccessSaving()}
-                                onClick={(event) => void applyResearchAccess(option.value, event.currentTarget)}
-                              >
-                                <Icon
-                                  name={
-                                    option.value === "ask"
-                                      ? "shield-alert"
-                                      : option.value === "approve"
-                                        ? "shield"
-                                        : "bolt"
-                                  }
-                                  size="small"
-                                />
-                                <span class="workspace-composer__research-access-copy">
-                                  <strong>{option.label}</strong>
-                                  <small>{option.description}</small>
-                                </span>
-                                <Show when={selectedResearchAccess() === option.value}>
-                                  <Icon name="check" size="small" />
-                                </Show>
-                              </button>
-                            )}
-                          </For>
-                        </div>
+                        <details class="workspace-composer__research-choice" onToggle={toggleResearchChoice}>
+                          <summary aria-label={`Action approval, ${researchAccessLabel()}`}>
+                            <span>Action approval</span>
+                            <strong aria-live="polite">
+                              {researchAccessSaving() ? "Saving…" : researchAccessLabel()}
+                            </strong>
+                            <Icon name="chevron-right" size="small" />
+                          </summary>
+                          <div
+                            class="workspace-composer__research-choice-menu"
+                            role="radiogroup"
+                            aria-label="How should OpenScience actions be approved?"
+                            aria-busy={researchAccessSaving() ? "true" : undefined}
+                            onKeyDown={navigateResearchChoices}
+                          >
+                            <For each={RESEARCH_ACCESS_OPTIONS}>
+                              {(option) => (
+                                <button
+                                  type="button"
+                                  role="radio"
+                                  data-research-access={option.value}
+                                  data-tone={option.value === "full" ? "warning" : undefined}
+                                  aria-checked={selectedResearchAccess() === option.value}
+                                  tabindex={selectedResearchAccess() === option.value ? 0 : -1}
+                                  disabled={researchAccess.loading || researchAccessSaving()}
+                                  onClick={(event) => {
+                                    void applyResearchAccess(option.value, event.currentTarget)
+                                    event.currentTarget.closest("details")?.removeAttribute("open")
+                                  }}
+                                >
+                                  <span>
+                                    <strong>{option.label}</strong>
+                                    <small>{option.description}</small>
+                                  </span>
+                                  <Show when={selectedResearchAccess() === option.value}>
+                                    <Icon name="check" size="small" />
+                                  </Show>
+                                </button>
+                              )}
+                            </For>
+                          </div>
+                        </details>
                       </Show>
                     </section>
-                    <div class="workspace-composer__research-tools-actions">
-                      <button type="button" onClick={openCompute}>
-                        <span class="workspace-composer__research-tools-copy">
-                          <strong>Compute activity</strong>
-                          <small>Python, R, local and remote jobs</small>
-                        </span>
-                        <Icon name="chevron-right" size="small" />
-                      </button>
-                      <button type="button" onClick={manageSkills}>
-                        <span class="workspace-composer__research-tools-copy">
-                          <strong>Manage skills</strong>
-                          <small>Installed scientific workflows</small>
-                        </span>
-                        <Icon name="chevron-right" size="small" />
-                      </button>
-                      <button type="button" onClick={manageConnectors}>
-                        <span class="workspace-composer__research-tools-copy">
-                          <strong>Manage connectors</strong>
-                          <small>External research services</small>
-                        </span>
-                        <Icon name="chevron-right" size="small" />
-                      </button>
-                    </div>
                   </div>
                 </details>
               </Match>
             </Switch>
           </div>
           <div class="workspace-composer__actions flex items-center gap-3" role="group" aria-label="Model and send">
-            <ModelSettingsPopover />
+            <div class="workspace-composer__model-actions">
+              <Show when={fastMode()}>
+                {(mode) => (
+                  <Tooltip placement="top" value={mode().active ? "Disable fast mode" : "Enable fast mode"}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      class="workspace-composer__fast-mode"
+                      data-active={mode().active ? "true" : undefined}
+                      aria-label={mode().active ? "Disable fast mode" : "Enable fast mode"}
+                      aria-pressed={mode().active}
+                      onClick={toggleFastMode}
+                    >
+                      <Icon name="bolt" size="small" />
+                    </Button>
+                  </Tooltip>
+                )}
+              </Show>
+              <ModelSettingsPopover />
+            </div>
             <Tooltip
               placement="top"
               inactive={!prompt.dirty() && !working()}

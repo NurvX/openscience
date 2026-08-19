@@ -19,13 +19,13 @@ import { settingsApi } from "@/components/settings/api"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
 import { useCommand } from "@/context/command"
-import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { ProjectsWorkbench, type HomeProject } from "./home-workbench"
 import { filterProjects, launcherState, prepareProjects, projectName, type ProjectRecord } from "./home-projects"
 import { projectHref } from "@/utils/project-route"
+import { NativeDirectoryPickerUnavailable } from "@/utils/native-picker"
 
 export { ProjectsWorkbench, type HomeProject }
 
@@ -38,7 +38,6 @@ export default function Home(): JSX.Element {
   const navigate = useNavigate()
   const server = useServer()
   const commands = useCommand()
-  const language = useLanguage()
   const [query, setQuery] = createSignal("")
   const [draft, setDraft] = createSignal({ name: "", sources: [] as string[] })
   const projects = createMemo(() =>
@@ -89,41 +88,6 @@ export default function Home(): JSX.Element {
     showToast({ variant: "success", title: "Project removed from home" })
   }
 
-  async function openDirectory(directory: string) {
-    const project = await sync.project.resolve(directory).catch((error) => {
-      showToast({
-        variant: "error",
-        title: language.t("common.requestFailed"),
-        description: error instanceof Error ? error.message : String(error),
-      })
-      return undefined
-    })
-    if (project) openProject(project)
-  }
-
-  async function importProject() {
-    const resolve = (result: string | string[] | null) => {
-      if (Array.isArray(result)) {
-        void Promise.all(result.map(openDirectory))
-        return
-      }
-      if (result) void openDirectory(result)
-    }
-
-    if (platform.openDirectoryPickerDialog && server.isLocal()) {
-      const result = await platform.openDirectoryPickerDialog({
-        title: language.t("command.project.open"),
-        multiple: true,
-      })
-      resolve(result)
-      return
-    }
-
-    dialog.show(() => <FolderPicker onSelect={resolve} />, {
-      onClose: () => resolve(null),
-    })
-  }
-
   async function createProject(input: ProjectCreateInput) {
     const project = await settingsApi<ProjectRecord>(sdk.url, platform.fetch ?? fetch, "/global/project", {
       method: "POST",
@@ -144,9 +108,21 @@ export default function Home(): JSX.Element {
 
   async function chooseProjectSources() {
     if (platform.openDirectoryPickerDialog && server.isLocal()) {
-      const result = await platform.openDirectoryPickerDialog({ title: "Add source folders", multiple: true })
-      mergeSources(result)
-      return
+      const result = await platform
+        .openDirectoryPickerDialog({ title: "Add source folders", multiple: true, serverUrl: sdk.url })
+        .catch((error) => {
+          if (!(error instanceof NativeDirectoryPickerUnavailable)) {
+            showToast({
+              title: "The system folder picker could not open",
+              description: error instanceof Error ? error.message : String(error),
+            })
+          }
+          return undefined
+        })
+      if (result !== undefined) {
+        mergeSources(result)
+        return
+      }
     }
 
     const selection = { result: null as string | string[] | null }
@@ -194,13 +170,6 @@ export default function Home(): JSX.Element {
       onSelect: showCreateProject,
     },
     {
-      id: "project.import",
-      title: "Import folder",
-      description: "Open an existing research folder",
-      category: "Projects",
-      onSelect: () => void importProject(),
-    },
-    {
       id: "settings.open",
       title: "Open settings",
       description: "Configure models, capabilities, runtime, and the app",
@@ -243,7 +212,6 @@ export default function Home(): JSX.Element {
         onPin={pinProject}
         onRemove={(project) => void removeProject(project)}
         onCreate={showCreateProject}
-        onImport={() => void importProject()}
         onRetry={() => void server.refresh()}
         onSettings={() => dialog.show(() => <DialogSettings />)}
         onServer={() => dialog.show(() => <DialogSelectServer />)}
