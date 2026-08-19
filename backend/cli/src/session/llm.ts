@@ -22,6 +22,8 @@ import { SystemPrompt } from "./system"
 import { Flag } from "@/flag/flag"
 import { PermissionNext } from "@/permission/next"
 import { Auth } from "@/auth"
+import { SessionHarness } from "./harness"
+import { SessionTraceStore } from "./trace-store"
 
 export namespace LLM {
   const log = Log.create({ service: "llm" })
@@ -39,6 +41,7 @@ export namespace LLM {
     small?: boolean
     tools: Record<string, Tool>
     retries?: number
+    trace?: { messageID: string; attempt: number }
     onReasoningEffortResolved?: (effort: string | undefined) => void | Promise<void>
   }
 
@@ -189,6 +192,28 @@ export namespace LLM {
         inputSchema: jsonSchema({ type: "object", properties: {} }),
         execute: async () => ({ output: "", title: "", metadata: {} }),
       })
+    }
+
+    const trace = input.trace
+    if (trace) {
+      await SessionHarness.snapshot({
+        agent: input.agent,
+        provider: routed.providerID,
+        model: routed.id,
+        system,
+        instructions: typeof params.options.instructions === "string" ? params.options.instructions : undefined,
+        tools,
+      })
+        .then((snapshot) =>
+          SessionTraceStore.recordHarness({
+            sessionID: input.sessionID,
+            messageID: trace.messageID,
+            parentMessageID: input.user.id,
+            attempt: trace.attempt,
+            snapshot,
+          }),
+        )
+        .catch((error) => l.warn("failed to record harness fingerprint", { error }))
     }
 
     return streamText({

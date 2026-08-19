@@ -5,6 +5,10 @@ import { SearchDedupe } from "./search-dedupe"
 import { SessionStatus } from "./status"
 import { observableToolFailure, observableToolStatus } from "./tool-outcome"
 import { SessionTraceStore } from "./trace-store"
+import { SessionHarness } from "./harness"
+import { SessionResearch } from "./research"
+import { Review } from "@/science/provenance/review"
+import { Instance } from "@/project/instance"
 import z from "zod"
 
 export namespace SessionTrace {
@@ -115,6 +119,7 @@ export namespace SessionTrace {
     status: ComputeJobs.Status,
     createdAt: z.string(),
     startedAt: z.string().optional(),
+    lastActivityAt: z.string().optional(),
     completedAt: z.string().optional(),
     durationMs: z.number().optional(),
     exitCode: z.number().nullable().optional(),
@@ -128,6 +133,9 @@ export namespace SessionTrace {
     action: z.literal("save_file"),
     artifactID: z.string().optional(),
     versionID: z.string().optional(),
+    path: z.string().optional(),
+    kind: z.string().optional(),
+    sha256: z.string().optional(),
     durable: z.boolean(),
     completedAt: z.number().optional(),
   })
@@ -142,6 +150,7 @@ export namespace SessionTrace {
     claim: z.string().optional(),
     issue: z.string().optional(),
     evidence: z.string().optional(),
+    status: z.enum(["open", "addressed", "confirmed"]).optional(),
     completedAt: z.number().optional(),
   })
 
@@ -218,11 +227,17 @@ export namespace SessionTrace {
     reviewerFindings: z.array(Finding),
     failures: z.array(Failure),
     retries: z.array(SessionTraceStore.Retry),
+    harness: z.array(SessionTraceStore.Harness),
+    harnessReport: SessionHarness.Report,
+    research: SessionResearch.Assessment.extend({
+      contract: SessionResearch.Contract.optional(),
+    }),
     privacy: z.object({
       local: z.literal(true),
       atlasRequired: z.literal(false),
       hiddenReasoningStored: z.literal(false),
       toolOutputsCopied: z.literal(false),
+      promptContentStored: z.literal(false),
     }),
   })
   export type Info = z.infer<typeof Info>
@@ -321,11 +336,12 @@ export namespace SessionTrace {
   }
 
   export async function build(sessionID: string): Promise<Info> {
-    const [session, messages, stored, allJobs] = await Promise.all([
+    const [session, messages, stored, allJobs, contract] = await Promise.all([
       Session.get(sessionID),
       Session.messages({ sessionID }),
       SessionTraceStore.read(sessionID),
       ComputeJobs.list().catch(() => [] as ComputeJobs.Job[]),
+      SessionResearch.read(sessionID),
     ])
     const now = Date.now()
     const users = new Map(
@@ -337,6 +353,12 @@ export namespace SessionTrace {
     const parts = assistants.flatMap((message) =>
       message.parts.filter((part): part is MessageV2.ToolPart => part.type === "tool"),
     )
+    const reviews =
+      contract || parts.some((part) => part.tool === "provenance_review" || part.tool === "task")
+        ? await Review.list({ projectID: Instance.project.id, directory: Instance.directory }).catch(
+            () => [] as Review.Entry[],
+          )
+        : []
     const tools = parts.map((part) => ({
       id: part.id,
       callID: part.callID,
@@ -446,6 +468,7 @@ export namespace SessionTrace {
           status: job.status,
           createdAt: job.created_at,
           startedAt: job.started_at,
+          lastActivityAt: job.last_activity_at,
           completedAt: job.completed_at,
           durationMs:
             startedAt !== undefined && Number.isFinite(startedAt)
@@ -470,11 +493,45 @@ export namespace SessionTrace {
           action: "save_file" as const,
           artifactID: string(saved?.id),
           versionID: string(saved?.versionID),
+          path: string(saved?.path) ?? string(part.state.input.path),
+          kind: string(saved?.kind),
+          sha256: string(saved?.sha256),
           durable: true,
           completedAt: times(part, now).completedAt,
         }
       })
-    const reviewerFindings = parts
+    const persisted = reviews
+      .filter((entry) => {
+        const finding = (entry.finding.meta ?? {}) as Record<string, unknown>
+        const target = (entry.targetNode?.meta ?? {}) as Record<string, unknown>
+        return finding.sessionID === sessionID || target.sessionID === sessionID
+      })
+      .map((entry) => {
+        const meta = (entry.finding.meta ?? {}) as Record<string, unknown>
+        const severity =
+          meta.severity === "blocking" ||
+          meta.severity === "major" ||
+          meta.severity === "minor" ||
+          meta.severity === "info"
+            ? meta.severity
+            : undefined
+        return {
+          toolID: string(meta.callID) ?? entry.finding.id,
+          messageID: string(meta.messageID) ?? `review:${entry.finding.id}`,
+          id: entry.finding.id,
+          target: entry.target,
+          relation: entry.verdict,
+          severity,
+          claim: string(meta.claim),
+          issue: string(meta.issue),
+          evidence: string(meta.evidence),
+          status: entry.status,
+          completedAt: Number.isFinite(Date.parse(entry.finding.recordedAt))
+            ? Date.parse(entry.finding.recordedAt)
+            : undefined,
+        }
+      })
+    const recorded = parts
       .filter((part) => part.tool === "provenance_review" && part.state.status === "completed")
       .map((part) => {
         const meta = metadata(part)
@@ -496,9 +553,12 @@ export namespace SessionTrace {
           claim: string(part.state.input.claim),
           issue: string(part.state.input.issue),
           evidence: string(part.state.input.evidence),
+          status: undefined,
           completedAt: times(part, now).completedAt,
         }
       })
+    const ids = new Set(persisted.map((item) => item.id).filter((id): id is string => id !== undefined))
+    const reviewerFindings = [...persisted, ...recorded.filter((item) => !item.id || !ids.has(item.id))]
     const failures: z.infer<typeof Failure>[] = [
       ...assistants
         .filter((message) => message.info.error)
@@ -608,6 +668,46 @@ export namespace SessionTrace {
       })),
     ]
     const approvals = Object.values(stored.approvals).toSorted((a, b) => a.requestedAt - b.requestedAt)
+    const research = SessionResearch.assess(contract, {
+      artifacts,
+      jobs,
+      kernels,
+      findings: reviewerFindings.map((item) => ({
+        verdict: item.relation,
+        status: item.status,
+        severity: item.severity,
+      })),
+      reviewed:
+        reviewerFindings.length > 0 ||
+        inference.some(
+          (item) => (item.agent === "reviewer" || item.agent === "artifact-reviewer") && item.completedAt !== undefined,
+        ) ||
+        children.some(
+          (item) =>
+            (item.agent === "review" || item.agent === "reviewer" || item.agent === "artifact-reviewer") &&
+            item.status === "completed",
+        ),
+      busy: SessionStatus.get(sessionID).type !== "idle",
+    })
+    const harnessReport = SessionHarness.analyze({
+      records: stored.harness,
+      inference: inference.map((item) => ({
+        messageID: item.messageID,
+        parentMessageID: item.parentMessageID,
+        provider: item.provider,
+        model: item.model,
+        attempt: stored.retries
+          .filter((retry) => retry.messageID === item.messageID)
+          .reduce((attempt, retry) => Math.max(attempt, retry.attempt + 1), 1),
+      })),
+      tools: tools.map((item) => ({
+        id: item.id,
+        messageID: item.messageID,
+        name: item.name,
+        inputHash: item.inputHash,
+        status: item.status,
+      })),
+    })
     return Info.parse({
       version: 1,
       session: {
@@ -649,11 +749,18 @@ export namespace SessionTrace {
       reviewerFindings,
       failures,
       retries: stored.retries,
+      harness: stored.harness,
+      harnessReport,
+      research: {
+        ...research,
+        ...(contract ? { contract } : {}),
+      },
       privacy: {
         local: true,
         atlasRequired: false,
         hiddenReasoningStored: false,
         toolOutputsCopied: false,
+        promptContentStored: false,
       },
     })
   }

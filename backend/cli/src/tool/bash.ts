@@ -24,6 +24,7 @@ import { ProvenanceEnvelope } from "@/science/provenance/envelope"
 import { ExecutionAuthority } from "@/project/execution"
 import { CommandRuntime } from "@/science/command/registry"
 import { AuthoritySignal } from "@/project/authority-signal"
+import { KernelEnvironmentMutation } from "@/science/kernel/environment-mutation"
 
 const MAX_METADATA_LENGTH = 30_000
 const DEFAULT_TIMEOUT = Flag.OPENSCIENCE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 0
@@ -302,18 +303,25 @@ export const BashTool = Tool.define("bash", async () => {
         if (current.generation !== prepared.generation) {
           throw new Error("Execution authority changed while the shell command was being prepared; retry it")
         }
+        const runtime = await KernelEnvironmentMutation.pythonRuntime("python")
+        if (runtime.env?.PIP_TARGET) readable.add(runtime.env.PIP_TARGET)
         // Build the wrapper only after the final authority check, while trust
         // and filesystem mutations are excluded through durable registration.
         const sandbox = Sandbox.plan({
-          command: params.command,
+          command: Shell.pipefail(shell, params.command),
           shell,
           cwd,
           workspace: current.writable,
           readable: [...readable],
           unreadable: OpenScience.kernelSensitivePaths(),
+          runtime: {
+            python: runtime.binary ?? Bun.which("python3") ?? Bun.which("python") ?? undefined,
+            path: runtime.env?.PATH,
+          },
           options: current.sandbox,
         })
         return OpenScience.withSubprocessEnv(process.env, async (env) => {
+          const cache = sandbox.sandboxed ? Sandbox.cacheEnvironment(current.workspace) : {}
           let child: ReturnType<typeof spawn>
           const wrapped = await CommandRuntime.wrap({
             file: sandbox.file,
@@ -324,7 +332,7 @@ export const BashTool = Tool.define("bash", async () => {
             child = spawn(wrapped.file, wrapped.args, {
               shell: wrapped.spawnShell,
               cwd,
-              env,
+              env: { ...env, ...(runtime.env ?? {}), ...cache },
               stdio: ["ignore", "pipe", "pipe"],
               detached: process.platform !== "win32",
             })
