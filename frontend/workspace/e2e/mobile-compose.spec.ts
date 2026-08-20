@@ -46,8 +46,7 @@ test("keeps the composer and Research menu contained at release viewports", asyn
         model: box("[data-model-settings-trigger]"),
         send: box(".workspace-composer__send"),
         menu: box(".workspace-composer__research-tools-menu"),
-        normal: box('[data-research-effort="normal"]'),
-        compute: box(".workspace-composer__research-tools-actions > button"),
+        effort: box('[data-research-control="effort"] > summary'),
       }
     }, viewport)
 
@@ -56,7 +55,7 @@ test("keeps the composer and Research menu contained at release viewports", asyn
     expect(geometry.composer.right).toBeLessThanOrEqual(viewport.width)
     expect(geometry.menu.x).toBeGreaterThanOrEqual(0)
     expect(geometry.menu.right).toBeLessThanOrEqual(viewport.width)
-    for (const target of [geometry.research, geometry.model, geometry.send, geometry.normal, geometry.compute]) {
+    for (const target of [geometry.research, geometry.model, geometry.send, geometry.effort]) {
       expect(target.width).toBeGreaterThanOrEqual(44)
       expect(target.height).toBeGreaterThanOrEqual(44)
     }
@@ -64,7 +63,7 @@ test("keeps the composer and Research menu contained at release viewports", asyn
       expect(geometry.controls.bottom).toBeLessThanOrEqual(geometry.actions.y)
     }
 
-    await page.keyboard.press("Escape")
+    await research.click()
     await expect(menu).toBeHidden()
   }
 })

@@ -35,7 +35,6 @@ import {
   looksLikeProjectSegment,
   projectAliasID,
   projectPathname,
-  projectSegment,
   resolveProjectAlias,
   resolveProjectRoute,
 } from "@/utils/project-route"
@@ -62,12 +61,28 @@ export default function Layout(props: ParentProps) {
     if (!current || current.projectID !== aliasID()) return
     return resolveProjectAlias(params.dir, current.project)
   })
-  const active = createMemo(() => route() ?? recovered())
   const legacy = createMemo(() => {
     if (!params.dir || looksLikeProjectSegment(params.dir)) return ""
     return decode64(params.dir) ?? ""
   })
-  const directory = createMemo(() => active()?.directory ?? legacy())
+  const unresolvedLegacy = createMemo(() => {
+    if (route()) return
+    return legacy() || undefined
+  })
+  const [legacyProject] = createResource(unresolvedLegacy, async (directory) => ({
+    directory,
+    project: await global.project.resolve(directory).catch(() => undefined),
+  }))
+  const recoveredLegacy = createMemo(() => {
+    const current = legacyProject.latest
+    if (!current || current.directory !== unresolvedLegacy() || !current.project) return
+    return resolveProjectRoute(params.dir, [current.project])
+  })
+  const active = createMemo(() => route() ?? recovered() ?? recoveredLegacy())
+  // A legacy base64 route carries only a directory. Resolve its opaque project
+  // capability before mounting project-scoped providers; otherwise children
+  // can synchronously build requests without the required project selector.
+  const directory = createMemo(() => active()?.directory ?? "")
   const projectID = createMemo(() => active()?.projectID)
   const scope = createMemo(() => active()?.segment ?? projectID() ?? directory())
 
@@ -99,6 +114,7 @@ export default function Layout(props: ParentProps) {
     if (directory()) return
     if (!global.ready) return
     if (aliasID() && (alias.loading || alias.state === "unresolved")) return
+    if (legacy() && (legacyProject.loading || legacyProject.state === "unresolved")) return
     showToast({
       variant: "error",
       title: language.t("common.requestFailed"),
@@ -113,18 +129,6 @@ export default function Layout(props: ParentProps) {
           {iife(() => {
             const sync = useSync()
             const sdk = useSDK()
-
-            createEffect(() => {
-              if (!params.dir || looksLikeProjectSegment(params.dir)) return
-              const id = sync.project?.id
-              if (!id) return
-              const project = global.data.project.find((item) => item.id === id)
-              if (!project) return
-              const active = sync.data.path.directory || directory()
-              const segment = projectSegment(project, active)
-              if (segment === params.dir) return
-              navigate(`${projectPathname(segment, params.id)}${location.search}${location.hash}`, { replace: true })
-            })
 
             const respond = (input: {
               sessionID: string

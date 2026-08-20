@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures"
-import { createSdk, promptSelector } from "./utils"
+import { createSdk } from "./utils"
 
 test("home project search filters the recent list and clears back to it", async ({ page, directory }) => {
   const current = await createSdk(directory)
@@ -21,19 +21,14 @@ test("home project search filters the recent list and clears back to it", async 
   await expect(card).toBeVisible()
 })
 
-test("existing folder import remains available through the in-app picker", async ({ page, directory, slug }) => {
+test("new projects expose existing source folders in the create flow", async ({ page }) => {
   await page.goto("/")
-  await page.getByRole("button", { name: "Import existing folder", exact: true }).first().click()
+  await page.getByRole("button", { name: "New project", exact: true }).click()
 
-  // The path field is the stable accessible contract; its example placeholder
-  // may evolve as the picker accepts more path forms.
-  const location = page.getByRole("textbox", { name: "Go to path", exact: true })
-  await expect(location).toBeVisible()
-  await location.fill(directory)
-  await location.press("Enter")
-  await expect(location).toHaveValue("")
-  await page.getByRole("button", { name: "Use this folder", exact: true }).click()
-
-  await expect(page).toHaveURL(new RegExp(`/${slug}/session`))
-  await expect(page.locator(promptSelector)).toBeVisible()
+  const create = page.getByRole("dialog")
+  await expect(create.getByRole("heading", { name: "Create project", exact: true })).toBeVisible()
+  await expect(create.getByRole("button", { name: /Add source folders/ })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Import existing folder", exact: true })).toHaveCount(0)
+  await create.getByRole("button", { name: "Cancel", exact: true }).click()
+  await expect(create).toHaveCount(0)
 })

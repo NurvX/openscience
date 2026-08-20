@@ -37,6 +37,8 @@ test("open files become tabs in the right pane", async ({ page, openSession }) =
   await page.keyboard.press("Alt+ArrowRight")
   await expect(tabs.nth(1)).toHaveAccessibleName("README.md")
 
+  // Inactive tabs reveal their close action on hover, matching the user path.
+  await fileTab(page, "README.md").hover()
   await page.getByRole("button", { name: "Close README.md", exact: true }).click()
   await page.getByRole("button", { name: "Close package.json", exact: true }).click()
   await expect(fileTab(page, "README.md")).toHaveCount(0)

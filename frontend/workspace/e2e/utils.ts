@@ -15,7 +15,7 @@ export const promptSelector = '[data-component="prompt-input"]'
 export const terminalSelector = '[data-component="terminal"]'
 export const modelTriggerSelector = "[data-model-settings-trigger]"
 export const modelPopoverSelector = "[data-model-settings-popover]"
-export const effortChipSelector = "[data-model-effort-chip]"
+export const researchToolsSelector = ".workspace-composer__research-tools"
 
 export function createSdk(directory?: string) {
   return createOpenScienceClient({ baseUrl: serverUrl, directory, throwOnError: true })
@@ -143,59 +143,43 @@ export async function openConnectedFile(page: Page, folder: string, filename: st
   return tab
 }
 
-/**
- * Opens the composer model-settings popover. Effort and speed live here as
- * menu rows ("Effort"/"Speed"), each expanding to a radio list of options.
- */
-export async function openModelSettings(page: Page) {
-  const popover = page.locator(modelPopoverSelector)
-  if (!(await popover.isVisible().catch(() => false))) await page.locator(modelTriggerSelector).click()
-  await expect(popover).toBeVisible()
-  return popover
+/** Opens the composer Research menu where request-scoped controls live. */
+export async function openResearchTools(page: Page) {
+  const tools = page.locator(researchToolsSelector)
+  if ((await tools.getAttribute("open")) === null) await tools.locator(":scope > summary").click()
+  await expect(tools.getByRole("group", { name: "Research tools", exact: true })).toBeVisible()
+  return tools
 }
 
-/**
- * Closes the popover reliably. Selecting an option can leave the row's nested
- * option list open, so a single Escape closes only that list; press until the
- * popover itself is gone.
- */
-async function closeModelSettings(page: Page) {
-  const popover = page.locator(modelPopoverSelector)
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (!(await popover.isVisible().catch(() => false))) break
-    await page.keyboard.press("Escape")
-    await popover.waitFor({ state: "hidden", timeout: 2_000 }).catch(() => undefined)
-  }
-  if (await popover.isVisible().catch(() => false)) {
-    await page.locator(modelTriggerSelector).click()
-  }
-  await expect(popover).toBeHidden()
+async function closeResearchTools(page: Page) {
+  const tools = page.locator(researchToolsSelector)
+  if ((await tools.getAttribute("open")) !== null) await tools.locator(":scope > summary").click()
+  await expect(tools.getByRole("group", { name: "Research tools", exact: true })).toBeHidden()
 }
 
 async function pickModelOption(page: Page, kind: "effort" | "speed", id: string) {
-  const popover = await openModelSettings(page)
-  await popover.locator(`[data-model-menu-row="${kind}"]`).click()
-  await popover.locator(`[data-model-option="${kind}"][data-model-option-id="${id}"]`).click()
-  await closeModelSettings(page)
+  const tools = await openResearchTools(page)
+  const control = tools.locator(`[data-research-control="${kind}"]`)
+  if ((await control.getAttribute("open")) === null) await control.locator(":scope > summary").click()
+  await control.locator(`[data-research-${kind}="${id}"]`).click()
+  await closeResearchTools(page)
 }
 
-/** Sets reasoning effort (variant) through the model-settings popover. */
+/** Sets reasoning effort (variant) through Research tools. */
 export async function setModelEffort(page: Page, id: string) {
   await pickModelOption(page, "effort", id)
 }
 
-/** Sets inference speed (tier) through the model-settings popover. */
+/** Sets inference speed (tier) through Research tools. */
 export async function setModelSpeed(page: Page, id: string) {
   await pickModelOption(page, "speed", id)
 }
 
-/** Reads a menu row's current value ("Auto", "High", "Standard", "Fast", …). */
+/** Reads a Research control's current value ("High", "Standard", "Fast", …). */
 export async function modelRowValue(page: Page, kind: "effort" | "speed") {
-  const popover = await openModelSettings(page)
-  const value = (
-    await popover.locator(`[data-model-menu-row="${kind}"] [data-model-menu-value] > span`).first().innerText()
-  ).trim()
-  await closeModelSettings(page)
+  const tools = await openResearchTools(page)
+  const value = (await tools.locator(`[data-research-control="${kind}"] > summary > strong`).innerText()).trim()
+  await closeResearchTools(page)
   return value
 }
 

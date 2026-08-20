@@ -42,8 +42,8 @@ async function readTransform(layer: Locator) {
   })
 }
 
-test("Atlas canvas distinguishes a connected graph from an unavailable bridge", async ({ page, gotoSession }) => {
-  // The Atlas workspace action only renders for a signed-in Atlas account.
+test("Gateway canvas distinguishes a connected graph from an unavailable bridge", async ({ page, gotoSession }) => {
+  // The Gateway workspace action only renders for a signed-in Gateway account.
   // The harness has none, so pin the account probe to exercise the surface;
   // the /api/atlas requests below still hit the real bridge.
   await page.route("**/account/session", (route) =>
@@ -86,15 +86,15 @@ test("Atlas canvas distinguishes a connected graph from an unavailable bridge", 
 
   await gotoSession()
 
-  const action = page.getByRole("button", { name: "Open Atlas", exact: true })
+  const action = page.getByRole("button", { name: "Open Gateway", exact: true })
   await action.click()
   await expect(action).toHaveAttribute("aria-pressed", "true")
   // Context surfaces now live in the inspector's persistent work-tab strip.
   // The old standalone heading is intentionally absent whenever a work tab is
-  // open; assert the selected Atlas tab rather than its retired duplicate.
+  // open; assert the selected Gateway tab rather than its retired duplicate.
   await expect(
     page.getByRole("tablist", { name: "Contextual work tabs", exact: true }).getByRole("tab", {
-      name: "Atlas",
+      name: "Gateway",
       exact: true,
     }),
   ).toHaveAttribute("aria-selected", "true")
@@ -104,7 +104,7 @@ test("Atlas canvas distinguishes a connected graph from an unavailable bridge", 
     expect(Array.isArray(body.nodes)).toBe(true)
     if (process.env.OPENSCIENCE_E2E_ATLAS_REQUIRED === "1") expect(body.nodes!.length).toBeGreaterThan(0)
     await expect(page.getByRole("alert")).toHaveCount(0)
-    await expect(page.getByText("atlas is unavailable", { exact: true })).toHaveCount(0)
+    await expect(page.getByText("gateway is unavailable", { exact: true })).toHaveCount(0)
 
     if (process.env.OPENSCIENCE_E2E_ATLAS_REQUIRED === "1") expect(connected).toBeDefined()
     if (!connected) return
@@ -153,6 +153,6 @@ test("Atlas canvas distinguishes a connected graph from an unavailable bridge", 
   expect([401, 502]).toContain(response.status())
   const body = (await response.json()) as { detail?: string }
   expect(body.detail).toBeTruthy()
-  await expect(page.getByRole("alert")).toContainText("atlas is unavailable")
+  await expect(page.getByRole("alert")).toContainText("gateway is unavailable")
   await expect(page.getByRole("alert")).toContainText(body.detail!)
 })

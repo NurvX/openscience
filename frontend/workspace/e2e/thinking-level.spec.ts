@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures"
-import { effortChipSelector, modelRowValue, promptSelector, setModelEffort, setModelSpeed } from "./utils"
+import { modelRowValue, promptSelector, setModelEffort, setModelSpeed } from "./utils"
 
 test("thinking effort and speed reach the prompt request through the settings popover", async ({
   page,
@@ -9,9 +9,8 @@ test("thinking effort and speed reach the prompt request through the settings po
   await gotoSession()
 
   // The explicit Standard default stays visible so users can inspect and
-  // change thinking effort without opening the full model menu.
+  // change thinking effort without opening the full model catalog.
   await expect(modelRowValue(page, "effort")).resolves.toBe("Standard")
-  await expect(page.locator(effortChipSelector)).toHaveText("Standard")
 
   const send = async (options: { variant?: string; tier?: string } = {}) => {
     const request = page.waitForRequest((request) => {
@@ -50,7 +49,6 @@ test("thinking effort and speed reach the prompt request through the settings po
 
     await setModelEffort(page, "high")
     await expect(modelRowValue(page, "effort")).resolves.toBe("High")
-    await expect(page.locator(effortChipSelector)).toHaveText("High")
     await setModelSpeed(page, "fast")
 
     const high = await send({ variant: "high", tier: "fast" })
