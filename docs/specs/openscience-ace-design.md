@@ -1,8 +1,8 @@
 # OpenScience Ace and Gateway implementation plan
 
-Status: final proposal, awaiting approval  
-Prepared: 2026-08-20  
-OpenScience baseline: `3986c8626adde6ec1a1ca5bd2c9df4f084660664`  
+Status: approved implementation contract; release candidate
+Prepared: 2026-08-20
+OpenScience implementation base: `bf29162b8628f29257d90c134308e571ec31d589`
 Gateway baseline: `1f23dcb50254d002176a7ff95a58da7b179155d1`
 
 ## Simple explanation

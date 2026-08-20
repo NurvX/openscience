@@ -41,6 +41,13 @@ export function searchStatus(status: ResearchToolsStatus) {
   if (search.state === "exhausted") {
     return { label: "Allowance used", detail: resetDetail(search.resetAt), tone: "warning" as const }
   }
+  if (search.state === "unavailable") {
+    return {
+      label: "Allowance unavailable",
+      detail: "The Gateway could not load the current allowance. Retry in a moment.",
+      tone: "neutral" as const,
+    }
+  }
   const remaining = search.remaining ?? 0
   const limit = search.limit ?? 0
   return {

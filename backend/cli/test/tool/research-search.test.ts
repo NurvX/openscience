@@ -54,6 +54,7 @@ describe("research_search", () => {
       content: "community result",
     })
     expect(result.metadata).toMatchObject({ allowanceState: "community" })
+    expect(result.metadata.resultCount).toBeUndefined()
   })
 
   test("maps Gateway allowance exhaustion to one completed terminal result", async () => {
@@ -80,6 +81,32 @@ describe("research_search", () => {
       upgrade_url: "https://app.syntheticsciences.ai/billing",
     })
     expect(result.metadata).toMatchObject({ allowanceState: "exhausted" })
+  })
+
+  test("refreshes a rejected entitlement and falls back to the unchanged Free community route", async () => {
+    restores.push(spyOn(OpenScience, "resolveManagedSearchEntitlement").mockResolvedValue(true))
+    const refresh = spyOn(OpenScience, "refreshManagedSearchEntitlementAfterRejection").mockResolvedValue(false)
+    restores.push(refresh)
+    const dispatch = spyOn(OpenScience, "dispatchResearchSearch").mockResolvedValue({
+      status: 403,
+      body: { detail: { code: "search_not_entitled", message: "Managed search is not enabled." } },
+    })
+    restores.push(dispatch)
+    const fetcher = spyOn(globalThis, "fetch").mockImplementation(
+      (async () =>
+        new Response(
+          'data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"community fallback"}]}}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        )) as unknown as typeof fetch,
+    )
+    restores.push(fetcher)
+    const tool = await ResearchSearchTool.init({ model: { providerID: "synsci", modelID: "free-model" } })
+    const result = await tool.execute(tool.parameters.parse({ query: "current protein folding benchmarks" }), context)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(result.output)).toMatchObject({ provider: "community", content: "community fallback" })
+    expect(result.metadata).toMatchObject({ allowanceState: "community" })
   })
 
   test("passes a stable operation id and returns the normalized Gateway response without a billing call", async () => {

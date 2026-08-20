@@ -64,6 +64,109 @@ const ModelFamily = z.enum([
   "sonar",
   "custom",
 ])
+const ModelRoute = z.enum(["managed", "byok", "chatgpt", "subscription", "local", "custom"])
+const ErrorClass = z.enum([
+  "cancelled",
+  "timeout",
+  "network",
+  "authentication",
+  "authorization",
+  "rate_limit",
+  "invalid_request",
+  "unavailable",
+  "provider",
+  "tool",
+  "internal",
+  "unknown",
+])
+const ToolClass = z.enum([
+  "apply_patch",
+  "artifact",
+  "artifact_snapshot",
+  "atlas",
+  "atlas_record",
+  "bash",
+  "batch",
+  "codesearch",
+  "compute_job",
+  "custom",
+  "edit",
+  "glob",
+  "grep",
+  "invalid",
+  "list",
+  "lsp",
+  "modal",
+  "multiedit",
+  "notebook",
+  "plan_enter",
+  "plan_exit",
+  "planwrite",
+  "provenance_query",
+  "provenance_record",
+  "provenance_resolve",
+  "provenance_review",
+  "python",
+  "query_ensembl",
+  "query_kegg",
+  "query_ncbi_gene",
+  "query_pdb",
+  "query_pubmed",
+  "query_string",
+  "query_uniprot",
+  "question",
+  "r",
+  "read",
+  "research_contract",
+  "research_search",
+  "rkernel",
+  "science_fetch",
+  "science_list_dbs",
+  "science_search",
+  "skill",
+  "task",
+  "todoread",
+  "todowrite",
+  "webfetch",
+  "websearch",
+  "write",
+])
+const ArtifactClass = z.enum([
+  "archive",
+  "artifact",
+  "chem-2d",
+  "chem-3d",
+  "custom",
+  "dataset",
+  "figure",
+  "genome",
+  "genome-track",
+  "genomics",
+  "image",
+  "latex",
+  "model",
+  "molecule",
+  "msa",
+  "notebook",
+  "pdf",
+  "protein-structure",
+  "report",
+  "sequence",
+  "spectrum",
+  "structure",
+  "text",
+])
+const SearchSource = z.enum(["web", "research", "news", "developer", "custom"])
+const SearchMode = z.enum(["fast", "balanced", "deep", "custom"])
+const AllowanceState = z.enum(["available", "community", "exhausted", "unavailable", "custom"])
+const Platform = z.enum(["macos", "windows", "linux", "unknown"])
+
+export function coarsePlatform(value: string): z.infer<typeof Platform> {
+  if (value === "darwin") return "macos"
+  if (value === "win32") return "windows"
+  if (value === "linux") return "linux"
+  return "unknown"
+}
 
 export const Event = z
   .object({
@@ -72,7 +175,7 @@ export const Event = z
     event_type: z.enum(["assistant.completed", "tool.completed", "artifact.completed"]),
     occurred_at: z.string().datetime(),
     app_version: Label.optional(),
-    platform: SafeClass(40).optional(),
+    platform: Platform.optional(),
     architecture: SafeClass(40).optional(),
     locale: Label.optional(),
     timezone: Label.optional(),
@@ -80,26 +183,26 @@ export const Event = z
     account_id: Label.optional(),
     session_id: Label.optional(),
     run_id: Label.optional(),
-    model_route: SafeClass(80).optional(),
+    model_route: ModelRoute.optional(),
     provider_family: ProviderFamily.optional(),
     model_family: ModelFamily.optional(),
     input_tokens: OptionalCount,
     output_tokens: OptionalCount,
     cached_tokens: OptionalCount,
     reasoning_tokens: OptionalCount,
-    tool_name: SafeClass(120).optional(),
+    tool_name: ToolClass.optional(),
     duration_ms: OptionalCount,
     success: z.boolean().optional(),
     cancelled: z.boolean().optional(),
     retry: z.boolean().optional(),
-    error_class: SafeClass(120).optional(),
-    artifact_type: SafeClass(80).optional(),
+    error_class: ErrorClass.optional(),
+    artifact_type: ArtifactClass.optional(),
     artifact_count: OptionalCount,
     size_bucket: SafeClass(40).optional(),
-    search_source: SafeClass(40).optional(),
-    search_mode: SafeClass(40).optional(),
+    search_source: SearchSource.optional(),
+    search_mode: SearchMode.optional(),
     result_count: OptionalCount,
-    allowance_state: SafeClass(40).optional(),
+    allowance_state: AllowanceState.optional(),
     feature: SafeClass(100).optional(),
     funnel_stage: SafeClass(100).optional(),
     plan: SafeClass(60).optional(),
@@ -129,6 +232,12 @@ type ConsentFile = z.infer<typeof ConsentFile>
 
 const QueueRow = z.object({ subject: z.string(), queued_at: z.number().int(), event: Event })
 type QueueRow = z.infer<typeof QueueRow>
+
+// A signed-in account must be checked against Gateway once per installation
+// before any event is queued. Keep the proof process-local: a restart or an
+// account switch revalidates consent instead of trusting stale disk state.
+const authoritativeConsent = new Set<string>()
+const consentChecks = new Map<string, Promise<boolean>>()
 
 export type Status = {
   analyticsEnabled: boolean
@@ -238,6 +347,8 @@ async function activate(state: ConsentFile, subject: string) {
   // Signing in links only future events. Account switching drops unsent rows
   // instead of ever flushing one identity's activity under another identity.
   await writeRows([])
+  authoritativeConsent.clear()
+  consentChecks.clear()
   state.active_subject = subject
   await atomic(consentPath, JSON.stringify(state, null, 2))
 }
@@ -271,8 +382,33 @@ function localStatus(
   }
 }
 
-async function remoteConsent(state: ConsentFile, who: Awaited<ReturnType<typeof identity>>) {
-  if (!who.token) return
+function consentKey(state: ConsentFile, who: Awaited<ReturnType<typeof identity>>) {
+  return `${who.subject}:${state.installation_id}`
+}
+
+function consentDisabled(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const root = value as Record<string, unknown>
+  const detail = root.detail && typeof root.detail === "object" && !Array.isArray(root.detail) ? root.detail : root
+  return (detail as Record<string, unknown>).code === "telemetry_consent_disabled"
+}
+
+async function disableSubject(state: ConsentFile, who: Awaited<ReturnType<typeof identity>>) {
+  authoritativeConsent.delete(consentKey(state, who))
+  await writeRows([])
+  if (state.subjects[who.subject]?.analytics_enabled !== false) state.installation_id = randomUUID()
+  state.subjects[who.subject] = {
+    analytics_enabled: false,
+    research_content_enabled: false,
+    updated_at: new Date().toISOString(),
+    pending: false,
+  }
+  await atomic(consentPath, JSON.stringify(state, null, 2))
+  authoritativeConsent.add(consentKey(state, who))
+}
+
+async function remoteConsent(state: ConsentFile, who: Awaited<ReturnType<typeof identity>>): Promise<boolean> {
+  if (!who.token) return true
   const entry = state.subjects[who.subject]
   const request = entry?.pending
     ? fetch(`${API_BASE}/api/v1/telemetry/consent`, {
@@ -291,7 +427,14 @@ async function remoteConsent(state: ConsentFile, who: Awaited<ReturnType<typeof 
         signal: AbortSignal.timeout(10_000),
       })
   const response = await request.catch(() => undefined)
-  if (!response?.ok) return
+  if (!response) return false
+  if (!response.ok) {
+    if (response.status === 403 && consentDisabled(await response.json().catch(() => undefined))) {
+      await disableSubject(state, who)
+      return true
+    }
+    return false
+  }
   const body = (await response.json().catch(() => undefined)) as
     | {
         analytics_enabled?: boolean
@@ -300,18 +443,41 @@ async function remoteConsent(state: ConsentFile, who: Awaited<ReturnType<typeof 
         consent_version?: string
       }
     | undefined
-  const enabled = entry?.pending
-    ? entry.analytics_enabled
-    : (body?.analytics_enabled ?? body?.effective?.analytics_enabled)
-  if (typeof enabled !== "boolean") return
+  const enabled =
+    body?.analytics_enabled ??
+    body?.effective?.analytics_enabled ??
+    (entry?.pending ? entry.analytics_enabled : undefined)
+  if (typeof enabled !== "boolean") return false
+  if (!enabled) {
+    if (body?.consent_version) state.consent_version = body.consent_version
+    await disableSubject(state, who)
+    return true
+  }
   state.subjects[who.subject] = {
-    analytics_enabled: enabled,
+    analytics_enabled: true,
     research_content_enabled: false,
     updated_at: new Date().toISOString(),
     pending: false,
   }
   if (body?.consent_version) state.consent_version = body.consent_version
   await atomic(consentPath, JSON.stringify(state, null, 2))
+  authoritativeConsent.add(consentKey(state, who))
+  return true
+}
+
+async function ensureAuthoritativeConsent(
+  state: ConsentFile,
+  who: Awaited<ReturnType<typeof identity>>,
+  force = false,
+) {
+  if (!who.signedIn) return true
+  const key = consentKey(state, who)
+  if (!force && authoritativeConsent.has(key)) return true
+  const active = consentChecks.get(key)
+  if (active) return active
+  const check = remoteConsent(state, who).finally(() => consentChecks.delete(key))
+  consentChecks.set(key, check)
+  return check
 }
 
 function pseudonym(installationID: string, value: string) {
@@ -325,7 +491,7 @@ function common(state: ConsentFile, who: Awaited<ReturnType<typeof identity>>, s
     schema_version: VERSION,
     occurred_at: new Date().toISOString(),
     app_version: Installation.VERSION,
-    platform: process.platform,
+    platform: coarsePlatform(process.platform),
     architecture: process.arch,
     ...(intl.locale ? { locale: intl.locale } : {}),
     ...(intl.timeZone ? { timezone: intl.timeZone } : {}),
@@ -340,6 +506,7 @@ async function append(sessionID: string | undefined, fields: Record<string, unkn
   const consent = await readConsent()
   failClosed(consent.value, who.subject, consent.corrupt)
   await activate(consent.value, who.subject)
+  if (consent.corrupt || !(await ensureAuthoritativeConsent(consent.value, who))) return false
   const status = localStatus(consent.value, who.subject, who.signedIn, consent.absent, consent.corrupt)
   if (!status.analyticsEnabled) return false
   const event = Event.parse({ ...common(consent.value, who, sessionID), ...fields })
@@ -350,10 +517,37 @@ async function append(sessionID: string | undefined, fields: Record<string, unkn
   return true
 }
 
-function classification(value: string | undefined, max: number) {
+const modelRoutes = new Set<z.infer<typeof ModelRoute>>(ModelRoute.options)
+const builtinTools = new Set<string>(ToolClass.options)
+const artifactTypes = new Set<string>(ArtifactClass.options)
+const searchSources = new Set<string>(SearchSource.options)
+const searchModes = new Set<string>(SearchMode.options)
+const allowanceStates = new Set<string>(AllowanceState.options)
+
+function closedClassification(value: string | undefined, values: Set<string>) {
   if (!value) return
-  const normalized = value.trim()
-  return normalized.length <= max && safeClassPattern.test(normalized) ? normalized : "custom"
+  return values.has(value) ? value : "custom"
+}
+
+function coarseModelRoute(value: string): z.infer<typeof ModelRoute> {
+  const normalized = value.trim().toLowerCase() as z.infer<typeof ModelRoute>
+  return modelRoutes.has(normalized) ? normalized : "custom"
+}
+
+function coarseErrorClass(value: string): z.infer<typeof ErrorClass> {
+  const normalized = value.toLowerCase()
+  if (/abort|cancel/.test(normalized)) return "cancelled"
+  if (/timeout|timed out|deadline/.test(normalized)) return "timeout"
+  if (/rate.?limit|too many requests|\b429\b|quota/.test(normalized)) return "rate_limit"
+  if (/unauthenticated|authentication|invalid api.?key|credential|\b401\b/.test(normalized)) return "authentication"
+  if (/unauthorized|authorization|forbidden|permission|access denied|\b403\b/.test(normalized)) return "authorization"
+  if (/network|socket|dns|fetch failed|econn|enet|ehost/.test(normalized)) return "network"
+  if (/invalid request|validation|malformed|bad request|\b400\b/.test(normalized)) return "invalid_request"
+  if (/unavailable|overloaded|service down|\b50[234]\b/.test(normalized)) return "unavailable"
+  if (/provider/.test(normalized)) return "provider"
+  if (/tool/.test(normalized)) return "tool"
+  if (/internal|invariant|panic|\b500\b/.test(normalized)) return "internal"
+  return "unknown"
 }
 
 function sizeBucket(size: number) {
@@ -420,13 +614,28 @@ export namespace OutboundTelemetry {
     const consent = await readConsent()
     failClosed(consent.value, who.subject, consent.corrupt)
     await activate(consent.value, who.subject)
-    if (refresh && !consent.corrupt) await remoteConsent(consent.value, who)
-    const latest = refresh && !consent.corrupt ? await readConsent() : consent
-    return localStatus(latest.value, who.subject, who.signedIn, latest.absent, latest.corrupt)
+    const authoritative = consent.corrupt ? false : await ensureAuthoritativeConsent(consent.value, who, refresh)
+    const latest = who.signedIn && authoritative ? await readConsent() : consent
+    const result = localStatus(latest.value, who.subject, who.signedIn, latest.absent, latest.corrupt)
+    if (who.signedIn && !authoritative) return { ...result, analyticsEnabled: false, pending: true }
+    return result
   }
 
   export async function enabled(): Promise<boolean> {
-    return status(false).then((value) => value.analyticsEnabled)
+    const who = await identity()
+    const consent = await readConsent()
+    failClosed(consent.value, who.subject, consent.corrupt)
+    await activate(consent.value, who.subject)
+    const local = localStatus(consent.value, who.subject, who.signedIn, consent.absent, consent.corrupt)
+    if (consent.corrupt || !local.analyticsEnabled) return false
+    if (!who.signedIn) return true
+    const key = consentKey(consent.value, who)
+    if (authoritativeConsent.has(key)) return true
+    // Provider/model setup must never wait for the optional Gateway. Until the
+    // account's setting is confirmed, AI-SDK telemetry stays off; a background
+    // refresh can enable it for a later call without delaying this one.
+    void ensureAuthoritativeConsent(consent.value, who).catch(() => undefined)
+    return false
   }
 
   export async function setAnalytics(enabled: boolean): Promise<Status> {
@@ -448,8 +657,12 @@ export namespace OutboundTelemetry {
       await writeRows([])
     }
     await atomic(consentPath, JSON.stringify(consent.value, null, 2))
-    await remoteConsent(consent.value, who)
-    return status(false)
+    authoritativeConsent.delete(consentKey(consent.value, who))
+    await ensureAuthoritativeConsent(consent.value, who, true)
+    const latest = await readConsent()
+    const result = localStatus(latest.value, who.subject, who.signedIn, latest.absent, latest.corrupt)
+    if (who.signedIn && result.pending) return { ...result, analyticsEnabled: false }
+    return result
   }
 
   export async function requestDeletion(): Promise<{ ok: boolean; message?: string }> {
@@ -475,6 +688,7 @@ export namespace OutboundTelemetry {
     }
     await writeRows([])
     await atomic(consentPath, JSON.stringify(consent.value, null, 2))
+    authoritativeConsent.add(consentKey(consent.value, who))
     return { ok: true }
   }
 
@@ -483,6 +697,7 @@ export namespace OutboundTelemetry {
     const consent = await readConsent()
     failClosed(consent.value, who.subject, consent.corrupt)
     await activate(consent.value, who.subject)
+    if (consent.corrupt || !(await ensureAuthoritativeConsent(consent.value, who))) return
     const status = localStatus(consent.value, who.subject, who.signedIn, consent.absent, consent.corrupt)
     if (!status.analyticsEnabled) {
       await writeRows([])
@@ -497,7 +712,7 @@ export namespace OutboundTelemetry {
       installation_id: consent.value.installation_id,
       events: sending.map((row) => row.event),
     })
-    const response = await fetch(`${API_BASE}/api/v1/telemetry/batch`, {
+    const response = await fetch(`${API_BASE}/api/v1/telemetry/batches`, {
       method: "POST",
       headers: {
         ...(who.token ? { Authorization: `Bearer ${who.token}` } : {}),
@@ -507,7 +722,12 @@ export namespace OutboundTelemetry {
       body: new Uint8Array(gzipSync(payload)),
       signal: AbortSignal.timeout(10_000),
     }).catch(() => undefined)
-    if (!response?.ok) return
+    if (!response?.ok) {
+      if (response?.status === 403 && consentDisabled(await response.json().catch(() => undefined))) {
+        await disableSubject(consent.value, who)
+      }
+      return
+    }
     const accepted = new Set(sending.map((row) => row.event.event_id))
     await writeRows(queued.filter((row) => !accepted.has(row.event.event_id)))
   }
@@ -521,7 +741,7 @@ export namespace OutboundTelemetry {
   }) {
     return append(input.sessionID, {
       event_type: "assistant.completed",
-      model_route: classification(input.route, 80),
+      model_route: coarseModelRoute(input.route),
       provider_family: coarseProviderFamily(input.provider),
       model_family: coarseModelFamily(input.model),
       input_tokens: input.tokens.input,
@@ -539,18 +759,20 @@ export namespace OutboundTelemetry {
     const search = part.tool === "research_search" || part.tool === "websearch"
     return append(part.sessionID, {
       event_type: "tool.completed",
-      tool_name: classification(part.tool, 120),
+      tool_name: closedClassification(part.tool, builtinTools),
       duration_ms: Math.max(0, end - part.state.time.start),
       success: part.state.status === "completed",
       cancelled: part.state.status === "error" && part.state.error.toLowerCase().includes("abort"),
-      ...(part.state.status === "error" ? { error_class: classification(part.state.error.split(":", 1)[0], 120) } : {}),
+      ...(part.state.status === "error" ? { error_class: coarseErrorClass(part.state.error) } : {}),
       ...(search && typeof meta?.searchSource === "string"
-        ? { search_source: classification(meta.searchSource, 40) }
+        ? { search_source: closedClassification(meta.searchSource, searchSources) }
         : {}),
-      ...(search && typeof meta?.searchMode === "string" ? { search_mode: classification(meta.searchMode, 40) } : {}),
+      ...(search && typeof meta?.searchMode === "string"
+        ? { search_mode: closedClassification(meta.searchMode, searchModes) }
+        : {}),
       ...(search && typeof meta?.resultCount === "number" ? { result_count: meta.resultCount } : {}),
       ...(search && typeof meta?.allowanceState === "string"
-        ? { allowance_state: classification(meta.allowanceState, 40) }
+        ? { allowance_state: closedClassification(meta.allowanceState, allowanceStates) }
         : {}),
     })
   }
@@ -558,7 +780,7 @@ export namespace OutboundTelemetry {
   export async function artifact(input: { sessionID: string; type: string; size: number }) {
     return append(input.sessionID, {
       event_type: "artifact.completed",
-      artifact_type: classification(input.type, 80),
+      artifact_type: closedClassification(input.type, artifactTypes),
       artifact_count: 1,
       size_bucket: sizeBucket(input.size),
       success: true,

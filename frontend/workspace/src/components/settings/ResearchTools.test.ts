@@ -46,6 +46,20 @@ describe("Research Tools settings", () => {
         }),
       ),
     ).toMatchObject({ label: "Community", tone: "neutral" })
+
+    expect(
+      searchStatus(
+        status({
+          search: {
+            ...status().search,
+            state: "unavailable",
+            limit: null,
+            used: null,
+            remaining: null,
+          },
+        }),
+      ),
+    ).toMatchObject({ label: "Allowance unavailable", tone: "neutral" })
   })
 
   test("discloses default-on sharing and corrupt-record fail-closed behavior", () => {

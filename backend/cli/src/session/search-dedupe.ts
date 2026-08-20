@@ -74,6 +74,16 @@ export namespace SearchDedupe {
     return signature(part.state.input)
   }
 
+  function dynamicTerminal(part: MessageV2.ToolPart & { state: MessageV2.ToolStateCompleted }) {
+    if (!RESEARCH_SEARCH_IDS.has(part.tool)) return false
+    try {
+      const output = JSON.parse(part.state.output) as Record<string, unknown>
+      return output.type === "search_unavailable" || output.type === "search_allowance_exhausted"
+    } catch {
+      return false
+    }
+  }
+
   export function find(
     messages: MessageV2.WithParts[],
     tool: string,
@@ -91,6 +101,7 @@ export namespace SearchDedupe {
         (part) =>
           equivalent(part.tool, tool) &&
           completedSignature(part) === expected &&
+          !dynamicTerminal(part) &&
           part.state.metadata.dedupeHit !== true,
       )
   }

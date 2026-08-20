@@ -69,3 +69,52 @@ test("dedupes a canonical research_search call against legacy websearch history"
     SearchDedupe.key("websearch", { query: "protein folding", numResults: 4 }),
   )
 })
+
+test("does not dedupe dynamic unavailable or exhausted search results", () => {
+  const dynamic = (
+    type: "search_unavailable" | "search_allowance_exhausted",
+    retryable?: boolean,
+  ): MessageV2.WithParts => ({
+    ...message,
+    parts: [
+      {
+        ...part,
+        tool: "research_search",
+        state: {
+          status: "completed",
+          input: {
+            query: "protein folding",
+            source: "web",
+            mode: "balanced",
+            limit: 4,
+            content: "snippets",
+          },
+          output: JSON.stringify({
+            status: "completed",
+            type,
+            retryable,
+            alternatives: ["science_search", "science_fetch", "WebFetch"],
+          }),
+          title: "Gateway search unavailable",
+          metadata: {},
+          time: { start: 100, end: 150 },
+        },
+      },
+    ],
+  })
+  for (const prior of [
+    dynamic("search_unavailable", true),
+    dynamic("search_unavailable", false),
+    dynamic("search_allowance_exhausted"),
+  ]) {
+    expect(
+      SearchDedupe.find([prior], "research_search", {
+        query: "protein folding",
+        source: "web",
+        mode: "balanced",
+        limit: 4,
+        content: "snippets",
+      }),
+    ).toBeUndefined()
+  }
+})

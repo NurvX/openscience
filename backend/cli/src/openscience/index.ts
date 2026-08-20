@@ -351,6 +351,15 @@ function withAtlasOnPath(env: Record<string, string>): Record<string, string> {
 export namespace OpenScience {
   let cachedProfile: AccountProfile | null | undefined
   let cachedEntitlements: ResearchEntitlements | undefined
+  let cachedEntitlementsAt = 0
+  let cachedEntitlementsAccount: string | undefined
+  let cachedEntitlementsFailureAt = 0
+  let cachedEntitlementsFailureAccount: string | undefined
+  let entitlementsGeneration = 0
+  let entitlementsRequest: { account: string; promise: Promise<ResearchEntitlements | null> } | undefined
+  const ENTITLEMENTS_CACHE_TTL_MS = 30_000
+  const ENTITLEMENTS_FAILURE_TTL_MS = 30_000
+  const ENTITLEMENTS_FETCH_TIMEOUT_MS = 1_500
   /** Report a non-production API override after the CLI has initialized its
    * log sink. Keeping this out of module initialization is important: runtime
    * launchers and library consumers import OpenScience inside child processes,
@@ -473,7 +482,7 @@ export namespace OpenScience {
 
   export async function saveSession(session: OpenScienceSession) {
     cachedProfile = undefined
-    cachedEntitlements = undefined
+    invalidateResearchEntitlements()
     await CredentialLifecycle.mutate("managed-session.set", () => writeSession(session))
   }
 
@@ -710,7 +719,7 @@ export namespace OpenScience {
       await clearAtlasCliConfig(session)
       await dropUsageQueue()
       cachedProfile = undefined
-      cachedEntitlements = undefined
+      invalidateResearchEntitlements()
       // Session file last, once the managed-key-replaying artifacts are gone.
       try {
         await fs.unlink(filepath)
@@ -1525,23 +1534,64 @@ export namespace OpenScience {
    * an entitlement request; the Gateway confirms the entitlement again when
    * the search is dispatched.
    */
-  export function hasManagedSearchEntitlement(): boolean {
-    if (cachedEntitlements?.managed_search?.enabled === true) return true
-    if (cachedEntitlements?.managed_search?.enabled === false) return false
+  function profileHasManagedSearchEntitlement(): boolean {
     const plan = cachedProfile?.subscription_plan?.toLowerCase()
     const status = cachedProfile?.subscription_status?.toLowerCase()
     if (plan !== "ace" && plan !== "ace_plus") return false
     return status === "active" || status === "trialing" || status === "grace"
   }
 
-  /** Resolve an initially unknown entitlement once at execution time. This is
-   * an account-capability read, never a wallet reload or a search charge. */
+  export function hasManagedSearchEntitlement(): boolean {
+    if (cachedEntitlements?.managed_search?.enabled === true) return true
+    if (cachedEntitlements?.managed_search?.enabled === false) return false
+    return profileHasManagedSearchEntitlement()
+  }
+
+  /** Drop managed-search capability state after an account transition or a
+   * Gateway rejection. The next execution performs a bounded entitlement read;
+   * it never touches the wallet or dispatches a search. */
+  export function invalidateResearchEntitlements() {
+    cachedEntitlements = undefined
+    cachedEntitlementsAt = 0
+    cachedEntitlementsAccount = undefined
+    cachedEntitlementsFailureAt = 0
+    cachedEntitlementsFailureAccount = undefined
+    entitlementsRequest = undefined
+    entitlementsGeneration++
+  }
+
+  /** Resolve managed-search eligibility at execution time. Cached decisions
+   * are bounded so a plan change is observed without refreshing on every tool
+   * call. A transient entitlement-read failure may use the last same-account
+   * decision, but an explicit Gateway rejection uses the strict refresh below. */
   export async function resolveManagedSearchEntitlement(): Promise<boolean> {
-    if (cachedEntitlements?.managed_search?.enabled !== undefined) {
+    const session = await getSession()
+    if (!session) return false
+    const account = accountTag(session)
+    const matching = cachedEntitlementsAccount === account
+    if (
+      matching &&
+      cachedEntitlements?.managed_search?.enabled !== undefined &&
+      Date.now() - cachedEntitlementsAt < ENTITLEMENTS_CACHE_TTL_MS
+    ) {
       return cachedEntitlements.managed_search.enabled === true
     }
-    if (hasManagedSearchEntitlement()) return true
-    const value = await getResearchEntitlements()
+    const fallback = matching ? cachedEntitlements?.managed_search?.enabled : profileHasManagedSearchEntitlement()
+    // A Gateway outage must not delay Free, BYOK, ChatGPT-subscription, or
+    // local research. Use only account state already observed locally and
+    // refresh the short-lived entitlement cache in the background.
+    void readResearchEntitlements(session).catch(() => undefined)
+    return fallback ?? false
+  }
+
+  /** Reconcile a stale optimistic entitlement after Gateway rejects a search.
+   * Failure is deliberately false: retrying the charged endpoint or trusting
+   * the rejected cache would route Free accounts back into managed search. */
+  export async function refreshManagedSearchEntitlementAfterRejection(): Promise<boolean> {
+    invalidateResearchEntitlements()
+    const session = await getSession()
+    if (!session) return false
+    const value = await readResearchEntitlements(session)
     return value?.managed_search?.enabled === true
   }
 
@@ -1549,23 +1599,65 @@ export namespace OpenScience {
   export async function getResearchEntitlements(): Promise<ResearchEntitlements | null> {
     const session = await getSession()
     if (!session) return null
-    try {
-      const res = await atlasFetch(`${API_BASE}/api/v1/entitlements`, {
-        headers: { Authorization: `Bearer ${session.api_key}`, Accept: "application/json" },
-      })
-      if (!res.ok) return null
-      const value = normalizeResearchEntitlements((await res.json()) as ResearchEntitlements)
-      cachedEntitlements = value
-      if (
-        value.capabilities?.proxy_settlement_authoritative === true &&
-        value.capabilities.cli_usage_financial === false
-      ) {
-        await rememberUsageCutover(session)
-      }
-      return value
-    } catch (error) {
-      log.warn("research entitlement read failed", { error: error instanceof Error ? error.message : String(error) })
+    return readResearchEntitlements(session)
+  }
+
+  async function readResearchEntitlements(session: OpenScienceSession): Promise<ResearchEntitlements | null> {
+    const account = accountTag(session)
+    if (
+      cachedEntitlementsFailureAccount === account &&
+      Date.now() - cachedEntitlementsFailureAt < ENTITLEMENTS_FAILURE_TTL_MS
+    ) {
       return null
+    }
+    if (entitlementsRequest?.account === account) return entitlementsRequest.promise
+    const generation = entitlementsGeneration
+    const pending = (async () => {
+      try {
+        const res = await atlasFetch(
+          `${API_BASE}/api/v1/entitlements`,
+          { headers: { Authorization: `Bearer ${session.api_key}`, Accept: "application/json" } },
+          ENTITLEMENTS_FETCH_TIMEOUT_MS,
+        )
+        if (!res.ok) {
+          if (generation === entitlementsGeneration) {
+            cachedEntitlementsFailureAt = Date.now()
+            cachedEntitlementsFailureAccount = account
+          }
+          return null
+        }
+        const value = normalizeResearchEntitlements((await res.json()) as ResearchEntitlements)
+        if (generation === entitlementsGeneration) {
+          cachedEntitlements = value
+          cachedEntitlementsAt = Date.now()
+          cachedEntitlementsAccount = account
+          cachedEntitlementsFailureAt = 0
+          cachedEntitlementsFailureAccount = undefined
+        }
+        if (
+          generation === entitlementsGeneration &&
+          value.capabilities?.proxy_settlement_authoritative === true &&
+          value.capabilities.cli_usage_financial === false
+        ) {
+          await rememberUsageCutover(session)
+        }
+        return value
+      } catch (error) {
+        if (generation === entitlementsGeneration) {
+          cachedEntitlementsFailureAt = Date.now()
+          cachedEntitlementsFailureAccount = account
+        }
+        log.warn("research entitlement read failed", {
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return null
+      }
+    })()
+    entitlementsRequest = { account, promise: pending }
+    try {
+      return await pending
+    } finally {
+      if (entitlementsRequest?.promise === pending) entitlementsRequest = undefined
     }
   }
 

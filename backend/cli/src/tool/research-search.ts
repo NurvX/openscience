@@ -88,11 +88,11 @@ function exhausted(value: Record<string, unknown> | undefined) {
   }
 }
 
-function metadata(input: Params, state: string, count = 0) {
+function metadata(input: Params, state: string, count?: number) {
   return {
     searchSource: input.source,
     searchMode: input.mode,
-    resultCount: count,
+    ...(count === undefined ? {} : { resultCount: count }),
     allowanceState: state,
   }
 }
@@ -166,7 +166,9 @@ async function community(input: Params, ctx: Tool.Context) {
     return {
       output: completed({ status: "completed", provider: "community", content, warnings, allowance: null }),
       title: `Community search: ${input.query}`,
-      metadata: metadata(input, "community", input.limit),
+      // The community MCP returns rendered text rather than a structured
+      // result array. Do not turn the requested limit into an observed count.
+      metadata: metadata(input, "community"),
     }
   } catch (error) {
     if (ctx.abort.aborted) throw error
@@ -235,6 +237,23 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
             output: completed(exhausted(failure)),
             title: "Managed-search allowance exhausted",
             metadata: metadata(input, "exhausted"),
+          }
+        }
+        const entitlementRejected =
+          response.status === 401 ||
+          response.status === 403 ||
+          code === "search_not_entitled" ||
+          code === "managed_search_unavailable"
+        if (entitlementRejected && !(await OpenScience.refreshManagedSearchEntitlementAfterRejection())) {
+          if (communityEnabled) return community(input, ctx)
+          return {
+            output: completed(
+              unavailable(
+                "Managed search is not available for this account. Use a supported Community search route, a direct scientific connector, or WebFetch for a known URL.",
+              ),
+            ),
+            title: "Research search unavailable",
+            metadata: metadata(input, "unavailable"),
           }
         }
         if (response.status >= 400) {

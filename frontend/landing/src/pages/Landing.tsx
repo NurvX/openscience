@@ -377,8 +377,8 @@ export default function Landing({
           </Faq>
           <Faq question="What data does OpenScience collect?">
             Content-free product telemetry is on by default and can be disabled in Settings. It records operational
-            events and usage totals, not prompts, responses, file contents, notebook cells, or shell output.
-            Research-content sharing is a separate explicit opt-in.
+            events and usage totals, not prompts, responses, file contents, notebook cells, or shell output. Research
+            content is not collected or shared; there is no content-sharing setting in this release.
           </Faq>
           <Faq question="What happens if managed search is unavailable?">
             Local, BYOK, ChatGPT-backed, and existing open-web workflows keep working. The client explains the
