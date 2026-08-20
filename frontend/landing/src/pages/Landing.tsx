@@ -1,5 +1,4 @@
 import { useState } from "react"
-import workspaceShot from "@/assets/workspace.png"
 
 const GITHUB = "https://github.com/synthetic-sciences/openscience"
 const DOCS = "https://openscience.sh/docs"
@@ -187,8 +186,8 @@ export default function Landing({
 
       <section id="top" className="relative border-b border-border/70">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_78%_14%,hsl(var(--accent-coral)/0.10),transparent_34%)]" />
-        <div className="relative mx-auto grid max-w-[1180px] gap-12 px-5 pb-20 pt-20 sm:px-8 sm:pb-24 sm:pt-28 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
-          <div className="rise max-w-[720px]">
+        <div className="relative mx-auto max-w-[1180px] px-5 pb-20 pt-20 sm:px-8 sm:pb-24 sm:pt-28">
+          <div className="rise max-w-[820px]">
             <Eyebrow>OPEN SOURCE RESEARCH AGENT</Eyebrow>
             <h1 className="text-balance text-[clamp(44px,6vw,76px)] leading-[1.01] tracking-[-0.03em]">
               Do the work. Keep the evidence.
@@ -207,12 +206,6 @@ export default function Landing({
             <p className="mt-4 text-[12px] leading-5 text-foreground/45">
               macOS, Linux, and Windows. The desktop and local runtime remain free.
             </p>
-          </div>
-          <div className="rise relative" style={{ animationDelay: "90ms" }}>
-            <div className="absolute -inset-4 bg-[hsl(var(--accent-coral)/0.06)] blur-3xl" aria-hidden />
-            <div className="relative overflow-hidden border border-border/90 bg-secondary/45 p-2 shadow-2xl shadow-black/25">
-              <img src={workspaceShot} alt="OpenScience research workspace" className="block h-auto w-full" />
-            </div>
           </div>
         </div>
       </section>
@@ -260,9 +253,8 @@ export default function Landing({
               Start free. Add managed capacity when the work gets serious.
             </h2>
             <p className="mt-5 max-w-[66ch] text-[16px] leading-8 text-foreground/65">
-              Purchased credits are your credit balance and pay for managed model usage. Search and promotional credits
-              are tracked separately. Auto reload is selected for new checkout, shown before payment, and can be turned
-              off at any time.
+              Wallet credits pay for managed model usage. Search allowances and promotional credits stay separate. Auto
+              reload is selected for new checkout, shown before payment, and can be turned off at any time.
             </p>
           </div>
           <div className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -285,11 +277,11 @@ export default function Landing({
               priceNote="Verified .edu: $10 for the first month"
               description="Skip provider setup and keep momentum with managed model spend, research search, and a hosted scientist."
               features={[
-                "20 purchased credits added every month",
+                "$20 added to Wallet every month",
                 "1,000 completed managed searches each billing cycle",
                 "1 hosted Synthetic Scientists research run at a time",
                 "Standard support",
-                "Managed web workspace — coming soon",
+                "Managed web workspace (coming soon)",
               ]}
               href={`${APP}/billing?plan=ace`}
               featured
@@ -301,12 +293,12 @@ export default function Landing({
               priceNote="Verified .edu: $50 for the first month"
               description="Run sustained and parallel investigations with more managed capacity, more search, and higher hosted limits."
               features={[
-                "100 purchased credits added every month",
-                "50 promotional credits each cycle — separate and expiring",
+                "$100 added to Wallet every month",
+                "$50 in promotional credits each cycle, separate and expiring",
                 "5,000 completed managed searches each billing cycle",
                 "3 hosted Synthetic Scientists research runs at a time",
                 "Priority support and early access",
-                "Collaboration and managed web workspace — coming soon",
+                "Collaboration and managed web workspace (coming soon)",
               ]}
               href={`${APP}/billing?plan=ace_plus`}
               label="MORE CAPACITY"
@@ -326,10 +318,10 @@ export default function Landing({
             />
           </div>
           <p className="mt-7 text-[13px] leading-6 text-foreground/50">
-            Eligible .edu accounts receive 50% off their first month. Your credit balance contains purchased credits
-            only. Ace+ promotional credits are shown separately, expire at the end of the billing cycle, and do not roll
-            over. Managed token usage is charged at provider cost plus a 5% service fee. Card processing is included in
-            the plan price with no additional checkout fee.
+            Eligible .edu accounts receive 50% off their first month. Your Wallet holds paid credits only. Ace+
+            promotional credits are shown separately, expire at the end of the billing cycle, and do not roll over.
+            Managed token usage is charged at provider cost plus a 5% service fee. Card processing is included in the
+            plan price with no additional checkout fee.
           </p>
         </div>
       </section>
@@ -345,7 +337,7 @@ export default function Landing({
           </h2>
           <p className="mt-5 text-[16px] leading-8 text-foreground/65">
             Install the CLI, open a project, and start working. Connect the Gateway only if you want synced private
-            graphs, managed search, or purchased credits.
+            graphs, managed search, or Wallet credits.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button href={DOCS}>Read the docs</Button>
@@ -376,9 +368,9 @@ export default function Landing({
             available without an Ace plan. Ace is the optional managed Gateway plan.
           </Faq>
           <Faq question="What is a credit?">
-            One purchased credit is one US dollar in your managed Gateway credit balance. Managed model calls debit
-            provider cost plus a 5% service fee. Ace+ promotional credits and search allowances are counted separately;
-            neither is part of your purchased-credit balance.
+            One Wallet credit is one US dollar in your managed Gateway balance. Managed model calls debit provider cost
+            plus a 5% service fee. Ace+ promotional credits and search allowances are counted separately; neither is
+            part of your Wallet balance.
           </Faq>
           <Faq question="How does auto reload work?">
             New Ace checkouts show auto reload selected by default with the threshold, amount, and monthly cap visible
