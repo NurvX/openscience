@@ -113,7 +113,9 @@ function Plan({ name, price, priceNote, description, features, href, featured = 
         ) : null}
       </div>
       <p className="mt-5 font-terminal text-[28px] tabular-nums text-foreground">{price}</p>
-      {priceNote ? <p className="mt-2 min-h-5 font-terminal text-[11px] tabular-nums text-foreground/48">{priceNote}</p> : null}
+      {priceNote ? (
+        <p className="mt-2 min-h-5 font-terminal text-[11px] tabular-nums text-foreground/48">{priceNote}</p>
+      ) : null}
       <p className="mt-4 min-h-[96px] text-[14px] leading-6 text-foreground/68">{description}</p>
       <ul className="mt-6 space-y-3">
         {features.map((feature, index) => (
