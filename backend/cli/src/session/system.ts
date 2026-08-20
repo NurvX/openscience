@@ -4,6 +4,8 @@ import { Instance } from "../project/instance"
 import { SessionFilesystem } from "./filesystem"
 
 import PROMPT_CORE from "./prompt/core.txt"
+import PROMPT_DIRECT from "./prompt/direct.txt"
+import PROMPT_INSPECTION from "./prompt/inspection.txt"
 import type { Provider } from "@/provider/provider"
 import { Config } from "../config/config"
 import { Skill } from "../skill"
@@ -11,86 +13,129 @@ import { PermissionNext } from "../permission/next"
 import { ComputePrompt } from "../compute/prompt"
 
 export namespace SystemPrompt {
-  export function instructions() {
+  const skillPrompts = new WeakMap<Skill.Info[], Map<string, string>>()
+
+  export function instructions(direct = false, inspection = false) {
+    if (direct) return `You are OpenScience.\n\n${PROMPT_DIRECT.trim()}`
+    if (inspection) return `You are OpenScience.\n\n${PROMPT_INSPECTION.trim()}`
     return PROMPT_CORE.trim()
   }
 
-  export function provider(_model: Provider.Model) {
-    return [PROMPT_CORE]
+  export function provider(_model: Provider.Model, direct = false, inspection = false) {
+    return [direct || inspection ? instructions(direct, inspection) : PROMPT_CORE]
   }
 
   export async function compute(value?: unknown) {
     return [await ComputePrompt.system(value)]
   }
 
-  /** When the user message begins with `/<name>` matching an installed
-   *  skill, the model should invoke the skill tool immediately and
-   *  silently — zero text output before the tool call. */
-  export function slashSkillDirective(): string[] {
-    return [
-      `<slash-skill-invocation>
-When the user message begins with /<name> and <name> matches an available
-skill:
-
-1. Your VERY FIRST output token must be the tool call to skill({name: "<name>"}).
-2. Produce ZERO text before the tool call. No "I'll load", no "Loading X",
-   no "Sure, let me consult X first", no acknowledgement of any kind.
-3. After the tool returns, your next user-visible message is your direct
-   response to the user's actual request (which may be implicit in just
-   "/<name>" — in that case ask what they want, but ONLY after the tool
-   returns, never before).
-
-FORBIDDEN outputs before the skill tool call (these are all wrong):
-  ❌ "I'll load the caveman skill as requested."
-  ❌ "Let me consult the caveman skill first."
-  ❌ "Loading caveman..."
-  ❌ "Sure, I'll use that skill."
-
-CORRECT pattern:
-  [no text]
-  → skill({name: "caveman"}) tool call
-  → tool result lands
-  → [now you may speak, using the loaded skill's voice]
-
-If <name> is NOT a known skill, treat the / as literal text and respond
-normally.
-</slash-skill-invocation>`,
-    ]
-  }
-
-  export async function availableSkills(permission: PermissionNext.Ruleset) {
-    const skills = (await Skill.all()).filter(
-      (skill) => PermissionNext.evaluate("skill", skill.name, permission).action !== "deny",
-    )
+  export async function availableSkills(permission: PermissionNext.Ruleset, message?: string) {
+    const catalog = await Skill.all()
+    const key = (message?.length ?? 0) <= 8_192 ? JSON.stringify([permission, message ?? ""]) : undefined
+    const cache = (() => {
+      const current = skillPrompts.get(catalog)
+      if (current) return current
+      const value = new Map<string, string>()
+      skillPrompts.set(catalog, value)
+      return value
+    })()
+    if (key) {
+      const cached = cache.get(key)
+      if (cached) return cached
+    }
+    const publish = (value: string) => {
+      if (!key) return value
+      cache.set(key, value)
+      if (cache.size > 32) cache.delete(cache.keys().next().value!)
+      return value
+    }
+    const skills = catalog.filter((skill) => PermissionNext.evaluate("skill", skill.name, permission).action !== "deny")
     if (skills.length === 0) {
-      return [
-        "<available-skills>",
-        "No skills are currently available. Static skill routing tables are guidance only.",
-        "Do not call the skill tool because no skill name will resolve.",
-        "</available-skills>",
-      ].join("\n")
+      return publish(
+        [
+          "<available-skills>",
+          "No skills are currently available. Static skill routing tables are guidance only.",
+          "Do not call the skill tool because no skill name will resolve.",
+          "</available-skills>",
+        ].join("\n"),
+      )
     }
 
-    const groups = new Map<string, string[]>()
+    const groups = new Map<string, number>()
     for (const skill of skills) {
       const category = skill.category ?? "other"
-      groups.set(category, [...(groups.get(category) ?? []), skill.name])
+      groups.set(category, (groups.get(category) ?? 0) + 1)
     }
 
     const list = [...groups.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .flatMap(([category, names]) => [
-        `### ${category}`,
-        ...names.sort((a, b) => a.localeCompare(b)).map((name) => `- ${name}`),
-      ])
+      .map(([category, count]) => `${category} (${count})`)
+      .join(", ")
+    const total = skills.length === 1 ? "1 skill is" : `${skills.length} skills are`
+    const name = message
+      ?.trimStart()
+      .match(/^\/([a-z0-9][a-z0-9_-]*)(?:\s|$)/i)?.[1]
+      ?.toLowerCase()
+    const stop = new Set([
+      "and",
+      "answer",
+      "available",
+      "concise",
+      "final",
+      "for",
+      "from",
+      "most",
+      "outline",
+      "relevant",
+      "skill",
+      "sound",
+      "the",
+      "this",
+      "use",
+      "with",
+      "workflow",
+    ])
+    const words = (value: string) =>
+      new Set((value.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((word) => word.length > 2 && !stop.has(word)))
+    const query = words(message ?? "")
+    const matches = skills
+      .map((skill) => {
+        const keys = words(`${skill.name} ${skill.category ?? "other"}`)
+        const body = words(skill.description)
+        const score = [...query].reduce((sum, word) => sum + (keys.has(word) ? 4 : body.has(word) ? 1 : 0), 0)
+        return { skill, score }
+      })
+      .filter((item) => item.score > 1)
+      .sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
+      .slice(0, 8)
+    const likely = matches.length
+      ? [
+          "Likely matches for this request:",
+          ...matches.map(
+            (item) =>
+              `- ${item.skill.name}: ${item.skill.description.slice(0, 120)}${item.skill.description.length > 120 ? "..." : ""}`,
+          ),
+        ]
+      : []
+    const invoke =
+      name && skills.some((skill) => skill.name === name)
+        ? [
+            "<slash-skill-invocation>",
+            `The user invoked /${name}. First output skill({name:"${name}"}) with no preceding text. After it returns, answer the request; when the message was only /${name}, ask what they want then.`,
+            "</slash-skill-invocation>",
+          ]
+        : []
 
-    return [
-      "<available-skills>",
-      "Only the skill names below are currently loaded and callable.",
-      "Static skill routing tables are guidance only. Never call a skill absent from this list.",
-      ...list,
-      "</available-skills>",
-    ].join("\n")
+    return publish(
+      [
+        "<available-skills>",
+        `${total} callable across: ${list}.`,
+        ...likely,
+        "Load a likely match directly, or browse a relevant category when the shortlist is insufficient. Do not guess other names from static routing tables.",
+        "</available-skills>",
+        ...invoke,
+      ].join("\n"),
+    )
   }
 
   export async function planModeInstructions(): Promise<string[]> {

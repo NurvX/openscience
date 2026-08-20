@@ -17,7 +17,6 @@ test("every WebFetch instruction teaches one root-download then sandboxed-move s
   const prompts = await Promise.all([
     read("session/prompt/core.txt"),
     read("agent/prompt/research.txt"),
-    read("tool/task.txt"),
     read("tool/webfetch.txt"),
   ])
   for (const prompt of prompts) {
@@ -57,9 +56,30 @@ test("every provider receives one compact product operating contract", () => {
   expect(instructions).not.toContain("project init")
 })
 
+test("direct answers receive a compact truth-preserving core", () => {
+  const instructions = SystemPrompt.instructions(true)
+  expect(SystemPrompt.provider(undefined as never, true)[0]?.trim()).toBe(instructions)
+  expect(instructions.length).toBeLessThan(350)
+  expect(instructions).toContain("You are OpenScience")
+  expect(instructions).toContain("requested format")
+  expect(instructions).toContain("Do not plan, use tools, delegate, search")
+  expect(instructions).toContain("uncertainty")
+})
+
+test("read-only inspections receive a compact evidence-preserving core", () => {
+  const instructions = SystemPrompt.instructions(false, true)
+  expect(SystemPrompt.provider(undefined as never, false, true)[0]?.trim()).toBe(instructions)
+  expect(instructions.length).toBeLessThan(350)
+  expect(instructions).toContain("You are OpenScience")
+  expect(instructions).toContain("requested local files")
+  expect(instructions).toContain("observed")
+  expect(instructions).toContain("Do not modify files")
+})
+
 test("the primary and domain prompts stay adaptive instead of procedural", async () => {
-  const [research, ml, biology, physics] = await Promise.all([
+  const [research, direct, ml, biology, physics] = await Promise.all([
     read("agent/prompt/research.txt"),
+    read("session/prompt/direct.txt"),
     read("agent/prompt/ml.txt"),
     read("agent/prompt/biology.txt"),
     read("agent/prompt/physics.txt"),
@@ -84,6 +104,9 @@ test("the primary and domain prompts stay adaptive instead of procedural", async
   expect(research).toContain("optional binaries as capabilities")
   expect(research).toContain("never\n  convert failed candidates to NaN")
   expect(research).toContain("without a filtering pipeline")
+  expect(direct.length).toBeLessThan(300)
+  expect(direct).toContain("Do not plan, use tools, delegate, search")
+  expect(direct).toContain("requested format")
   expect(research).not.toContain("data once to the workspace with Shell")
   expect(research).toContain("immutable data release")
   expect(ml).toContain("simplest method")
@@ -99,15 +122,11 @@ test("delegation is rare, bounded, and observable", async () => {
   expect(TASK_WALL_CLOCK_MS).toEqual({ normal: 600_000, ultra: 1_200_000 })
   expect(DELEGATION_PROFILES.filter(isComputeDelegationProfile)).toEqual(["execute"])
   expect(["biology", "ml", "physics"].some(isComputeDelegationProfile)).toBe(false)
-  expect(prompt).toContain("default to zero children")
-  expect(prompt).toContain("at most two")
-  expect(prompt).toContain("at most four")
-  expect(prompt).toContain("Task calls total per user turn")
-  expect(prompt).toContain("large or binary scientific data")
-  expect(prompt).toContain("output_path")
-  expect(prompt).not.toContain("data once to the workspace with Shell")
-  expect(prompt).toContain("immutable release")
-  expect(prompt).toContain("failed child")
+  expect(prompt).toContain("Default to no children")
+  expect(prompt).toContain("Normal permits two calls per turn")
+  expect(prompt).toContain("Ultra four")
+  expect(prompt).toContain("continuations count")
+  expect(prompt).toContain("optional failure must not block")
   expect(prompt).not.toContain("trusted")
   expect(source).toContain("durationMs")
   expect(source).toContain("failedToolCalls")
