@@ -26,12 +26,12 @@ The public product is called **Gateway**. The OpenScience landing page becomes s
 
 ## 2. Plans and entitlements
 
-| Plan | Price | Credits | Managed search | Included access |
-|---|---:|---:|---:|---|
-| Free | $0 | None | Preserve the current community/basic path with its existing availability and limits | Open-source desktop/local runtime, BYOK, ChatGPT/Codex routes, local models, scientific connectors, `WebFetch`, local traces, and owned/private graphs when signed in |
-| Ace | $20/month | 20 purchased credits each successful renewal | 1,000 completed managed searches per subscription period | Hosted Synthetic Scientists access, one hosted run at a time, Gateway search, standard support, managed web when shipped |
-| Ace+ | $100/month | 150 advertised monthly credits: 100 purchased + 50 promotional | 5,000 completed managed searches per subscription period | Hosted Synthetic Scientists access, three hosted runs at a time, priority support, early access, higher managed-service limits, collaboration and managed web when shipped |
-| Teams | Contract | Contracted | Contracted | Organization billing, SSO/admin, multi-user controls, contracted ZDR provider routes, private/on-prem data and cluster integrations, dedicated support and SLA options |
+| Plan  |      Price |                                                        Credits |                                                                      Managed search | Included access                                                                                                                                                            |
+| ----- | ---------: | -------------------------------------------------------------: | ----------------------------------------------------------------------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Free  |         $0 |                                                           None | Preserve the current community/basic path with its existing availability and limits | Open-source desktop/local runtime, BYOK, ChatGPT/Codex routes, local models, scientific connectors, `WebFetch`, local traces, and owned/private graphs when signed in      |
+| Ace   |  $20/month |                   20 purchased credits each successful renewal |                            1,000 completed managed searches per subscription period | Hosted Synthetic Scientists access, one hosted run at a time, Gateway search, standard support, managed web when shipped                                                   |
+| Ace+  | $100/month | 150 advertised monthly credits: 100 purchased + 50 promotional |                            5,000 completed managed searches per subscription period | Hosted Synthetic Scientists access, three hosted runs at a time, priority support, early access, higher managed-service limits, collaboration and managed web when shipped |
+| Teams |   Contract |                                                     Contracted |                                                                          Contracted | Organization billing, SSO/admin, multi-user controls, contracted ZDR provider routes, private/on-prem data and cluster integrations, dedicated support and SLA options     |
 
 ### 2.1 Credit semantics
 
@@ -56,19 +56,19 @@ The public product is called **Gateway**. The OpenScience landing page becomes s
 
 ## 3. Non-subscriber compatibility contract
 
-| Capability | Free / no active plan | Ace / Ace+ |
-|---|---|---|
-| Desktop and local runtime | Unchanged | Unchanged |
-| BYOK providers | Unchanged; no Gateway wallet charge | Unchanged; no Gateway wallet charge |
-| ChatGPT/Codex subscription routes | Unchanged; no Gateway wallet charge | Unchanged; no Gateway wallet charge |
-| Local models | Unchanged | Unchanged |
-| `science_search` / `science_fetch` | Unchanged | Unchanged |
-| `WebFetch` and workspace downloads | Unchanged | Unchanged |
-| Web search | Preserved community/basic implementation | Managed Gateway search with included allowance |
-| Local run history | Full local trace | Full local trace |
-| Shared analytics | Default on, disableable | Default on, disableable |
-| Graphs | Owned and explicitly shared private graphs | Same |
-| Hosted Synthetic Scientists | Not included; local/user-funded paths remain | Membership entitlement; spend still metered |
+| Capability                         | Free / no active plan                        | Ace / Ace+                                     |
+| ---------------------------------- | -------------------------------------------- | ---------------------------------------------- |
+| Desktop and local runtime          | Unchanged                                    | Unchanged                                      |
+| BYOK providers                     | Unchanged; no Gateway wallet charge          | Unchanged; no Gateway wallet charge            |
+| ChatGPT/Codex subscription routes  | Unchanged; no Gateway wallet charge          | Unchanged; no Gateway wallet charge            |
+| Local models                       | Unchanged                                    | Unchanged                                      |
+| `science_search` / `science_fetch` | Unchanged                                    | Unchanged                                      |
+| `WebFetch` and workspace downloads | Unchanged                                    | Unchanged                                      |
+| Web search                         | Preserved community/basic implementation     | Managed Gateway search with included allowance |
+| Local run history                  | Full local trace                             | Full local trace                               |
+| Shared analytics                   | Default on, disableable                      | Default on, disableable                        |
+| Graphs                             | Owned and explicitly shared private graphs   | Same                                           |
+| Hosted Synthetic Scientists        | Not included; local/user-funded paths remain | Membership entitlement; spend still metered    |
 
 Compatibility rules:
 
@@ -517,19 +517,19 @@ Gateway service:
 
 ## 14. Named failure behavior
 
-| Condition | User behavior | Accounting behavior |
-|---|---|---|
-| Gateway unavailable | Managed action shows one retryable error; local/BYOK/ChatGPT/science tools continue | No debit; reservation released or reconciled |
-| Search allowance exhausted | Show reset and upgrade; offer community/science/WebFetch alternatives | No wallet charge or reload |
-| Firecrawl validation/auth failure | Specific unavailable message; no agent retry loop | Zero searches consumed |
-| Usable partial search | Show partial warning and results | One search consumed |
-| Managed provider accepted but response lost | Show pending/reconciliation state, not blind retry | Hold remains `unknown` until reconciled |
-| Empty wallet | Managed model/hosted action offers top-up or BYOK | No negative balance |
-| Auto-reload payment failure | Notify once; allow manual top-up and free routes | No repeated PaymentIntent loop |
-| Telemetry offline | No user interruption | Bounded queue or drop; never bill |
-| Telemetry disabled | Research unchanged | Upload stops, queue clears, ID rotates |
-| Hidden public graph URL | 404 | No visibility data changed |
-| Hidden Compute route | Return to Graphs; existing CLI API stays available | No data changed |
+| Condition                                   | User behavior                                                                       | Accounting behavior                          |
+| ------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| Gateway unavailable                         | Managed action shows one retryable error; local/BYOK/ChatGPT/science tools continue | No debit; reservation released or reconciled |
+| Search allowance exhausted                  | Show reset and upgrade; offer community/science/WebFetch alternatives               | No wallet charge or reload                   |
+| Firecrawl validation/auth failure           | Specific unavailable message; no agent retry loop                                   | Zero searches consumed                       |
+| Usable partial search                       | Show partial warning and results                                                    | One search consumed                          |
+| Managed provider accepted but response lost | Show pending/reconciliation state, not blind retry                                  | Hold remains `unknown` until reconciled      |
+| Empty wallet                                | Managed model/hosted action offers top-up or BYOK                                   | No negative balance                          |
+| Auto-reload payment failure                 | Notify once; allow manual top-up and free routes                                    | No repeated PaymentIntent loop               |
+| Telemetry offline                           | No user interruption                                                                | Bounded queue or drop; never bill            |
+| Telemetry disabled                          | Research unchanged                                                                  | Upload stops, queue clears, ID rotates       |
+| Hidden public graph URL                     | 404                                                                                 | No visibility data changed                   |
+| Hidden Compute route                        | Return to Graphs; existing CLI API stays available                                  | No data changed                              |
 
 ## 15. One bounded verification pass
 
