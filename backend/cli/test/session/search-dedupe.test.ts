@@ -55,3 +55,17 @@ test("reuses one completed identical search and marks the new call as a dedupe h
   expect(SearchDedupe.find([message], "websearch", { query: "different", numResults: 4 })).toBeUndefined()
   expect(SearchDedupe.find([message], "read", { filePath: "/tmp/file" })).toBeUndefined()
 })
+
+test("dedupes a canonical research_search call against legacy websearch history", () => {
+  const hit = SearchDedupe.find([message], "research_search", {
+    query: "protein folding",
+    source: "web",
+    mode: "balanced",
+    limit: 4,
+    content: "snippets",
+  })
+  expect(hit?.id).toBe("part_search")
+  expect(SearchDedupe.key("research_search", { query: "protein folding", limit: 4 })).toBe(
+    SearchDedupe.key("websearch", { query: "protein folding", numResults: 4 }),
+  )
+})

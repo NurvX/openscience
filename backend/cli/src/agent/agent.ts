@@ -21,6 +21,7 @@ import { Global } from "@/global"
 import path from "path"
 import { Plugin } from "@/plugin"
 import { State } from "@/project/state"
+import { OutboundTelemetry } from "@/telemetry/outbound"
 
 export namespace Agent {
   export const Info = z
@@ -517,6 +518,7 @@ export namespace Agent {
 
   export async function generate(input: { description: string; model?: { providerID: string; modelID: string } }) {
     const cfg = await Config.getExecution()
+    const sharing = await OutboundTelemetry.enabled()
     const defaultModel = input.model ?? (await Provider.defaultModel())
     const model = await Provider.getModel(defaultModel.providerID, defaultModel.modelID)
     const language = await Provider.getLanguage(model)
@@ -527,7 +529,9 @@ export namespace Agent {
 
     const params = {
       experimental_telemetry: {
-        isEnabled: cfg.experimental?.openTelemetry,
+        isEnabled: cfg.experimental?.openTelemetry === true && sharing,
+        recordInputs: false,
+        recordOutputs: false,
         metadata: {
           userId: cfg.username ?? "unknown",
         },

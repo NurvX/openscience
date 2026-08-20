@@ -185,6 +185,66 @@ interface SyncResponse {
 
 export type AccountProfile = SyncResponse["user"]
 
+export interface ResearchEntitlements {
+  plan?: string | null
+  catalog_version?: string | null
+  status?: string | null
+  hosted_research?: { enabled?: boolean; concurrency?: number }
+  managed_search?: {
+    enabled?: boolean
+    available?: boolean
+    limit?: number
+    used?: number
+    reserved?: number
+    remaining?: number
+    reset_at?: string | null
+    allowance?: {
+      limit?: number
+      used?: number
+      reserved?: number
+      remaining?: number
+      reset_at?: string | null
+    }
+  }
+  capabilities?: {
+    proxy_settlement_authoritative?: boolean
+    cli_usage_financial?: boolean
+    telemetry_schema_version?: number
+  }
+}
+
+/** Accept both the initial Gateway entitlement shape (`available` plus a
+ * nested `allowance`) and the rollout aliases (`enabled` plus flat counts).
+ * Consumers see one flat contract while mixed-version clients and servers
+ * coexist. */
+export function normalizeResearchEntitlements(value: ResearchEntitlements): ResearchEntitlements {
+  const search = value.managed_search
+  if (!search) return value
+  return {
+    ...value,
+    managed_search: {
+      ...(search.allowance ?? {}),
+      ...search,
+      // During rollout some Gateway builds used `enabled` for provider
+      // readiness, even on Free. `available` is the account-level decision
+      // whenever present; only older responses fall back to `enabled`.
+      enabled: search.available ?? search.enabled ?? false,
+    },
+  }
+}
+
+export interface ResearchSearchInput {
+  query: string
+  source: "web" | "research" | "news" | "developer"
+  mode: "fast" | "balanced" | "deep"
+  limit: number
+  content: "snippets" | "top"
+  include_domains?: string[]
+  exclude_domains?: string[]
+  published_after?: string
+  published_before?: string
+}
+
 /**
  * Returns an actionable one-liner for a disconnected provider based on the
  * reason code returned by the backend sync endpoint.
@@ -196,11 +256,11 @@ function describeReason(provider: string, reason: SyncedServiceReason | undefine
     case "no_credits":
       return `${provider}: Credits are empty - top up at https://app.syntheticsciences.ai/billing.`
     case "ineligible_plan":
-      return `${provider}: refresh Atlas and reconnect the key — BYOK is available on every plan.`
+      return `${provider}: refresh Gateway and reconnect the key — BYOK is available on every plan.`
     case "proxy_disabled":
-      return `${provider}: Atlas managed mode is disabled on this deployment — BYOK only.`
+      return `${provider}: Gateway managed mode is disabled on this deployment — BYOK only.`
     case "managed_key_unconfigured":
-      return `${provider}: Atlas managed mode unavailable on this deployment — ask the admin.`
+      return `${provider}: Gateway managed mode unavailable on this deployment — ask the admin.`
     case "managed_via_openrouter":
       return `${provider}: wallet access to ${provider} models routes through the openrouter provider — pick them there, or add your own ${provider} key for direct access.`
     default:
@@ -289,6 +349,8 @@ function withAtlasOnPath(env: Record<string, string>): Record<string, string> {
 }
 
 export namespace OpenScience {
+  let cachedProfile: AccountProfile | null | undefined
+  let cachedEntitlements: ResearchEntitlements | undefined
   /** Report a non-production API override after the CLI has initialized its
    * log sink. Keeping this out of module initialization is important: runtime
    * launchers and library consumers import OpenScience inside child processes,
@@ -393,6 +455,7 @@ export namespace OpenScience {
       .then(async (response) => {
         if (!response.ok) return null
         const data = (await response.json()) as SyncResponse
+        cachedProfile = data.user
         return data.user
       })
       .catch((error) => {
@@ -409,6 +472,8 @@ export namespace OpenScience {
   }
 
   export async function saveSession(session: OpenScienceSession) {
+    cachedProfile = undefined
+    cachedEntitlements = undefined
     await CredentialLifecycle.mutate("managed-session.set", () => writeSession(session))
   }
 
@@ -644,6 +709,8 @@ export namespace OpenScience {
       syncedSecretValues.clear()
       await clearAtlasCliConfig(session)
       await dropUsageQueue()
+      cachedProfile = undefined
+      cachedEntitlements = undefined
       // Session file last, once the managed-key-replaying artifacts are gone.
       try {
         await fs.unlink(filepath)
@@ -897,7 +964,7 @@ export namespace OpenScience {
         if (res.status === 402) {
           // Legacy Atlas deployments can report wallet eligibility here. Keep
           // the valid session: local and dashboard-saved BYOK remain free.
-          log.warn("Atlas wallet unavailable - BYOK remains available on every plan")
+          log.warn("Gateway wallet unavailable - BYOK remains available on every plan")
           return null
         }
         log.warn("sync failed", { status: res.status })
@@ -905,6 +972,7 @@ export namespace OpenScience {
       }
 
       const data: SyncResponse = await res.json()
+      cachedProfile = data.user
       // Count distinct credential VALUES, ignoring *_BASE_URL routing config.
       // Many providers broadcast the same managed thk_* under several env-var
       // names (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / ...) —
@@ -1451,6 +1519,98 @@ export namespace OpenScience {
     }
   }
 
+  /**
+   * Resolve managed-search eligibility from state already observed during
+   * account sync or a status read. Tool registry construction never performs
+   * an entitlement request; the Gateway confirms the entitlement again when
+   * the search is dispatched.
+   */
+  export function hasManagedSearchEntitlement(): boolean {
+    if (cachedEntitlements?.managed_search?.enabled === true) return true
+    if (cachedEntitlements?.managed_search?.enabled === false) return false
+    const plan = cachedProfile?.subscription_plan?.toLowerCase()
+    const status = cachedProfile?.subscription_status?.toLowerCase()
+    if (plan !== "ace" && plan !== "ace_plus") return false
+    return status === "active" || status === "trialing" || status === "grace"
+  }
+
+  /** Resolve an initially unknown entitlement once at execution time. This is
+   * an account-capability read, never a wallet reload or a search charge. */
+  export async function resolveManagedSearchEntitlement(): Promise<boolean> {
+    if (cachedEntitlements?.managed_search?.enabled !== undefined) {
+      return cachedEntitlements.managed_search.enabled === true
+    }
+    if (hasManagedSearchEntitlement()) return true
+    const value = await getResearchEntitlements()
+    return value?.managed_search?.enabled === true
+  }
+
+  /** Read the Gateway plan/search allowance contract for user-facing status. */
+  export async function getResearchEntitlements(): Promise<ResearchEntitlements | null> {
+    const session = await getSession()
+    if (!session) return null
+    try {
+      const res = await atlasFetch(`${API_BASE}/api/v1/entitlements`, {
+        headers: { Authorization: `Bearer ${session.api_key}`, Accept: "application/json" },
+      })
+      if (!res.ok) return null
+      const value = normalizeResearchEntitlements((await res.json()) as ResearchEntitlements)
+      cachedEntitlements = value
+      if (
+        value.capabilities?.proxy_settlement_authoritative === true &&
+        value.capabilities.cli_usage_financial === false
+      ) {
+        await rememberUsageCutover(session)
+      }
+      return value
+    } catch (error) {
+      log.warn("research entitlement read failed", { error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
+  /** One top-level Gateway search dispatch. No billing or wallet endpoint is touched. */
+  export async function dispatchResearchSearch(
+    input: ResearchSearchInput,
+    operationID: string,
+    signal: AbortSignal,
+  ): Promise<{ status: number; body: unknown } | null> {
+    const session = await getSession()
+    if (!session) return null
+    try {
+      const res = await atlasFetch(
+        `${API_BASE}/api/v1/research/search`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.api_key}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "Idempotency-Key": operationID,
+          },
+          body: JSON.stringify({ ...input, operation_id: operationID }),
+          signal,
+        },
+        35_000,
+      )
+      const text = await res.text()
+      const body = text
+        ? (() => {
+            try {
+              return JSON.parse(text) as unknown
+            } catch {
+              return { detail: { code: "search_unavailable", message: `Gateway search returned HTTP ${res.status}` } }
+            }
+          })()
+        : {}
+      return { status: res.status, body }
+    } catch (error) {
+      if (signal.aborted) throw error
+      log.warn("Gateway research search failed", { error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
   /** Invalidate balance cache (call after usage report) */
   export function invalidateBalanceCache() {
     cachedBalance = null
@@ -1465,6 +1625,7 @@ export namespace OpenScience {
   }
 
   const pendingQueuePath = path.join(Global.Path.data, "usage-queue.jsonl")
+  const usageCapabilityPath = path.join(Global.Path.data, "usage-capabilities.json")
 
   /** Stable per-account tag stored with a queued usage row so a later flush can't
    *  bill a DIFFERENT account for it. user_id when known, else a short hash of the
@@ -1472,6 +1633,50 @@ export namespace OpenScience {
   function accountTag(session: OpenScienceSession): string {
     if (session.user_id) return session.user_id
     return "k:" + createHash("sha256").update(session.api_key).digest("hex").slice(0, 16)
+  }
+
+  type UsageCapabilities = {
+    schema_version: 1
+    accounts: Record<string, { nonfinancial: true; observed_at: string }>
+  }
+
+  function isNonfinancialAcknowledgement(data: unknown): boolean {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return false
+    const value = data as Record<string, unknown>
+    return value.financial === false && value.billing_authority === "gateway_proxy"
+  }
+
+  async function readUsageCapabilities(): Promise<UsageCapabilities> {
+    try {
+      const value = (await Bun.file(usageCapabilityPath).json()) as Partial<UsageCapabilities>
+      if (value.schema_version !== 1 || !value.accounts || typeof value.accounts !== "object") {
+        return { schema_version: 1, accounts: {} }
+      }
+      return { schema_version: 1, accounts: value.accounts }
+    } catch {
+      return { schema_version: 1, accounts: {} }
+    }
+  }
+
+  async function rememberUsageCutover(session: OpenScienceSession): Promise<void> {
+    const current = await readUsageCapabilities()
+    current.accounts[accountTag(session)] = { nonfinancial: true, observed_at: new Date().toISOString() }
+    await atomicWrite(usageCapabilityPath, JSON.stringify(current, null, 2), { mode: 0o600 }).catch((error) =>
+      log.warn("could not persist usage cutover capability", {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
+  }
+
+  async function usageCutoverReady(session: OpenScienceSession): Promise<boolean> {
+    if (
+      cachedEntitlements?.capabilities?.proxy_settlement_authoritative === true &&
+      cachedEntitlements.capabilities.cli_usage_financial === false
+    ) {
+      return true
+    }
+    const value = await readUsageCapabilities()
+    return value.accounts[accountTag(session)]?.nonfinancial === true
   }
 
   /** Whether a queued row tagged `rowAccount` may be flushed under `currentAccount`.
@@ -1517,7 +1722,7 @@ export namespace OpenScience {
           tokens: params.tokens_used,
           cost: data.estimated_cost_usd,
         })
-        if (data.model_blocked) {
+        if (data.model_blocked && !isNonfinancialAcknowledgement(data)) {
           return { ok: false, permanent: true, modelBlocked: true, data }
         }
         return { ok: true, permanent: false, data }
@@ -1565,7 +1770,18 @@ export namespace OpenScience {
       await persistToQueue(params)
       return null
     }
+    const cutover = await usageCutoverReady(session)
     const result = await sendReport(params, session)
+    const acknowledged = result.ok && isNonfinancialAcknowledgement(result.data)
+    if (acknowledged) await rememberUsageCutover(session)
+    // Once the server explicitly names the managed proxy as billing authority,
+    // this compatibility acknowledgement can neither halt a completed model
+    // step nor enter a billing retry loop. Until then, preserve the legacy
+    // queue/modelBlocked behavior exactly.
+    if (cutover || acknowledged) {
+      if (!result.ok) return null
+      return { ...result.data, modelBlocked: false }
+    }
     // Update balance cache from server response, or invalidate so next check is fresh
     if (result.ok && result.data?.remaining_balance_cents !== undefined) {
       cachedBalance = { value: result.data.remaining_balance_cents / 100, at: Date.now() }
@@ -1600,6 +1816,7 @@ export namespace OpenScience {
       const session = await getSession()
       if (!session) return
       const currentAccount = accountTag(session)
+      const cutover = await usageCutoverReady(session)
 
       const retry: string[] = []
       for (const line of lines) {
@@ -1611,7 +1828,14 @@ export namespace OpenScience {
             retry.push(line)
             continue
           }
+          // Historical rows were billing retries. They must never be replayed
+          // after this account's server has advertised the nonfinancial cutover.
+          if (cutover || (await usageCutoverReady(session))) continue
           const result = await sendReport(params, session)
+          if (result.ok && isNonfinancialAcknowledgement(result.data)) {
+            await rememberUsageCutover(session)
+            continue
+          }
           if (!result.ok && !result.permanent) {
             retry.push(line)
           }

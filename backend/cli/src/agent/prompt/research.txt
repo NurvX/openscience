@@ -34,14 +34,16 @@ are internal implementation details.
   parameters, source, and outputs, then clean-rerun material work.
 - Probe packages once. If an approved install cannot reach its repository, broker compatible
   artifacts, verify published hashes, and install offline; otherwise use an installed equivalent.
+- Group related file edits in one `apply_patch` call; it preflights every file and rolls back on failure.
 - Use WebFetch text mode only for bounded pages and APIs. Download large/binary data to a root
   basename; destinations are root-normalized. For `papers/foo.pdf`, the root download is
   `output_path:"foo.pdf"`; only after success run sandboxed Bash
   `mkdir -p -- 'papers' && test ! -e 'papers/foo.pdf' && mv -- 'foo.pdf' 'papers/foo.pdf'`. Never send retired
   cap/size-evidence fields; WebFetch uses live free disk minus its reserve. Verify downloads,
   process locally, and paginate APIs. Do not assume Shell has network access.
-- Treat optional binaries as capabilities and use an installed equivalent. Keep caches out of
-  Results. Record fit/eval exceptions; never
+- Treat optional binaries as capabilities. If qpdf or Tectonic is absent, use a supported installed
+  PDF/LaTeX equivalent, or save the source and disclose the validation gap. Keep caches out of Results.
+  Record fit/eval exceptions; never
   convert failed candidates to NaN or drop them silently.
 - An explicitly requested immutable data release is an evidence constraint. If unverifiable, disclose
   it early and stop or label a bounded live-release fallback.
@@ -51,6 +53,6 @@ are internal implementation details.
   failures, and limitations in the observable execution record.
 - Before completion, run the saved entry point fresh without a filtering pipeline; parse machine
   outputs, reload saved state, and inspect figures and reports against metrics.
-- Atlas is optional durable graph state, never a local-work prerequisite. Finish with outcome,
+- Gateway graph state is optional, never a local-work prerequisite. Finish with outcome,
   saved outputs, verification, and confidence-changing limitations.
 </system-reminder>

@@ -601,6 +601,10 @@ const RFields = {
     .max(1024)
     .optional()
     .describe("Script path associated with this execution, when applicable"),
+  environment: z
+    .enum(["default", "r"])
+    .optional()
+    .describe("Optional compatibility selector. Omit it or use 'default'/'r' for the canonical R runtime."),
   timeout: z.number().default(120_000).describe("Execution timeout in ms (default: 120s, max: 600s)"),
 }
 
@@ -788,6 +792,7 @@ const RDefinition: Awaited<ReturnType<Tool.Info<typeof RParameters>["init"]>> = 
   description: [
     "Run R code in one long-lived managed process per conversation. Objects, attached packages, and state persist across calls; child conversations are isolated.",
     "Treat persistent state as working memory, not reproducibility. For a material result, save the source, declared inputs, parameters, and outputs and clean-rerun when practical.",
+    "Omit `environment` or use `default`/`r`; both select the canonical host R runtime.",
     "Always set `title` to a concise description of the scientific action, not a code fragment or import.",
     "Set `source` when the execution belongs to a script so Activity can identify that source.",
     "Use `action: stop` when its in-memory state should be cleared.",

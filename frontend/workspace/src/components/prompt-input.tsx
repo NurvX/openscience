@@ -60,6 +60,7 @@ import { createOpenScienceClient, type Message, type Part } from "@synsci/sdk/v2
 import { Binary } from "@synsci/util/binary"
 import { showToast } from "@synsci/ui/toast"
 import { uiStore } from "@/atlas/store/ui"
+import { confirmDialog } from "@/atlas/dialogs"
 import { projectHref, projectPathname } from "@/utils/project-route"
 import { ModelSettingsPopover } from "./model-settings-popover"
 import { modelControl } from "./model-presentation"
@@ -82,12 +83,14 @@ import {
 import { canRestoreFailedSubmission } from "./prompt-submission"
 import { slashGroup, slashIcon, slashSource, sortSlash, type SlashCommand } from "./prompt-slash"
 import {
+  DEFAULT_RESEARCH_ACCESS_MODE,
   RESEARCH_ACCESS_OPTIONS,
   researchAccessLabel as accessLabel,
   researchAccessMode,
   researchAccessMutations,
   type ResearchAccessMode,
 } from "./research-access"
+import { searchStatus, type ResearchToolsStatus } from "./settings/research-tools-state"
 
 type PendingPrompt = {
   abort: AbortController
@@ -108,10 +111,13 @@ interface ResearchAccessSnapshot {
   root: string
   trusted: boolean
   sandboxEnabled: boolean
+  sandboxAvailable: boolean
+  sandboxUnavailableReason?: string
 }
 
 interface SandboxSettingsPayload {
   config: { enabled?: boolean }
+  status?: { available?: boolean; reason?: string }
 }
 
 const requestDetail = (kind: "effort" | "speed", id: string) => {
@@ -160,6 +166,20 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     settings<CapabilityPreferences>("/settings/preferences"),
   )
   const [review, reviewActions] = createResource(() => settings<ReviewPreferences>("/settings/review"))
+  const [researchStatusRequested, setResearchStatusRequested] = createSignal(false)
+  const [researchToolsStatus, researchToolsStatusActions] = createResource(
+    () => researchStatusRequested() || undefined,
+    () => settings<ResearchToolsStatus>("/settings/research-tools"),
+  )
+  const researchToolsSummary = createMemo(() => {
+    const status = researchToolsStatus()
+    if (!status) return undefined
+    return {
+      plan: status.plan.label,
+      search: searchStatus(status).label,
+      sharing: status.telemetry.analyticsEnabled ? "Sharing on" : "Sharing off",
+    }
+  })
   const saveCapabilities = (patch: Partial<CapabilityPreferences>) => {
     const previous = capabilities()
     if (!previous) return
@@ -335,13 +355,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       root: trust.data.root,
       trusted: trust.data.canExecuteProjectCode,
       sandboxEnabled: sandbox.config.enabled !== false,
+      sandboxAvailable: sandbox.status?.available === true,
+      sandboxUnavailableReason: sandbox.status?.reason,
     }
   }
   const [researchAccess, researchAccessControls] = createResource(() => sdk.projectID || false, loadResearchAccess)
   const [researchAccessSaving, setResearchAccessSaving] = createSignal(false)
   const selectedResearchAccess = createMemo(() => {
     const current = researchAccess()
-    return current ? researchAccessMode(current) : "full"
+    return current ? researchAccessMode(current) : DEFAULT_RESEARCH_ACCESS_MODE
   })
   const researchAccessLabel = createMemo(() => accessLabel(selectedResearchAccess()))
 
@@ -351,6 +373,16 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const initial = researchAccess()
     if (!projectID || !initial || researchAccessSaving()) return
     if (researchAccessMode(initial) === mode) return
+    if (mode === "full") {
+      const confirmed = await confirmDialog(dialog, {
+        title: "Enable Full access?",
+        message:
+          "Full access disables the execution sandbox. OpenScience may run commands with unrestricted file and network access without asking for action approval.",
+        confirmLabel: "Enable Full access",
+        danger: true,
+      })
+      if (!confirmed) return
+    }
 
     setResearchAccessSaving(true)
     try {
@@ -2459,7 +2491,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   ref={(element) => (researchToolsRef = element)}
                   class="workspace-composer__research-tools"
                   onToggle={(event) => {
-                    if (event.currentTarget.open) return
+                    if (event.currentTarget.open) {
+                      if (!researchStatusRequested()) setResearchStatusRequested(true)
+                      else void researchToolsStatusActions.refetch()
+                      return
+                    }
                     resetResearchTools()
                   }}
                   onKeyDown={(event) => {
@@ -2840,7 +2876,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                                   data-tone={option.value === "full" ? "warning" : undefined}
                                   aria-checked={selectedResearchAccess() === option.value}
                                   tabindex={selectedResearchAccess() === option.value ? 0 : -1}
-                                  disabled={researchAccess.loading || researchAccessSaving()}
+                                  disabled={
+                                    researchAccess.loading ||
+                                    researchAccessSaving() ||
+                                    (option.value !== "full" && researchAccess()?.sandboxAvailable === false)
+                                  }
                                   onClick={(event) => {
                                     void applyResearchAccess(option.value, event.currentTarget)
                                     event.currentTarget.closest("details")?.removeAttribute("open")
@@ -2848,7 +2888,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                                 >
                                   <span>
                                     <strong>{option.label}</strong>
-                                    <small>{option.description}</small>
+                                    <small>
+                                      {option.value !== "full" && researchAccess()?.sandboxAvailable === false
+                                        ? `Unavailable: ${researchAccess()?.sandboxUnavailableReason ?? "sandbox backend not installed"}`
+                                        : option.description}
+                                    </small>
                                   </span>
                                   <Show when={selectedResearchAccess() === option.value}>
                                     <Icon name="check" size="small" />
@@ -2860,6 +2904,31 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         </details>
                       </Show>
                     </section>
+                    <div class="workspace-composer__research-status" aria-live="polite">
+                      <Show
+                        when={researchToolsSummary()}
+                        fallback={
+                          <span>
+                            {researchToolsStatus.loading ? "Loading plan and search…" : "Plan status unavailable"}
+                          </span>
+                        }
+                      >
+                        {(summary) => (
+                          <span>
+                            {summary().plan} · {summary().search} · {summary().sharing}
+                          </span>
+                        )}
+                      </Show>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeResearchTools()
+                          dialog.show(() => <DialogSettings initial="research-tools" />)
+                        }}
+                      >
+                        Manage
+                      </button>
+                    </div>
                   </div>
                 </details>
               </Match>
