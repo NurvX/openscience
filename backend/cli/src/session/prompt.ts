@@ -22,6 +22,8 @@ import PROMPT_PLAN from "../session/prompt/plan.txt"
 import PROMPT_WRITE from "../agent/prompt/write.txt"
 import PROMPT_ML from "../agent/prompt/ml.txt"
 import PROMPT_RESEARCH from "../agent/prompt/research.txt"
+import PROMPT_DIRECT from "../session/prompt/direct.txt"
+import PROMPT_INSPECTION from "../session/prompt/inspection.txt"
 import PROMPT_BIOLOGY from "../agent/prompt/biology.txt"
 import PROMPT_PHYSICS from "../agent/prompt/physics.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
@@ -71,6 +73,7 @@ import { RuntimeEvents } from "@/runtime/events"
 import { ComputeJobs } from "@/compute/jobs"
 import { KernelRuntime } from "@/science/kernel/registry"
 import { SessionCheckpoint } from "./checkpoint"
+import { ToolSelection } from "./tool-selection"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -974,7 +977,8 @@ export namespace SessionPrompt {
       using _ = defer(() => InstructionPrompt.clear(processor.message.id))
 
       // Check if user explicitly invoked an agent via @ in this turn
-      const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+      const route = request(msgs, agent.name)
+      const lastUserMsg = route.user
       const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
 
       const tools = await resolveTools({
@@ -986,6 +990,9 @@ export namespace SessionPrompt {
         processor,
         bypassAgentCheck,
         messages: msgs,
+        request: route.text,
+        direct: route.direct,
+        inspection: route.inspection,
       })
 
       if (step === 1) {
@@ -1018,12 +1025,15 @@ export namespace SessionPrompt {
 
       await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: sessionMessages })
 
-      const contract = await SessionResearch.prompt(sessionID, Instance.project.id)
+      const narrow = route.direct || route.inspection
+      const contract = narrow ? undefined : await SessionResearch.prompt(sessionID, Instance.project.id)
       const system = [
         ...(await SystemPrompt.environment(model, sessionID)),
-        ...(await SystemPrompt.compute()),
+        ...(narrow ? [] : await SystemPrompt.compute()),
         ...(await InstructionPrompt.system()),
-        ...(SKILL_ROUTING_AGENTS.has(agent.name) ? [await SystemPrompt.availableSkills(agent.permission)] : []),
+        ...(SKILL_ROUTING_AGENTS.has(agent.name) && !narrow
+          ? [await SystemPrompt.availableSkills(agent.permission, route.text)]
+          : []),
         ...(contract ? [contract] : []),
       ]
 
@@ -1035,6 +1045,8 @@ export namespace SessionPrompt {
       const result = await processor.process({
         user: lastUser,
         agent,
+        direct: route.direct,
+        inspection: route.inspection,
         abort,
         sessionID,
         system,
@@ -1131,6 +1143,37 @@ export namespace SessionPrompt {
     return "normal" as const
   }
 
+  function request(messages: MessageV2.WithParts[], agent: string) {
+    const user = messages.findLast((message) => message.info.role === "user")
+    const text = user?.parts
+      .filter((part): part is MessageV2.TextPart => part.type === "text" && !part.ignored && !part.synthetic)
+      .map((part) => part.text)
+      .join("\n")
+    // Assistant tool-loop messages still belong to the first user turn. Keep
+    // its narrow route until a second user message actually starts a follow-up.
+    const fresh = ToolSelection.fresh(messages.map((message) => message.info.role))
+    const attachments = user?.parts.some((part) => part.type === "file") ?? false
+    const tools = user?.info.role === "user" ? user.info.tools : undefined
+    return {
+      user,
+      text,
+      direct: ToolSelection.direct({
+        agent,
+        message: text,
+        fresh,
+        attachments,
+        tools,
+      }),
+      inspection: ToolSelection.inspection({
+        agent,
+        message: text,
+        fresh,
+        attachments,
+        tools,
+      }),
+    }
+  }
+
   async function resolveTools(input: {
     agent: Agent.Info
     model: Provider.Model
@@ -1140,9 +1183,13 @@ export namespace SessionPrompt {
     processor: SessionProcessor.Info
     bypassAgentCheck: boolean
     messages: MessageV2.WithParts[]
+    request?: string
+    direct: boolean
+    inspection: boolean
   }) {
     using _ = log.time("resolveTools")
     const tools: Record<string, AITool> = {}
+    if (input.direct) return tools
 
     const context = (args: any, options: ToolCallOptions): Tool.Context => ({
       sessionID: input.session.id,
@@ -1172,11 +1219,19 @@ export namespace SessionPrompt {
     for (const item of await ToolRegistry.tools(
       { modelID: input.model.api.id, providerID: input.model.providerID },
       input.agent,
+      (id) =>
+        ToolSelection.enabled(id, { permission: input.agent.permission, tools: input.tools }) &&
+        ToolSelection.relevant(id, {
+          agent: input.agent.name,
+          message: input.request,
+          tools: input.tools,
+          direct: input.direct,
+        }),
     )) {
       const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
       tools[item.id] = tool({
         id: item.id as any,
-        description: item.description,
+        description: ToolSelection.description(item.id, item.description, input.inspection),
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
           const ctx = context(args, options)
@@ -1211,6 +1266,15 @@ export namespace SessionPrompt {
     }
 
     for (const [key, item] of Object.entries(await MCP.tools())) {
+      if (
+        !ToolSelection.relevant(key, {
+          agent: input.agent.name,
+          message: input.request,
+          tools: input.tools,
+          direct: input.direct,
+        })
+      )
+        continue
       const execute = item.execute
       if (!execute) continue
 
@@ -1750,9 +1814,15 @@ export namespace SessionPrompt {
   }
 
   async function insertReminders(input: { messages: MessageV2.WithParts[]; agent: Agent.Info; session: Session.Info }) {
-    const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
+    const route = request(input.messages, input.agent.name)
+    const userMessage = route.user
     if (!userMessage) return input.messages
     const effort = userMessage.info.role === "user" ? userMessage.info.effort : undefined
+    const research = route.direct
+      ? PROMPT_DIRECT
+      : route.inspection
+        ? PROMPT_INSPECTION
+        : [PROMPT_RESEARCH, researchEffortReminder(effort)].join("\n\n")
 
     // Original logic when experimental plan mode is disabled
     if (!Flag.OPENSCIENCE_EXPERIMENTAL_PLAN_MODE) {
@@ -1792,7 +1862,7 @@ export namespace SessionPrompt {
           messageID: userMessage.info.id,
           sessionID: userMessage.info.sessionID,
           type: "text",
-          text: [PROMPT_RESEARCH, researchEffortReminder(effort)].join("\n\n"),
+          text: research,
           synthetic: true,
         })
       }
@@ -1857,7 +1927,7 @@ export namespace SessionPrompt {
         messageID: userMessage.info.id,
         sessionID: userMessage.info.sessionID,
         type: "text",
-        text: [PROMPT_RESEARCH, researchEffortReminder(effort)].join("\n\n"),
+        text: research,
         synthetic: true,
       })
     }

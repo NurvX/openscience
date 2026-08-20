@@ -96,6 +96,13 @@ export namespace SessionProcessor {
     return Provider.isIdleTimeoutError(error) ? undefined : SessionRetry.retryable(normalized)
   }
 
+  /** File snapshots protect tool side effects. A model that cannot call any
+   * advertised tool cannot mutate the workspace, so two Git index passes add
+   * latency and contention without creating a useful revert boundary. */
+  export function tracks(input: { tools: Record<string, unknown>; toolcall: boolean }) {
+    return input.toolcall && Object.keys(input.tools).length > 0
+  }
+
   export type Info = Awaited<ReturnType<typeof create>>
   export type Result = Awaited<ReturnType<Info["process"]>>
 
@@ -127,8 +134,8 @@ export namespace SessionProcessor {
     const toolcalls: Record<string, MessageV2.ToolPart> = {}
     const outcomes = new Map<
       string,
-      | { status: "completed"; input: unknown; output: ToolExecutionOutput; endedAt: number }
-      | { status: "error"; input: unknown; error: unknown; endedAt: number }
+      | { status: "completed"; input: unknown; output: ToolExecutionOutput; startedAt?: number; endedAt: number }
+      | { status: "error"; input: unknown; error: unknown; startedAt?: number; endedAt: number }
     >()
     const active = new Map<string, Promise<void>>()
     const metadataWrites = new Map<string, Promise<void>>()
@@ -152,6 +159,8 @@ export namespace SessionProcessor {
         await metadataWrites.get(callID)
         const match = toolcalls[callID]
         if (!match || match.state.status !== "running" || settled.has(callID)) return false
+        const startedAt = outcome.startedAt ?? Math.min(match.state.time.start, outcome.endedAt)
+        const time = { start: startedAt, end: Math.max(startedAt, outcome.endedAt) }
         let terminal: MessageV2.ToolPart
         if (outcome.status === "completed") {
           terminal = {
@@ -162,7 +171,7 @@ export namespace SessionProcessor {
               output: outcome.output.output,
               metadata: outcome.output.metadata ?? {},
               title: outcome.output.title,
-              time: { start: match.state.time.start, end: outcome.endedAt },
+              time,
               attachments: outcome.output.attachments,
             },
           }
@@ -175,7 +184,7 @@ export namespace SessionProcessor {
               input: outcome.input ?? match.state.input,
               error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
               ...(metadata ? { metadata } : {}),
-              time: { start: match.state.time.start, end: outcome.endedAt },
+              time,
             },
           }
         }
@@ -236,24 +245,25 @@ export namespace SessionProcessor {
           if (metadataWrites.get(callID) === write && settled.has(callID)) metadataWrites.delete(callID)
         })
       },
-      async result(callID: string, args: unknown, output: ToolExecutionOutput) {
+      async result(callID: string, args: unknown, output: ToolExecutionOutput, startedAt?: number) {
         if (settled.has(callID)) return
-        outcomes.set(callID, { status: "completed", input: args, output, endedAt: Date.now() })
+        outcomes.set(callID, { status: "completed", input: args, output, startedAt, endedAt: Date.now() })
         await apply(callID)
       },
-      async error(callID: string, args: unknown, error: unknown) {
+      async error(callID: string, args: unknown, error: unknown, startedAt?: number) {
         if (settled.has(callID)) return
-        outcomes.set(callID, { status: "error", input: args, error, endedAt: Date.now() })
+        outcomes.set(callID, { status: "error", input: args, error, startedAt, endedAt: Date.now() })
         await apply(callID)
       },
       execute<T extends ToolExecutionOutput>(callID: string, args: unknown, run: () => Promise<T>) {
+        const startedAt = Date.now()
         const execution = (async () => {
           try {
             const output = await run()
-            await coordinator.result(callID, args, output)
+            await coordinator.result(callID, args, output, startedAt)
             return output
           } catch (error) {
-            await coordinator.error(callID, args, error)
+            await coordinator.error(callID, args, error, startedAt)
             throw error
           }
         })()
@@ -344,14 +354,16 @@ export namespace SessionProcessor {
       },
       async process(streamInput: LLM.StreamInput) {
         log.info("process")
+        const tracking = tracks({ tools: streamInput.tools, toolcall: input.model.capabilities.toolcall })
         needsCompaction = false
         overflow = false
         const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
         shouldBreakOnDeny = shouldBreak
         while (true) {
           try {
-            // Check for dashboard-side BYOK/managed changes before each user message.
-            await OpenScience.refreshIfStale()
+            // Probe dashboard-side BYOK/managed changes for the next request,
+            // without making this provider call wait on the control plane.
+            void OpenScience.scheduleRefresh()
 
             // Classify the credential backing this call. The wallet pre-flight
             // fires ONLY for managed-proxy credentials (a thk_* token / synced
@@ -545,7 +557,7 @@ export namespace SessionProcessor {
                   throw value.error
 
                 case "start-step":
-                  snapshot = await Snapshot.track()
+                  snapshot = tracking ? await Snapshot.track() : undefined
                   await Session.updatePart({
                     id: Identifier.ascending("part"),
                     messageID: input.assistantMessage.id,
@@ -569,7 +581,7 @@ export namespace SessionProcessor {
                   await Session.updatePart({
                     id: stepPartID,
                     reason: value.finishReason,
-                    snapshot: await Snapshot.track(),
+                    snapshot: tracking ? await Snapshot.track() : undefined,
                     messageID: input.assistantMessage.id,
                     sessionID: input.assistantMessage.sessionID,
                     type: "step-finish",

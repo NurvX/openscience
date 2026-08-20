@@ -20,10 +20,10 @@ import type { MessageV2 } from "./message-v2"
 import { Plugin } from "@/plugin"
 import { SystemPrompt } from "./system"
 import { Flag } from "@/flag/flag"
-import { PermissionNext } from "@/permission/next"
 import { Auth } from "@/auth"
 import { SessionHarness } from "./harness"
 import { SessionTraceStore } from "./trace-store"
+import { ToolSelection } from "./tool-selection"
 import { OutboundTelemetry } from "@/telemetry/outbound"
 
 export namespace LLM {
@@ -42,6 +42,8 @@ export namespace LLM {
     small?: boolean
     tools: Record<string, Tool>
     retries?: number
+    direct?: boolean
+    inspection?: boolean
     trace?: { messageID: string; attempt: number }
     onReasoningEffortResolved?: (effort: string | undefined) => void | Promise<void>
   }
@@ -79,15 +81,17 @@ export namespace LLM {
       [
         // use agent prompt otherwise provider prompt
         // For Codex sessions, skip SystemPrompt.provider() since it's sent via options.instructions
-        ...(input.agent.prompt ? [input.agent.prompt] : isCodex ? [] : SystemPrompt.provider(input.model)),
+        ...(input.agent.prompt
+          ? [input.agent.prompt]
+          : isCodex
+            ? []
+            : SystemPrompt.provider(input.model, input.direct, input.inspection)),
         // any custom prompt passed into this call
         ...input.system,
         // any custom prompt from last user message
         ...(input.user.system ? [input.user.system] : []),
         // plan mode instructions (if enabled)
         ...(await SystemPrompt.planModeInstructions()),
-        // slash-skill invocation contract
-        ...SystemPrompt.slashSkillDirective(),
       ]
         .filter((x) => x)
         .join("\n"),
@@ -127,7 +131,7 @@ export namespace LLM {
       mergeDeep(variant),
     )
     if (isCodex) {
-      options.instructions = SystemPrompt.instructions()
+      options.instructions = SystemPrompt.instructions(input.direct, input.inspection)
     }
 
     const params = await Plugin.trigger(
@@ -197,28 +201,28 @@ export namespace LLM {
     }
 
     const trace = input.trace
-    if (trace) {
-      await SessionHarness.snapshot({
-        agent: input.agent,
-        provider: routed.providerID,
-        model: routed.id,
-        system,
-        instructions: typeof params.options.instructions === "string" ? params.options.instructions : undefined,
-        tools,
-      })
-        .then((snapshot) =>
-          SessionTraceStore.recordHarness({
-            sessionID: input.sessionID,
-            messageID: trace.messageID,
-            parentMessageID: input.user.id,
-            attempt: trace.attempt,
-            snapshot,
-          }),
-        )
-        .catch((error) => l.warn("failed to record harness fingerprint", { error }))
-    }
+    const harness = trace
+      ? SessionHarness.snapshot({
+          agent: input.agent,
+          provider: routed.providerID,
+          model: routed.id,
+          system,
+          instructions: typeof params.options.instructions === "string" ? params.options.instructions : undefined,
+          tools,
+        })
+          .then((snapshot) =>
+            SessionTraceStore.recordHarness({
+              sessionID: input.sessionID,
+              messageID: trace.messageID,
+              parentMessageID: input.user.id,
+              attempt: trace.attempt,
+              snapshot,
+            }),
+          )
+          .catch((error) => l.warn("failed to record harness fingerprint", { error }))
+      : undefined
 
-    return streamText({
+    const result = streamText({
       onError(error) {
         l.error("stream error", {
           error,
@@ -317,6 +321,8 @@ export namespace LLM {
         },
       },
     })
+    await harness
+    return result
   }
 
   export async function modelTools(input: Pick<StreamInput, "tools" | "agent" | "model" | "user">) {
@@ -346,12 +352,9 @@ export namespace LLM {
   }
 
   async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "user">) {
-    const wildcardDisable = input.user.tools?.["*"] === false
-    const disabled = PermissionNext.disabled(Object.keys(input.tools), input.agent.permission)
     for (const tool of Object.keys(input.tools)) {
-      if (wildcardDisable || input.user.tools?.[tool] === false || disabled.has(tool)) {
+      if (!ToolSelection.enabled(tool, { permission: input.agent.permission, tools: input.user.tools }))
         delete input.tools[tool]
-      }
     }
     return input.tools
   }

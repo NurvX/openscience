@@ -1,5 +1,6 @@
 import z from "zod"
 import { spawn } from "child_process"
+import { finished } from "node:stream/promises"
 import { Tool } from "./tool"
 import path from "path"
 import DESCRIPTION from "./bash.txt"
@@ -149,11 +150,7 @@ export const BashTool = Tool.define("bash", async () => {
         .string()
         .describe("The working directory to run the command in. Defaults to the session workspace.")
         .optional(),
-      description: z
-        .string()
-        .describe(
-          "Clear, concise description of what this command does in 5-10 words. Examples:\nInput: ls\nOutput: Lists files in current directory\n\nInput: git status\nOutput: Shows working tree status\n\nInput: npm install\nOutput: Installs package dependencies\n\nInput: mkdir foo\nOutput: Creates directory 'foo'",
-        ),
+      description: z.string().describe("Clear 5-10 word description of the command's purpose"),
     }),
     async execute(params, ctx) {
       const authority = await ExecutionAuthority.require({
@@ -292,9 +289,44 @@ export const BashTool = Tool.define("bash", async () => {
       })
 
       const started = Date.now()
+      const streams = { stdout: "", stderr: "" }
+      let output = ""
+
+      ctx.metadata({
+        metadata: {
+          output: "",
+          description: params.description,
+        },
+      })
+
+      const redact = (text: string) => {
+        try {
+          return OpenScience.redactSecrets(text)
+        } catch {
+          return text
+        }
+      }
+
+      const append = (chunk: Buffer) => {
+        output += chunk.toString()
+        const redacted = redact(output)
+        ctx.metadata({
+          metadata: {
+            output:
+              redacted.length > MAX_METADATA_LENGTH ? redacted.slice(0, MAX_METADATA_LENGTH) + "\n\n..." : redacted,
+            description: params.description,
+          },
+        })
+      }
+
+      const capture = (channel: keyof typeof streams) => (chunk: Buffer) => {
+        streams[channel] += chunk.toString()
+        append(chunk)
+      }
+
       let exited = false
       let aborted = false
-      const { proc, command, kill, sandbox, completion } = await AuthoritySignal.exclusive(async () => {
+      const { proc, command, kill, sandbox, completion, drain } = await AuthoritySignal.exclusive(async () => {
         const current = await ExecutionAuthority.require({
           projectID: Instance.project.id,
           sessionID: ctx.sessionID,
@@ -336,10 +368,15 @@ export const BashTool = Tool.define("bash", async () => {
               stdio: ["ignore", "pipe", "pipe"],
               detached: process.platform !== "win32",
             })
+            child.stdout?.on("data", capture("stdout"))
+            child.stderr?.on("data", capture("stderr"))
           } catch (error) {
             Sandbox.cleanup(sandbox)
             throw error
           }
+          const drain = Promise.all(
+            [child.stdout, child.stderr].flatMap((stream) => (stream ? [finished(stream).catch(() => undefined)] : [])),
+          )
           const completion = new Promise<void>((resolve, reject) => {
             child.once("exit", () => {
               exited = true
@@ -371,7 +408,7 @@ export const BashTool = Tool.define("bash", async () => {
             const kill = async () => {
               await CommandRuntime.stop(registered.id, registered.projectID, registered.sessionID)
             }
-            return { proc: child, command: registered, kill, sandbox, completion }
+            return { proc: child, command: registered, kill, sandbox, completion, drain }
           } catch (error) {
             await stop()
             Sandbox.cleanup(sandbox)
@@ -379,44 +416,6 @@ export const BashTool = Tool.define("bash", async () => {
           }
         })
       })
-      let output = ""
-
-      // Initialize metadata with empty output
-      ctx.metadata({
-        metadata: {
-          output: "",
-          description: params.description,
-        },
-      })
-
-      const redact = (text: string) => {
-        try {
-          return OpenScience.redactSecrets(text)
-        } catch {
-          return text
-        }
-      }
-
-      const append = (chunk: Buffer) => {
-        output += chunk.toString()
-        const redacted = redact(output)
-        ctx.metadata({
-          metadata: {
-            output:
-              redacted.length > MAX_METADATA_LENGTH ? redacted.slice(0, MAX_METADATA_LENGTH) + "\n\n..." : redacted,
-            description: params.description,
-          },
-        })
-      }
-
-      const streams = { stdout: "", stderr: "" }
-      const capture = (channel: keyof typeof streams) => (chunk: Buffer) => {
-        streams[channel] += chunk.toString()
-        append(chunk)
-      }
-
-      proc.stdout?.on("data", capture("stdout"))
-      proc.stderr?.on("data", capture("stderr"))
 
       let timedOut = false
 
@@ -440,7 +439,7 @@ export const BashTool = Tool.define("bash", async () => {
             }, timeout + 100)
           : undefined
 
-      await completion.finally(() => {
+      await Promise.all([completion, drain]).finally(() => {
         if (timeoutTimer) clearTimeout(timeoutTimer)
         ctx.abort.removeEventListener("abort", abortHandler)
         CommandRuntime.finish(command.id)
