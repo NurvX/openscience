@@ -1,8 +1,6 @@
 ---
 name: goal
 description: Set an explicit objective, success criteria, and stopping conditions for the current OpenScience session.
-category: other
-tags: [workflow, planning, persistence]
 ---
 
 # Goal
