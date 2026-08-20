@@ -320,7 +320,8 @@ export default function Landing({
           <p className="mt-7 text-[13px] leading-6 text-foreground/50">
             Eligible .edu accounts receive 50% off their first month. Promotional Ace+ credits expire at the end of the
             billing cycle; purchased credits follow the wallet terms shown at checkout. Managed token usage is charged
-            at provider cost plus a 5% service fee; card-processing fees are shown before purchase.
+            at provider cost plus a 5% service fee. Card processing is included in the plan price with no additional
+            checkout fee.
           </p>
         </div>
       </section>

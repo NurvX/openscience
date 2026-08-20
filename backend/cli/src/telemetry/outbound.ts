@@ -290,13 +290,37 @@ async function readConsent(): Promise<{ value: ConsentFile; absent: boolean; cor
   }
 }
 
+/**
+ * Return only the non-secret identifier embedded in a Gateway API key.
+ *
+ * Gateway keys are `thk_<32 hex chars>.<random secret>`. The identifier is
+ * safe to use for local account switching; the credential itself must never
+ * be hashed, persisted, or turned into telemetry identity material.
+ */
+export function telemetryKeyID(value: string): string | undefined {
+  const match = /^(thk_[0-9a-f]{32})\.[A-Za-z0-9_-]{16,}$/i.exec(value)
+  return match?.[1].toLowerCase()
+}
+
 async function identity() {
   const session = await OpenScience.getSession().catch(() => null)
-  if (!session) return { subject: "installation", signedIn: false, accountID: undefined, token: undefined }
-  const account = session.user_id || `key-${createHash("sha256").update(session.api_key).digest("hex").slice(0, 16)}`
+  if (!session)
+    return {
+      subject: "installation",
+      signedIn: false,
+      identified: true,
+      accountID: undefined,
+      token: undefined,
+    }
+  const keyID = telemetryKeyID(session.api_key)
+  const account = session.user_id || keyID
   return {
-    subject: `account:${account}`,
+    // A malformed legacy token without a user id cannot produce a durable
+    // identity. Keep telemetry fail-closed until the authenticated session is
+    // refreshed instead of deriving an identifier from credential material.
+    subject: account ? `account:${account}` : "unidentified-account",
     signedIn: true,
+    identified: Boolean(account),
     accountID: session.user_id || undefined,
     token: session.api_key,
   }
@@ -471,6 +495,7 @@ async function ensureAuthoritativeConsent(
   force = false,
 ) {
   if (!who.signedIn) return true
+  if (!who.identified) return false
   const key = consentKey(state, who)
   if (!force && authoritativeConsent.has(key)) return true
   const active = consentChecks.get(key)

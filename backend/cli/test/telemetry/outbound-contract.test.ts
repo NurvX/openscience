@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { gunzipSync } from "node:zlib"
 import { Global } from "../../src/global"
-import { coarsePlatform, CONSENT_VERSION, Event, OutboundTelemetry } from "../../src/telemetry/outbound"
+import { coarsePlatform, CONSENT_VERSION, Event, OutboundTelemetry, telemetryKeyID } from "../../src/telemetry/outbound"
 
 const consent = path.join(Global.Path.data, "telemetry-consent-v1.json")
 const queue = path.join(Global.Path.data, "telemetry-queue-v1.jsonl")
@@ -207,6 +207,38 @@ describe("outbound telemetry contract", () => {
         platform: "darwin",
       }).success,
     ).toBe(false)
+  })
+
+  test("uses only the public Gateway key id and fails closed for malformed legacy credentials", async () => {
+    const keyID = `thk_${"a".repeat(32)}`
+    const secret = "never_persist_this_secret_value"
+    const token = `${keyID}.${secret}`
+    expect(telemetryKeyID(token)).toBe(keyID)
+    expect(telemetryKeyID("thk_legacy-secret-without-an-id")).toBeUndefined()
+
+    await Bun.write(session, JSON.stringify({ api_key: token }))
+    const fetcher = spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        schema_version: 1,
+        consent_version: CONSENT_VERSION,
+        analytics_enabled: true,
+        research_content_enabled: false,
+        source: "account",
+      }),
+    )
+    try {
+      expect(await OutboundTelemetry.status(true)).toMatchObject({ analyticsEnabled: true, source: "account" })
+      const persisted = await Bun.file(consent).text()
+      expect(persisted).toContain(keyID)
+      expect(persisted).not.toContain(secret)
+
+      fetcher.mockClear()
+      await Bun.write(session, JSON.stringify({ api_key: "thk_legacy-secret-without-an-id" }))
+      expect(await OutboundTelemetry.status(true)).toMatchObject({ analyticsEnabled: false, pending: true })
+      expect(fetcher).not.toHaveBeenCalled()
+    } finally {
+      fetcher.mockRestore()
+    }
   })
 
   test("purges and disables a subject when Gateway rejects a batch for disabled consent", async () => {

@@ -39,7 +39,7 @@ The public product is called **Gateway**. The OpenScience landing page becomes s
 - Purchased credits are non-expiring while the account remains legally operable, non-transferable, non-withdrawable, and consumed after promotional credits.
 - Ace+'s 50 promotional credits expire at the end of the subscription period, do not roll over, and may be restricted to approved Gateway services. Pricing copy must say this plainly.
 - Search allowances reset on the Stripe subscription period, do not roll over, and cannot be converted to wallet value.
-- Managed model and hosted-research spend is provider cost plus a disclosed 5% service fee. Stripe processing is disclosed separately through a versioned fee schedule.
+- Managed model and hosted-research spend is provider cost plus a disclosed 5% service fee. Stripe processing is absorbed by Synthetic Sciences and adds no checkout fee.
 - Hosted Synthetic Scientists membership is an entitlement, not unlimited compute. Provider/model/compute spend still consumes wallet credits. Local or user-funded execution remains independent of the paid entitlement.
 - Canceling ends plan entitlements and unused search allowance at period end. Purchased wallet credits remain available for eligible managed usage; promotional credits expire under their stated terms.
 
