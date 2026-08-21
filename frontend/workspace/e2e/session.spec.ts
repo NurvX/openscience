@@ -59,17 +59,20 @@ test("research effort persists without changing the model", async ({ page, openS
 
   const model = page.locator("[data-model-settings-trigger]")
   const selected = await model.getAttribute("aria-label")
-  const research = page.locator(".workspace-composer__research-tools > summary")
+  const tools = page.locator(".workspace-composer__research-tools")
+  const research = tools.locator(":scope > summary")
+  const effort = tools.locator('[data-research-control="effort"]')
 
   await research.click()
-  const ultra = page.getByRole("radio", { name: "Ultra", exact: true })
-  await ultra.click()
-  await expect(ultra).toHaveAttribute("aria-checked", "true")
-  await expect(research).toHaveAttribute("aria-label", "Research tools, Ultra effort, Full access")
+  await effort.locator(":scope > summary").click()
+  const high = effort.locator('[data-research-effort="high"]')
+  await high.click()
+  await expect(effort.locator(":scope > summary")).toHaveAttribute("aria-label", "Reasoning effort, High")
 
   await research.click()
   await research.click()
-  await expect(page.getByRole("radio", { name: "Ultra", exact: true })).toHaveAttribute("aria-checked", "true")
+  await effort.locator(":scope > summary").click()
+  await expect(effort.locator('[data-research-effort="high"]')).toHaveAttribute("aria-checked", "true")
 
   await expect(model).toHaveAttribute("aria-label", selected ?? "")
 })

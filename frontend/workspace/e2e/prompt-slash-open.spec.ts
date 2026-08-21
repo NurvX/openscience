@@ -11,7 +11,7 @@ test("smoke slash menu exposes session actions", async ({ page, gotoSession, sdk
     await page.locator(promptSelector).click()
     await page.keyboard.type("/compact")
 
-    const command = page.locator('[data-slash-id="session.compact"]')
+    const command = page.locator('[data-slash-id="command.compact"]')
     await expect(command).toBeVisible()
 
     await page.keyboard.press("Escape")

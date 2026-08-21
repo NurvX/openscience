@@ -13,6 +13,8 @@ describe("project-ID navigation wiring", () => {
 
     expect(layout).toContain("<SDKProvider directory={directory()} projectID={projectID()} scope={scope()}>")
     expect(layout).toContain("global.project.resolveID(projectID)")
+    expect(layout).toContain("global.project.resolve(directory)")
+    expect(layout).toContain('const directory = createMemo(() => active()?.directory ?? "")')
     expect(sdk).toContain("projectID: projectID()")
     expect(sdk).toContain("createProjectRequest")
     expect(global).toContain('sdkFor("", projectID).project.current()')

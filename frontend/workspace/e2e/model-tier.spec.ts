@@ -1,22 +1,22 @@
 import { test, expect } from "./fixtures"
-import { effortChipSelector, modelRowValue, promptSelector, setModelSpeed } from "./utils"
+import { modelRowValue, promptSelector, setModelSpeed } from "./utils"
 
 test.skip(
   process.env.OPENSCIENCE_E2E_FAKE_MODEL !== "1",
   "requires the deterministic model supplied by test:e2e:local (or the E2E CI harness)",
 )
 
-test("model speed toggles through the settings popover and reaches the prompt request", async ({
+test("model speed toggles through Research tools and reaches the prompt request", async ({
   page,
   sdk,
   gotoSession,
 }) => {
   await gotoSession()
 
-  // Speed and thinking effort are independent. Both defaults remain visible so
-  // users can inspect or change either setting without opening the full menu.
+  // Speed and thinking effort are independent. Both defaults remain visible in
+  // Research tools without opening the full model catalog.
   await expect(modelRowValue(page, "speed")).resolves.toBe("Standard")
-  await expect(page.locator(effortChipSelector)).toHaveText("Standard")
+  await expect(modelRowValue(page, "effort")).resolves.toBe("Standard")
 
   const send = async (tier?: string) => {
     const request = page.waitForRequest((request) => {
@@ -59,15 +59,18 @@ test("model speed toggles through the settings popover and reaches the prompt re
 
     const fast = await send("fast")
     await expect.poll(() => output(sessionID), { timeout: 20_000 }).toContain(fast)
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({ timeout: 20_000 })
 
     const command = page.waitForRequest((request) => {
       const path = new URL(request.url()).pathname
       return request.method() === "POST" && /\/session\/[^/]+\/command$/.test(path)
     })
     const prompt = page.locator(promptSelector)
-    await prompt.click()
-    await page.keyboard.type("/e2e-tier-override ")
-    await page.keyboard.press("Enter")
+    // Set the complete custom command in one input event. Character-by-character
+    // typing opens the slash palette after `/e2`, which deliberately moves focus
+    // while filtering and can truncate the rest of synthetic keyboard input.
+    await prompt.fill("/e2e-tier-override ")
+    await page.getByRole("button", { name: "Send", exact: true }).click()
 
     const body = (await command).postDataJSON() as { model?: string; tier?: string }
     expect(body.model).toBe("e2e/echo")

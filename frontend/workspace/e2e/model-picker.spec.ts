@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures"
-import { effortChipSelector, modelPopoverSelector, modelTriggerSelector } from "./utils"
+import { modelPopoverSelector, modelRowValue, modelTriggerSelector, setModelEffort } from "./utils"
 
 test("smoke model selection updates the composer trigger", async ({ page, gotoSession }) => {
   await gotoSession()
@@ -31,16 +31,12 @@ test("effort selection closes cleanly and Manage models opens Customize", async 
 
   const trigger = page.locator(modelTriggerSelector)
   const picker = page.locator(modelPopoverSelector)
-  await trigger.click()
-  await picker.locator('[data-model-menu-row="effort"]').click()
-  await picker.locator('[data-model-option="effort"][data-model-option-id="high"]').click()
-
-  await expect(picker).toBeHidden()
-  await expect(page.locator(effortChipSelector)).toHaveText("High")
+  await setModelEffort(page, "high")
+  await expect(modelRowValue(page, "effort")).resolves.toBe("High")
 
   await trigger.click()
   await expect(picker).toHaveAttribute("data-model-settings-view", "root")
-  await expect(picker.getByText("Suggested models", { exact: true })).toBeVisible()
+  await expect(picker.getByRole("radiogroup", { name: "Model", exact: true })).toBeVisible()
   expect(await picker.locator("[data-model-quick]").count()).toBeLessThanOrEqual(4)
   await expect.poll(() => picker.evaluate((element) => element.scrollTop)).toBe(0)
 

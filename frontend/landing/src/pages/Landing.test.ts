@@ -13,12 +13,21 @@ describe("OpenScience landing contract", () => {
 
   test("publishes the approved Ace catalog and managed search allowances", () => {
     expect(landing).toContain("$20 / month")
-    expect(landing).toContain("20 purchased credits each month")
-    expect(landing).toContain("1,000 managed searches per billing cycle")
+    expect(landing).toContain("$20 added to Wallet every month")
+    expect(landing).toContain("1,000 completed managed searches each billing cycle")
     expect(landing).toContain("$100 / month")
-    expect(landing).toContain("100 purchased credits + 50 promotional credits")
-    expect(landing).toContain("5,000 managed searches per billing cycle")
+    expect(landing).toContain("$100 added to Wallet every month")
+    expect(landing).toContain("$50 in promotional credits each cycle")
+    expect(landing).toContain("5,000 completed managed searches each billing cycle")
     expect(landing).toContain("billing?plan=ace_plus")
+  })
+
+  test("markets the plans without mixing promotional credits into the purchased balance", () => {
+    expect(landing).toContain("MOST POPULAR")
+    expect(landing).toContain("Skip provider setup and keep momentum")
+    expect(landing).toContain("Your Wallet holds paid credits only")
+    expect(landing).toContain("promotional credits are shown separately")
+    expect(landing).toContain("Card processing is included")
   })
 
   test("does not advertise paused surfaces or old branding", () => {
