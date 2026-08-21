@@ -94,7 +94,8 @@ export default function General() {
   const signOut = async () => {
     const confirmed = await confirmDialog(dialog, {
       title: "Disconnect this server?",
-      message: "This signs the local server out of OpenScience. Local projects and files stay on this machine.",
+      message:
+        "This disconnects the local server from your Synthetic Sciences account. Local projects and files stay on this machine.",
       confirmLabel: "Disconnect",
       danger: true,
     })
@@ -114,7 +115,7 @@ export default function General() {
 
   const plan = () => {
     const value = account()?.user?.subscription_plan as string | undefined
-    if (!value) return "—"
+    if (!value) return "Not available"
     return `${value.charAt(0).toLocaleUpperCase()}${value.slice(1)}`
   }
   const org = () => {
@@ -125,7 +126,7 @@ export default function General() {
   return (
     <PanelScroll>
       <div class="settings-preferences-panel settings-preferences-panel--general">
-        <PanelHeader title="General" description="Manage your account and everyday workspace preferences." />
+        <PanelHeader title="General" description="Manage your Synthetic Sciences account and workspace preferences." />
         <PanelBody>
           <Show when={error()}>
             <div class="settings-alert" data-tone="critical" role="alert">
@@ -134,11 +135,12 @@ export default function General() {
           </Show>
 
           {/* Account */}
-          <Section title="Account" description="Your OpenScience identity and subscription.">
+          <Section title="Account" description="Your Synthetic Sciences identity and subscription.">
             <div class="settings-card settings-preferences-card">
               <Row icon="providers" title="Email">
                 <span class="settings-account-value">
-                  {(account()?.user?.email as string) ?? (account()?.session === false ? "Not connected" : "—")}
+                  {(account()?.user?.email as string) ??
+                    (account()?.session === false ? "Not connected" : "Not available")}
                 </span>
               </Row>
               <Row icon="star" title="Plan">
@@ -149,12 +151,20 @@ export default function General() {
                   <span class="settings-account-value">{org()}</span>
                 </Row>
               </Show>
-              <Row icon="bolt" title="Billing" description="Manage your subscription, wallet, and invoices.">
+              <Row
+                icon="bolt"
+                title="Billing"
+                description="Manage your Synthetic Sciences subscription, credits, and invoices."
+              >
                 <Button size="small" variant="secondary" onClick={() => platform.openLink(URLS.dashboardBilling)}>
                   Manage
                 </Button>
               </Row>
-              <Row icon="link" title="Session" description="Disconnect this machine from OpenScience.">
+              <Row
+                icon="link"
+                title="Session"
+                description="Disconnect this machine from your Synthetic Sciences account."
+              >
                 <Button
                   size="small"
                   variant="secondary"
@@ -167,7 +177,7 @@ export default function General() {
               <Show when={account()?.session === false}>
                 <div class="px-4 py-3">
                   <p class="text-12-regular text-text-weak">
-                    Signed out — run <code class="font-mono text-11-regular">openscience connect login</code> in a
+                    Signed out. Run <code class="font-mono text-11-regular">openscience connect login</code> in a
                     terminal to reconnect this machine.
                   </p>
                 </div>

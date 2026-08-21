@@ -33,8 +33,8 @@ const SOURCES: Record<Provider["source"], { label: string; removable: boolean; t
   synced: {
     label: "dashboard",
     removable: false,
-    note: "synced from your OpenScience account",
-    title: "Provider key connected in the OpenScience account dashboard",
+    note: "synced from your Synthetic Sciences account",
+    title: "Provider key connected in the Synthetic Sciences account dashboard",
   },
   config: {
     label: "config",
@@ -56,8 +56,8 @@ const SOURCES: Record<Provider["source"], { label: string; removable: boolean; t
   managed: {
     label: "billed from wallet",
     removable: false,
-    note: "routed through OpenScience credits",
-    title: "Routed through the Gateway managed proxy and billed to your OpenScience credits",
+    note: "routed through Synthetic Sciences credits",
+    title: "Routed through Synthetic Sciences and billed to your managed credits",
   },
 }
 

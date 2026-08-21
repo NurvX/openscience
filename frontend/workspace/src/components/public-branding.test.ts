@@ -30,4 +30,23 @@ describe("public Gateway branding allowlist", () => {
     }
     expect(violations).toEqual([])
   })
+
+  test("uses Synthetic Sciences for managed login and account branding", async () => {
+    const sources = await Promise.all(
+      [
+        "../atlas/SetupDialog.tsx",
+        "./settings/General.tsx",
+        "./settings/ManagedInference.tsx",
+        "./settings/ProviderKeys.tsx",
+        "./settings/ResearchTools.tsx",
+      ].map((file) => Bun.file(new URL(file, import.meta.url)).text()),
+    )
+    const combined = sources.join("\n")
+
+    expect(combined).toContain("Synthetic Sciences account")
+    expect(combined).toContain("Synthetic Sciences credits")
+    expect(combined).toContain("Connected to Synthetic Sciences")
+    expect(combined).not.toMatch(/OpenScience (?:account|identity|credits|plan)/)
+    expect(combined).not.toMatch(/(?:Sign in to|Connected to) Gateway/)
+  })
 })

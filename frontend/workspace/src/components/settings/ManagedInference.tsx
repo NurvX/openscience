@@ -19,7 +19,7 @@ const MODES: { value: Mode; title: string; body: string }[] = [
   {
     value: "managed",
     title: "Managed",
-    body: "Use your OpenScience balance. No provider key is required.",
+    body: "Use your Synthetic Sciences credits. No provider key is required.",
   },
   {
     value: "byok",
@@ -148,7 +148,7 @@ export function ManagedInference(props: { onError?: (error: string | undefined) 
       <div class="settings-row models-compact-row models-account-summary">
         <div class="models-account-summary__identity">
           <div class="flex min-w-0 flex-col gap-0.5">
-            <span class="text-12-regular text-text-weak">OpenScience credits</span>
+            <span class="text-12-regular text-text-weak">Synthetic Sciences credits</span>
             <span aria-live="polite">
               <Show when={wallet()} fallback={<span class="text-13-medium text-text-weak">Checking account…</span>}>
                 <span class="text-13-medium text-text-strong">
