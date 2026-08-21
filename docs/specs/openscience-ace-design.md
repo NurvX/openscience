@@ -11,39 +11,48 @@ OpenScience remains useful without a subscription: desktop, local models, BYOK, 
 
 Ace and Ace+ add an optional managed Gateway. The Gateway holds provider keys, runs managed search, meters included allowances, charges managed model or hosted-research spend against a wallet, and exposes reliable account/admin data. It does not become a dependency for local or user-funded work.
 
-The public product is called **Gateway**. The OpenScience landing page becomes shorter and adds clear Free, Ace, Ace+, and Teams pricing. The application keeps **Install** and private **Graphs** as its primary product surfaces; Compute and public graph discovery remain implemented but unavailable until intentionally launched.
+The managed service is described as the **Gateway**. Account, login, and subscription identity use **Synthetic Sciences**. The OpenScience landing page becomes shorter and adds clear Free, Ace, Ace+, and Teams pricing. The application keeps **Install** and private **Graphs** as its primary product surfaces; Compute and public graph discovery remain implemented but unavailable until intentionally launched.
 
 ## 1. Locked product principles
 
 1. **Paid plans add managed services; they do not remove existing capabilities.** A Gateway outage, canceled subscription, exhausted search allowance, or empty wallet must not break local models, BYOK, ChatGPT/Codex subscription routes, scientific connectors, or `WebFetch`.
 2. **Inference route and subscription are independent.** An Ace user can use managed models, BYOK, ChatGPT/Codex, or local models and still use their managed-search allowance.
 3. **Only the Gateway can create billable usage.** Client telemetry, local token counts, BYOK activity, and ChatGPT/Codex activity are analytics only and can never debit a wallet.
-4. **One visible search meter.** Customers see completed managed searches, not Firecrawl credits, page-read counters, paper-operation counters, or “research units.”
+4. **One simple research-quota promise.** Public copy says “Generous research quota” for Ace and “3x research quota” for Ace+. Provider credits, page-read counters, paper-operation counters, and implementation-specific service limits stay out of plan marketing.
 5. **Content-free analytics by default.** Structural usage sharing is on by default and disableable. Research content sharing is a separate opt-in that is off by default.
-6. **Gateway is the only public service name.** Legacy route, package, database, and executable identifiers remain temporarily where renaming would break installed clients, but they do not appear in product copy.
+6. **Naming follows the user context.** OpenScience is the local product, Gateway is the managed route, and Synthetic Sciences is the account and billing identity. Legacy Atlas branding does not appear in product copy; compatibility identifiers remain only where renaming would break installed clients.
 7. **Unshipped benefits are labeled.** Managed web, team collaboration, and compliance claims remain “coming soon” until the actual capability and operational contract exist.
 8. **No destructive production cleanup.** Reconcile, archive, migrate, and verify first. Delete only after ownership and retention rules are proven.
 
 ## 2. Plans and entitlements
 
-| Plan  |      Price |                                                        Credits |                                                                      Managed search | Included access                                                                                                                                                            |
-| ----- | ---------: | -------------------------------------------------------------: | ----------------------------------------------------------------------------------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Free  |         $0 |                                                           None | Preserve the current community/basic path with its existing availability and limits | Open-source desktop/local runtime, BYOK, ChatGPT/Codex routes, local models, scientific connectors, `WebFetch`, local traces, and owned/private graphs when signed in      |
-| Ace   |  $20/month |                   20 purchased credits each successful renewal |                            1,000 completed managed searches per subscription period | Hosted Synthetic Scientists access, one hosted run at a time, Gateway search, standard support, managed web when shipped                                                   |
-| Ace+  | $100/month | 150 advertised monthly credits: 100 purchased + 50 promotional |                            5,000 completed managed searches per subscription period | Hosted Synthetic Scientists access, three hosted runs at a time, priority support, early access, higher managed-service limits, collaboration and managed web when shipped |
-| Teams |   Contract |                                                     Contracted |                                                                          Contracted | Organization billing, SSO/admin, multi-user controls, contracted ZDR provider routes, private/on-prem data and cluster integrations, dedicated support and SLA options     |
+| Plan  |      Price | Public credits | Public research quota | Included access                                                                                                                                                                |
+| ----- | ---------: | -------------: | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Free  |         $0 |           None | Community/basic path  | Open-source desktop/local runtime, BYOK, ChatGPT/Codex routes, local models, scientific connectors, `WebFetch`, local traces, and owned/private graphs when signed in          |
+| Ace   |  $20/month |     20 credits | Generous quota        | Synthetic Scientists access, standard support, and managed web when shipped                                                                                                    |
+| Ace+  | $100/month |    150 credits | 3x quota              | The same Synthetic Scientists access and concurrency policy as Ace, priority support, early access, higher managed-service limits, collaboration, and managed web when shipped |
+| Teams |   Contract |     Contracted | Contracted            | Organization billing, SSO/admin, multi-user controls, contracted ZDR provider routes, private/on-prem data and cluster integrations, dedicated support and SLA options         |
 
-### 2.1 Credit semantics
+### 2.1 Public credit and entitlement semantics
 
-- One credit represents `$1` of managed-spend value.
-- Purchased credits are non-expiring while the account remains legally operable, non-transferable, non-withdrawable, and consumed after promotional credits.
-- Ace+'s 50 promotional credits expire at the end of the subscription period, do not roll over, and may be restricted to approved Gateway services. Pricing copy must say this plainly.
-- Search allowances reset on the Stripe subscription period, do not roll over, and cannot be converted to wallet value.
-- Managed model and hosted-research spend is provider cost plus a disclosed 5% service fee. Stripe processing is absorbed by Synthetic Sciences and adds no checkout fee.
-- Hosted Synthetic Scientists membership is an entitlement, not unlimited compute. Provider/model/compute spend still consumes wallet credits. Local or user-funded execution remains independent of the paid entitlement.
-- Canceling ends plan entitlements and unused search allowance at period end. Purchased wallet credits remain available for eligible managed usage; promotional credits expire under their stated terms.
+- Public pricing, checkout plan summaries, README, and docs show **20 credits** for Ace and **150 credits** for Ace+. They never split those plan totals into ledger buckets, convert credits into dollars of usage, or expose the internal margin calculation.
+- Credits are managed usage units. After purchase, authenticated balance details may distinguish Wallet purchased credits from expiring or restricted promotional credits so the available balance and terms remain truthful; this ledger detail is not plan marketing.
+- Ace is described as a **Generous research quota**. Ace+ is described as a **3x research quota**. Exact provider and service meters are operational configuration, not plan-card copy.
+- Ace and Ace+ include the same Synthetic Scientists access under the same concurrency policy. Priority support and early access may differ; scientist access does not.
+- Auto-reload is included and enabled by default for new subscriptions after the checkout consent action. Users can turn it off during checkout or anytime in Billing.
+- Hosted Synthetic Scientists membership is an entitlement, not unlimited compute. Managed provider/model/compute work still consumes credits. Local or user-funded execution remains independent of the paid entitlement.
+- Canceling ends plan entitlements and unused research quota at period end. Remaining managed credits follow the customer terms shown in Billing.
 
-### 2.2 Education and legacy subscribers
+### 2.2 Internal catalog and ledger semantics
+
+- The customer-facing total is intentionally separate from the append-only ledger representation. Current catalog grants record Ace as 20 purchased credits and Ace+ as 100 purchased plus 50 promotional credits, while every customer-facing plan summary reports only 20 or 150 credits. Compatibility APIs may retain explicit ledger fields for accounting-aware clients.
+- Purchased credits are non-transferable and non-withdrawable. Promotional ledger entries may expire under the recorded catalog version. This bucket behavior is reconciliation and liability data, not marketing copy.
+- Current managed-search service meters remain versioned internal limits. They may differ by service inside the broader research quota and are never published as the plan definition.
+- Search/service allowances reset on the Stripe subscription period, do not roll over, and cannot be converted to managed credit balance.
+- Immutable catalog and price-schedule versions determine how managed usage settles. Internal cost and margin fields do not appear in customer plan copy.
+- Cancelation and expiry apply the recorded ledger and catalog terms without rewriting historical entries.
+
+### 2.3 Education and legacy subscribers
 
 - A verified `.edu` account receives 50% off the first month only: Ace `$10`, Ace+ `$50`.
 - Verify mailbox ownership server-side and allow one education redemption per person, billing customer, and payment instrument. Log manual overrides.
@@ -95,10 +104,12 @@ research_search
 
 ## 4. Managed research search
 
-### 4.1 Customer contract
+### 4.1 Internal service-meter contract
 
-- Ace includes **1,000 completed managed searches** per Stripe subscription period.
-- Ace+ includes **5,000 completed managed searches** per Stripe subscription period.
+Public surfaces describe the bundle as a **Generous research quota** for Ace and a **3x research quota** for Ace+. The current versioned implementation limits below remain private service configuration rather than plan marketing:
+
+- Ace currently receives 1,000 completed managed-search operations per Stripe subscription period.
+- Ace+ currently receives 5,000 completed managed-search operations per Stripe subscription period.
 - One completed top-level `research_search` request consumes one search, regardless of whether it searches the web, news, developer sources, or research sources.
 - A response with usable partial results counts once and identifies the partial failure.
 - Validation, authentication, pre-dispatch, and provider failures consume zero.
@@ -184,7 +195,7 @@ validate entitlement and request
 - Maintain immutable `price_schedule_version` and `fee_schedule_version` on every charge.
 - Reserve before managed model/compute work; settle actual server-observed provider usage; release the difference.
 - Provider acceptance with an unknown outcome becomes `unknown` and is reconciled. Never dispatch the same paid request again without knowing whether it ran.
-- Apply the 5% service fee in authoritative Gateway hold/settlement pricing. Store provider cost and service fee separately under one price-schedule version.
+- Apply the internal 5% margin in authoritative Gateway hold/settlement pricing. Store provider cost and internal margin separately under one price-schedule version. The rate and provider-cost arithmetic never appear in customer plan copy.
 - The managed proxy's server-side hold/settlement path becomes the sole debit authority. The client completion report never creates a second debit.
 - Cut over in stages: make `/api/cli/usage` a non-financial compatibility/analytics acknowledgement; stop its billing retry queue and `modelBlocked` dependency only after clients use proxy responses/account state; reconcile its historical zero-value markers; then remove its debit code. Prove one managed request produces exactly one wallet debit throughout the transition.
 - Refunds, disputes, expirations, grants, and corrections are new ledger entries, never row rewrites.
@@ -200,8 +211,8 @@ validate entitlement and request
 
 ### 5.3 Auto-reload
 
-- New Ace checkout presents auto-reload selected: reload `$20` when purchased balance falls below `$5`; default monthly cap `$100`.
-- New Ace+ checkout presents auto-reload selected: reload `$100` when purchased balance falls below `$20`; default monthly cap `$500`.
+- New Ace subscriptions start with auto-reload enabled after checkout consent: reload `$20` when the eligible internal balance falls below `$5`; default monthly cap `$100`.
+- New Ace+ subscriptions start with auto-reload enabled after checkout consent: reload `$100` when the eligible internal balance falls below `$20`; default monthly cap `$500`.
 - Users can turn it off or lower the cap before checkout and at any time in Billing.
 - The final checkout action records off-session payment consent, threshold, amount, cap, currency, fee schedule, terms version, timestamp, and actor.
 - Existing users remain off until they explicitly pass through this consent flow.
@@ -346,7 +357,7 @@ Keep the existing warm dark/coral visual identity and its strongest primitives, 
 
 1. **Header:** OpenScience mark, Docs, GitHub, Pricing, Sign in.
 2. **Hero:** one headline, one short explanation, primary Install/Open CTA, secondary View plans CTA, and one copyable install command.
-3. **Product view:** one real OpenScience screenshot with a concise caption.
+3. **Product view:** a concise text-led explanation of the workspace. Do not add an obsolete or unshipped screenshot.
 4. **Works your way:** a compact comparison explaining that local, BYOK, and ChatGPT/Codex remain free while the Gateway is optional.
 5. **Pricing:** Free, Ace, Ace+, and Teams. This is the primary decision surface.
 6. **Install:** one clear install path and supported platforms.
@@ -358,17 +369,17 @@ Remove the oversized database/model/skills grids, duplicate CTAs, public graph p
 ### 9.1 Pricing card copy
 
 - **Free:** “Use OpenScience locally with your own models, ChatGPT/Codex subscription, scientific tools, and direct downloads. Sign in only if you want owned/private graphs.” CTA: Install.
-- **Ace — $20/month:** “20 purchased credits, 1,000 managed searches, hosted Synthetic Scientists access, standard support.” Managed web marked coming soon. CTA: Start Ace.
-- **Ace+ — $100/month:** “150 monthly credits (100 purchased + 50 promotional), 5,000 managed searches, higher hosted limits, priority support, early access.” Collaboration/managed web marked coming soon. CTA: Start Ace+.
+- **Ace, $20/month:** “20 credits, Generous research quota, Synthetic Scientists access, auto-reload enabled by default, standard support.” Managed web marked coming soon. CTA: Start Ace.
+- **Ace+, $100/month:** “150 credits, 3x research quota, Synthetic Scientists access, auto-reload enabled by default, priority support, early access.” Use the same scientist-access and concurrency wording as Ace. Collaboration and managed web are marked coming soon. CTA: Start Ace+.
 - **Teams:** only contracted capabilities; compliance marked coming soon unless actually available. CTA: Contact.
 - Show “50% off the first month with a verified `.edu` email” below paid plans.
-- State “Auto-reload is selected at checkout and can be turned off or changed before payment.” Do not hide it in footnotes.
+- State “Auto-reload is enabled by default and can be turned off during checkout or anytime in Billing.” Do not hide it in footnotes.
 
 ### 9.2 Checkout flow
 
 - Landing CTA uses public `plan=ace|ace_plus`, preserves the choice through sign-in, and resolves legacy identifiers server-side.
-- Checkout shows recurring price, initial credit deposit, purchased/promotional split, search allowance, auto-reload threshold/amount/cap, fees, renewal date, cancellation behavior, and terms.
-- Account Billing shows balance buckets, searches remaining/reset, reload state, plan benefits, invoices, portal, cancellation, and deletion links.
+- Checkout shows recurring price, total monthly credits, research quota, auto-reload threshold/amount/cap, renewal date, cancellation behavior, and terms. It does not expose internal ledger buckets or margin arithmetic in the plan summary.
+- Account Billing shows Wallet purchased credits and any expiring or restricted promo balance as separate post-purchase ledger details, plus research-quota status, reload state, plan benefits, invoices, portal, cancellation, and deletion links. It never relabels promotional credits as Wallet.
 - Mobile layout, keyboard focus, contrast, motion reduction, and 44px interaction targets are required. Pricing cards may use a card layout because they are selectable entities; avoid a generic feature-card wall.
 - Remove scroll parallax and long reveal chains. Keep at most one restrained focal entrance, use roughly 180–260 ms interaction motion, and disable transforms plus global smooth scrolling under `prefers-reduced-motion`.
 
@@ -413,7 +424,7 @@ When public surfaces are hidden, `/explore`, `/explore/graphs/:graphId`, `/u/:ha
 
 ## 11. Public branding migration
 
-Replace user-visible legacy branding with **Gateway** or **OpenScience Gateway** in:
+Replace user-visible legacy branding with context-specific names: **OpenScience** for the local product, **Gateway** for the managed route, and **Synthetic Sciences** for login, account, subscription, and billing identity. Do not render “OpenScience Gateway” as the account name in:
 
 - app titles, nav, home, install, settings, billing, admin, tooltips, empty states, errors, authentication approval, and emails;
 - OpenScience landing, docs, README/security copy, search disclosure, plans, analytics labels, and support material;
@@ -507,7 +518,7 @@ Gateway service:
 1. **Contain production risk:** rotate exposed credentials, inventory schema/policies, add migration ownership, and lock admin access.
 2. **Establish authoritative contracts:** plan versions, entitlements, wallet buckets, managed operations, and compatibility resolvers.
 3. **Ship Stripe product flows:** Ace/Ace+, education, renewal grants, cancellation, portal, and explicit default-on auto-reload consent.
-4. **Ship managed search:** Gateway endpoint, Firecrawl adapter, 1,000/5,000 metering, client tool routing, and Free compatibility.
+4. **Ship managed search:** Gateway endpoint, Firecrawl adapter, versioned internal service metering, client tool routing, and Free compatibility. Public plan copy remains Generous research quota for Ace and 3x research quota for Ace+.
 5. **Ship observability:** default-on content-free analytics, all-route instrumentation, opt-out/deletion, aggregates, and coverage labels.
 6. **Ship admin:** RBAC/MFA, overview/users/billing/usage/privacy/security/configuration pages, support actions, and immutable audit.
 7. **Refine public product surfaces:** minimal OpenScience landing/pricing, checkout links, Gateway branding, and concise docs.
@@ -538,11 +549,11 @@ Run this once per completed workstream, fix concrete failures, then run the affe
 1. **Compatibility matrix:** Free/Ace/Ace+ across managed, BYOK, ChatGPT/Codex, and local routes; science tools; `WebFetch`; community and managed search.
 2. **Billing matrix:** Stripe test clocks for initial checkout, education discount, renewals, duplicate/reordered webhooks, cancel-at-period-end, failed payment, refunds/disputes, plan change, and grandfathered Pro.
 3. **Wallet invariants:** integer accounting and cents/micro-USD conversion, purchased/promotional order, holds/settlement/release/unknown, replay idempotency, concurrent threshold crossing, reload cap, no client-created debit, and exactly one proxy-settled debit per managed request while `/api/cli/usage` is non-financial.
-4. **Search contract:** 1,000/5,000 grants, period reset, concurrency, idempotent replay, failure zero-count, partial one-count, exhaustion, provider circuit breaker, no wallet/reload interaction, and legacy `websearch` compatibility.
+4. **Search contract:** versioned internal grants, period reset, concurrency, idempotent replay, failure zero-count, partial one-count, exhaustion, provider circuit breaker, no wallet/reload interaction, legacy `websearch` compatibility, and no exact service counts in public plan copy.
 5. **Telemetry contract:** all routes emit allowlisted events; prohibited fields are rejected; opt-out/deletion/account switching/corrupt-consent/offline queue behave correctly; AI-SDK emission obeys in-app consent; landing analytics obeys its separate browser consent; research continues when ingest fails.
 6. **Supabase security:** migration drift, RLS role matrix, storage limits, secret scanning, function/grant checks, deletion/retention jobs, and admin MFA.
 7. **Admin:** each role's read/write boundaries, step-up, reason requirement, immutable audit, metric definitions, and source/coverage labels.
-8. **Landing and checkout:** exact plan copy, coming-soon labels, education, auto-reload disclosure, sign-in return-to, Stripe checkout, responsive layout, keyboard, contrast, and reduced motion.
+8. **Landing and checkout:** 20 and 150 credit totals, Generous and 3x research-quota wording, identical Synthetic Scientists access, default-on auto-reload disclosure, no ledger-bucket or margin copy, coming-soon labels, education, sign-in return-to, Stripe checkout, responsive layout, keyboard, contrast, and reduced motion.
 9. **App surface:** Install/Graphs nav only, account-menu Billing/Settings/Admin, `/atlas` compatibility redirect, hidden routes, owner/private-collaborator graph access, public endpoint 404s, and preserved compute API compatibility.
 10. **Release smoke:** one Free local/BYOK workflow, one Ace managed-search workflow, one Ace+ workflow, one opt-out workflow, and one admin read-only workflow, all with rollback flags available.
 
@@ -551,11 +562,13 @@ Run this once per completed workstream, fix concrete failures, then run the affe
 The work is complete only when:
 
 - Free users lose no current local, model, science, search, download, or private-graph capability.
-- Ace grants 20 purchased credits and exactly 1,000 managed searches per subscription period.
-- Ace+ clearly grants 100 purchased + 50 promotional credits and exactly 5,000 managed searches per subscription period.
+- Ace public surfaces show 20 credits, a Generous research quota, Synthetic Scientists access, and auto-reload enabled by default.
+- Ace+ public surfaces show 150 credits, a 3x research quota, the same Synthetic Scientists access and concurrency policy as Ace, and auto-reload enabled by default.
+- Public pricing, checkout plan summaries, README, and docs contain no purchased/promotional split, credit-to-dollar conversion, exact service-meter count, or internal margin rate. Authenticated post-purchase balance details may distinguish Wallet from promo to disclose expiry and restrictions accurately.
+- Internal catalog, ledger, allowance, and price-schedule records remain versioned and reconcile to the customer-facing credit totals without exposing their implementation details.
 - Search works independently of the inference route and never spends wallet credits or triggers auto-reload.
 - Existing `$50` Pro subscriptions and legacy clients continue to resolve without silent repricing.
-- Auto-reload is selected for new checkout, visibly editable, backed by explicit off-session consent, capped, idempotent, and off for existing users until consent.
+- Auto-reload is enabled by default for new subscriptions, visibly editable, backed by explicit off-session consent, capped, idempotent, and off for existing users until consent.
 - Only server-observed managed operations create charges.
 - Shared analytics covers managed/BYOK/ChatGPT/local routes, contains no research content, and can be disabled without affecting research.
 - Supabase has no known plaintext application credentials, every retained object has an owner/migration/policy, and user data cleanup is reconciled rather than guessed.

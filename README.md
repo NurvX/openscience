@@ -68,14 +68,14 @@ openscience ~/code/my-project
 
 ## Gateway
 
-[The OpenScience Gateway](https://app.syntheticsciences.ai) is optional. It adds synced private research graphs, managed models, and managed research search without becoming a dependency for local, BYOK, or ChatGPT/Codex-backed work.
+[The managed Gateway from Synthetic Sciences](https://app.syntheticsciences.ai) is optional. It adds synced private research graphs, managed models, and managed research search without becoming a dependency for local, BYOK, or ChatGPT/Codex-backed work.
 
 ```bash
-openscience login          # connect your Gateway account
+openscience login          # connect your Synthetic Sciences account
 openscience wallet         # check your balance and top up
 ```
 
-Ace is $20/month with 20 managed credits and 1,000 managed searches per billing cycle. Ace+ is $100/month with 100 purchased credits, 50 promotional credits, and 5,000 managed searches. Managed token usage costs the provider price plus a 5% service fee; card-processing fees are shown before purchase. Bring-your-own-key, local-model, and eligible ChatGPT/Codex usage remain independent of those plans and are never charged to the Gateway wallet. Use `openscience status` to see what you are connected to, and `openscience logout` to disconnect.
+Ace is $20/month with **20 credits**, a **Generous research quota**, Synthetic Scientists access, and auto-reload enabled by default. Ace+ is $100/month with **150 credits**, a **3x research quota**, the same Synthetic Scientists access, priority support, and early access. Auto-reload can be turned off during checkout or anytime in Billing. Bring-your-own-key, local-model, and eligible ChatGPT/Codex usage remain independent of those plans and are never charged against managed credits. Use `openscience status` to see what you are connected to, and `openscience logout` to disconnect.
 
 ## How it works
 

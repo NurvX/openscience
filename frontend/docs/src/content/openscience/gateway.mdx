@@ -1,18 +1,18 @@
 ---
-title: "Connect the Gateway"
-description: "Optionally add managed model credits, research search, synced credentials, and private research graphs without changing local or BYOK workflows."
+title: "Connect Synthetic Sciences"
+description: "Optionally add managed credits, research capacity, synced credentials, and private research graphs without changing local or BYOK workflows."
 icon: "link"
 ---
 
-OpenScience never requires an account. Local models, your own provider keys, eligible ChatGPT/Codex access, scientific tools, Python/R, and direct downloads continue to work without a plan. The **OpenScience Gateway** is the optional managed service.
+OpenScience never requires an account. Local models, your own provider keys, eligible ChatGPT/Codex access, scientific tools, Python/R, and direct downloads continue to work without a plan. Connecting a **Synthetic Sciences account** adds the optional managed Gateway.
 
 ## What connecting adds
 
-- **Managed model credits.** Use supported models without configuring a provider key. Only Gateway-served calls debit the wallet.
-- **Managed research search.** Ace includes 1,000 completed searches per billing cycle; Ace+ includes 5,000. Search does not consume wallet credits or trigger auto reload.
+- **Managed model credits.** Use supported models without configuring a provider key. Only Gateway-served calls use managed credits.
+- **Managed research capacity.** Ace includes a generous research quota. Ace+ includes 3x the research quota across managed research services.
 - **Private research graphs.** Sync durable claims, runs, evidence, and decisions that are visible only to owners and explicitly invited collaborators.
 - **Synced service credentials.** Store supported service keys on your account and pull them to another signed-in machine.
-- **Hosted researchers.** Ace and Ace+ include access to hosted Synthetic Scientists, subject to the plan's concurrency limits.
+- **Hosted researchers.** Ace and Ace+ include the same Synthetic Scientists access under the same concurrency policy.
 
 Compute and public graph discovery are not current application features. Existing compatible compute APIs remain available to clients that already use them.
 
@@ -29,7 +29,7 @@ Compute and public graph discovery are not current application features. Existin
     ```bash
     openscience status
     ```
-    Shows the connected user, subscription, wallet, managed-search allowance, synced services, and recent managed usage.
+    Shows the connected user, subscription, credit balance, research quota, synced services, and recent managed usage.
   </Step>
   <Step title="Sync credentials">
     ```bash
@@ -41,14 +41,14 @@ Compute and public graph discovery are not current application features. Existin
 
 ## Ace plans
 
-| Plan | Monthly price | Managed credits | Managed searches |
-| --- | ---: | ---: | ---: |
-| Ace | $20 | 20 purchased | 1,000 |
-| Ace+ | $100 | 100 purchased + 50 promotional | 5,000 |
+| Plan | Monthly price | Credits | Research quota | Included access |
+| --- | ---: | ---: | --- | --- |
+| Ace | $20 | **20 credits** | **Generous research quota** | Synthetic Scientists access and standard support |
+| Ace+ | $100 | **150 credits** | **3x research quota** | The same Synthetic Scientists access, priority support, and early access |
 
-Ace+ promotional credits expire at the end of the billing cycle. Eligible `.edu` accounts receive 50% off the first month. Managed token usage costs the provider price plus a 5% service fee. Card processing is included in the plan price with no additional checkout fee; checkout shows the complete auto-reload settings before payment.
+Eligible `.edu` accounts receive 50% off the first month. Card processing is included in the plan price with no additional checkout fee.
 
-New checkout presents auto reload selected by default. Ace reloads $20 below a $5 purchased-balance threshold with a default $100 monthly cap; Ace+ reloads $100 below $20 with a default $500 cap. You can deselect it before checkout or disable it later. Existing accounts are not silently enrolled.
+Auto-reload is enabled by default for new Ace subscriptions. Checkout shows the reload amount, threshold, and monthly cap before payment. You can turn it off during checkout or anytime in Billing. Existing accounts are not enrolled without consent.
 
 ## Routing and billing
 
@@ -59,9 +59,9 @@ Routing and plan status are independent. An Ace subscriber may still use local, 
 | Local | OpenScience calls a local endpoint. | No Gateway charge. |
 | BYOK | OpenScience calls your provider directly. | Your provider account; no Gateway charge. |
 | ChatGPT/Codex | OpenScience uses the eligible signed-in route. | Your subscription; no Gateway charge. |
-| Gateway managed | OpenScience calls the Gateway, which calls the provider. | Gateway wallet. |
+| Gateway managed | OpenScience calls the Gateway, which calls the provider. | Managed credits. |
 
-Managed-search queries are sent to the Gateway and its configured search provider. If the Gateway is unavailable or an allowance is exhausted, OpenScience keeps non-managed routes working and explains the available fallback.
+Managed research queries are sent to the Gateway and its configured provider. If the Gateway is unavailable or a research quota is exhausted, OpenScience keeps non-managed routes working and explains the available fallback.
 
 ## Privacy
 
@@ -72,7 +72,7 @@ Content-free product telemetry is enabled by default and can be disabled in Sett
 | Command | Use |
 | --- | --- |
 | `openscience login` | Authenticate this device. |
-| `openscience status` | Inspect connection, plan, wallet, search allowance, and recent usage. |
+| `openscience status` | Inspect connection, plan, credits, research quota, and recent usage. |
 | `openscience wallet` | Inspect the managed balance and auto-reload state. |
 | `openscience sync` | Refresh synced supported credentials. |
 | `openscience devices` | List authenticated devices. |

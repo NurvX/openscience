@@ -214,7 +214,7 @@ export default function ResearchTools() {
                 <RowCopy
                   title={state()?.plan.label ?? "Loading…"}
                   description={
-                    state()?.signedIn ? "Current OpenScience plan" : "Sign in to see managed plan entitlements"
+                    state()?.signedIn ? "Current Synthetic Sciences plan" : "Sign in to see managed plan entitlements"
                   }
                 />
                 <Button size="small" variant="secondary" onClick={() => platform.openLink(URLS.dashboardBilling)}>

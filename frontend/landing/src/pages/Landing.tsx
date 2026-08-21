@@ -75,11 +75,21 @@ function Eyebrow({ children }: { children: React.ReactNode }) {
   return <p className="mb-4 text-[13px] tracking-[0.06em] text-[hsl(var(--accent-coral))]">{children}</p>
 }
 
-function Check({ children }: { children: React.ReactNode }) {
+type Feature = {
+  title: string
+  detail?: string
+}
+
+function Check({ feature }: { feature: Feature }) {
   return (
-    <li className="flex gap-3 text-[14px] leading-6 text-foreground/72">
-      <span className="mt-[9px] h-1 w-1 shrink-0 bg-[hsl(var(--accent-coral))]" aria-hidden />
-      <span>{children}</span>
+    <li className="flex gap-3 text-[14px] leading-6">
+      <span className="mt-[9px] h-1.5 w-1.5 shrink-0 bg-[hsl(var(--accent-coral))]" aria-hidden />
+      <span className="min-w-0">
+        <strong className="font-bold text-foreground/92">{feature.title}</strong>
+        {feature.detail ? (
+          <span className="block text-[13px] leading-5 text-foreground/52">{feature.detail}</span>
+        ) : null}
+      </span>
     </li>
   )
 }
@@ -88,38 +98,61 @@ type PlanProps = {
   name: string
   price: string
   description: string
-  features: React.ReactNode[]
+  features: Feature[]
   href: string
+  cadence?: string
+  credits?: string
   priceNote?: string
   featured?: boolean
   label?: string
 }
 
-function Plan({ name, price, priceNote, description, features, href, featured = false, label }: PlanProps) {
+function Plan({
+  name,
+  price,
+  cadence,
+  credits,
+  priceNote,
+  description,
+  features,
+  href,
+  featured = false,
+  label,
+}: PlanProps) {
   return (
     <article
-      className={`flex h-full flex-col border p-6 sm:p-7 ${
+      className={`relative flex h-full flex-col overflow-hidden rounded-lg border p-6 shadow-[0_24px_70px_-48px_hsl(var(--foreground)/0.35)] sm:p-7 ${
         featured
-          ? "border-[hsl(var(--accent-coral)/0.7)] bg-[hsl(var(--accent-coral)/0.045)]"
-          : "border-border/80 bg-background/35"
+          ? "border-[hsl(var(--accent-coral)/0.72)] bg-[linear-gradient(155deg,hsl(var(--accent-coral)/0.10),hsl(var(--background))_42%)]"
+          : "border-border/90 bg-background/55"
       }`}
     >
+      {featured ? <span className="absolute inset-x-0 top-0 h-0.5 bg-[hsl(var(--accent-coral))]" aria-hidden /> : null}
       <div className="flex min-h-6 items-start justify-between gap-3">
-        <h3 className="text-[24px] leading-none">{name}</h3>
+        <h3 className="text-[25px] font-bold leading-none tracking-[-0.02em]">{name}</h3>
         {label ? (
-          <span className="border border-[hsl(var(--accent-coral)/0.55)] px-2 py-1 font-terminal text-[10px] tracking-[0.08em] text-[hsl(var(--accent-coral))]">
+          <span className="rounded-sm border border-[hsl(var(--accent-coral)/0.55)] bg-[hsl(var(--accent-coral)/0.08)] px-2 py-1 font-terminal text-[9px] font-bold tracking-[0.08em] text-[hsl(var(--accent-coral))]">
             {label}
           </span>
         ) : null}
       </div>
-      <p className="mt-5 font-terminal text-[28px] tabular-nums text-foreground">{price}</p>
+      <div className="mt-7 flex items-end gap-2">
+        <p className="font-terminal text-[34px] font-bold leading-none tabular-nums text-foreground">{price}</p>
+        {cadence ? <span className="pb-0.5 text-[13px] text-foreground/48">{cadence}</span> : null}
+      </div>
       {priceNote ? (
-        <p className="mt-2 min-h-5 font-terminal text-[11px] tabular-nums text-foreground/48">{priceNote}</p>
+        <p className="mt-2 min-h-5 font-terminal text-[11px] tabular-nums text-foreground/52">{priceNote}</p>
       ) : null}
-      <p className="mt-4 min-h-[96px] text-[14px] leading-6 text-foreground/68">{description}</p>
-      <ul className="mt-6 space-y-3">
+      <p className="mt-5 min-h-[88px] text-[14px] leading-6 text-foreground/66">{description}</p>
+      {credits ? (
+        <div className="mt-1 rounded-md border border-border/80 bg-foreground/[0.035] px-4 py-3.5">
+          <p className="text-[18px] font-bold leading-5 text-foreground">{credits}</p>
+          <p className="mt-1 text-[12px] text-foreground/48">included every month</p>
+        </div>
+      ) : null}
+      <ul className="mt-6 space-y-3 border-t border-border/70 pt-6">
         {features.map((feature, index) => (
-          <Check key={index}>{feature}</Check>
+          <Check key={index} feature={feature} />
         ))}
       </ul>
       <div className="mt-auto pt-8">
@@ -255,35 +288,37 @@ export default function Landing({
               Start free. Add managed capacity when the work gets serious.
             </h2>
             <p className="mt-5 max-w-[66ch] text-[16px] leading-8 text-foreground/65">
-              Wallet credits pay for managed model usage. Search allowances and promotional credits stay separate. Auto
-              reload is selected for new checkout, shown before payment, and can be turned off at any time.
+              Paid plans bundle managed model credits, research capacity, and Synthetic Scientists access. Auto-reload
+              is enabled by default to keep work moving and can be turned off at any time.
             </p>
           </div>
-          <div className="mt-12 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-12 grid max-w-[1060px] gap-5 lg:grid-cols-2">
             <Plan
               name="Free"
               price="$0"
               priceNote="Free to install and use locally"
               description="The full local research workspace. Bring your own providers and keep complete control of every workflow."
               features={[
-                "Desktop app and CLI",
-                "Local models, BYOK, and eligible ChatGPT access",
-                "Python, R, notebooks, files, and core tools",
-                "Private graphs with your own infrastructure",
+                { title: "Desktop app and CLI" },
+                { title: "Local models, BYOK, and eligible ChatGPT access" },
+                { title: "Python, R, notebooks, files, and core tools" },
+                { title: "Private graphs with your own infrastructure" },
               ]}
               href="#install"
             />
             <Plan
               name="Ace"
-              price="$20 / month"
+              price="$20"
+              cadence="per month"
+              credits="20 credits"
               priceNote="Verified .edu: $10 for the first month"
-              description="Skip provider setup and keep momentum with managed model spend, research search, and a hosted scientist."
+              description="A simple managed plan for researchers who want less setup and more uninterrupted time on the work."
               features={[
-                "$20 added to Wallet every month",
-                "1,000 completed managed searches each billing cycle",
-                "1 hosted Synthetic Scientists research run at a time",
-                "Standard support",
-                "Managed web workspace (coming soon)",
+                { title: "Generous research quota" },
+                { title: "Synthetic Scientists access" },
+                { title: "Auto-reload enabled by default" },
+                { title: "Standard support" },
+                { title: "Managed web workspace", detail: "Coming soon" },
               ]}
               href={`${APP}/billing?plan=ace`}
               featured
@@ -291,16 +326,17 @@ export default function Landing({
             />
             <Plan
               name="Ace+"
-              price="$100 / month"
+              price="$100"
+              cadence="per month"
+              credits="150 credits"
               priceNote="Verified .edu: $50 for the first month"
-              description="Run sustained and parallel investigations with more managed capacity, more search, and higher hosted limits."
+              description="More managed capacity for researchers and small teams running deeper, sustained investigations."
               features={[
-                "$100 added to Wallet every month",
-                "$50 in promotional credits each cycle, separate and expiring",
-                "5,000 completed managed searches each billing cycle",
-                "3 hosted Synthetic Scientists research runs at a time",
-                "Priority support and early access",
-                "Collaboration and managed web workspace (coming soon)",
+                { title: "3x research quota" },
+                { title: "Synthetic Scientists access" },
+                { title: "Auto-reload enabled by default" },
+                { title: "Priority support and early access" },
+                { title: "Collaboration and managed web workspace", detail: "Coming soon" },
               ]}
               href={`${APP}/billing?plan=ace_plus`}
               label="MORE CAPACITY"
@@ -311,19 +347,17 @@ export default function Landing({
               priceNote="Talk with our team"
               description="Bring OpenScience to a research group with the controls, integrations, and support your environment requires."
               features={[
-                "Multi-user accounts and admin controls",
-                "Private data and cluster integrations",
-                "Dedicated engineering support",
-                "SSO, on-prem, ZDR, and compliance options coming soon",
+                { title: "Multi-user accounts and admin controls" },
+                { title: "Private data and cluster integrations" },
+                { title: "Dedicated engineering support" },
+                { title: "SSO, on-prem, ZDR, and compliance options", detail: "Coming soon" },
               ]}
               href="mailto:hello@syntheticsciences.ai?subject=OpenScience%20Teams"
             />
           </div>
           <p className="mt-7 text-[13px] leading-6 text-foreground/50">
-            Eligible .edu accounts receive 50% off their first month. Your Wallet holds paid credits only. Ace+
-            promotional credits are shown separately, expire at the end of the billing cycle, and do not roll over.
-            Managed token usage is charged at provider cost plus a 5% service fee. Card processing is included in the
-            plan price with no additional checkout fee.
+            Eligible .edu accounts receive 50% off their first month. Card processing is included in the plan price with
+            no additional checkout fee.
           </p>
         </div>
       </section>
@@ -339,7 +373,7 @@ export default function Landing({
           </h2>
           <p className="mt-5 text-[16px] leading-8 text-foreground/65">
             Install the CLI, open a project, and start working. Connect the Gateway only if you want synced private
-            graphs, managed search, or Wallet credits.
+            graphs, managed research, or credits.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button href={DOCS}>Read the docs</Button>
@@ -370,14 +404,12 @@ export default function Landing({
             available without an Ace plan. Ace is the optional managed Gateway plan.
           </Faq>
           <Faq question="What is a credit?">
-            One Wallet credit is one US dollar in your managed Gateway balance. Managed model calls debit provider cost
-            plus a 5% service fee. Ace+ promotional credits and search allowances are counted separately; neither is
-            part of your Wallet balance.
+            Credits power managed model usage through Synthetic Sciences. Your current credit balance and usage are
+            always visible in Billing.
           </Faq>
           <Faq question="How does auto reload work?">
-            New Ace checkouts show auto reload selected by default with the threshold, amount, and monthly cap visible
-            before payment. You can deselect it during checkout or disable it later. Existing users are not silently
-            enrolled.
+            Auto-reload is enabled by default for new Ace subscriptions. The reload amount, threshold, and monthly cap
+            are shown before payment, and you can turn it off during checkout or anytime in Billing.
           </Faq>
           <Faq question="What data does OpenScience collect?">
             Content-free product telemetry is on by default and can be disabled in Settings. It records operational
