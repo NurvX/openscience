@@ -116,24 +116,38 @@ describe("managed data root", () => {
     const data = path.join(base, "data")
     const managed = await DataRoot.ensure(config, data, false)
     DataRootBarrier.configure({ root: managed.path, config })
-    let finish!: () => void
-    const delayed = new Promise<void>((resolve) => (finish = resolve))
-    const request = DataRootBarrier.during(managed.path, () => delayed)
-    await Bun.sleep(20)
-
-    let exclusive = false
-    const switching = DataRootBarrier.exclusive().then((lease) => {
-      exclusive = true
-      return lease
+    const started = Promise.withResolvers<void>()
+    const delayed = Promise.withResolvers<void>()
+    const request = DataRootBarrier.during(managed.path, async () => {
+      started.resolve()
+      await delayed.promise
     })
-    await Bun.sleep(50)
-    expect(exclusive).toBe(false)
+    let switching: Promise<AsyncDisposable> | undefined
+    let lease: AsyncDisposable | undefined
+    try {
+      // Callback entry proves createOperation accepted a durable marker. A
+      // fixed sleep can let relocation intent win first, leaving the request
+      // correctly blocked until the test releases the exclusive lease.
+      await started.promise
+      let exclusive = false
+      switching = DataRootBarrier.exclusive().then((value) => {
+        exclusive = true
+        return value
+      })
+      await waitForFile(path.join(config, "data-root-switch.intent"))
+      expect(await operationMarkers(config)).toHaveLength(1)
+      expect(exclusive).toBe(false)
 
-    finish()
-    await request
-    const lease = await switching
-    expect(exclusive).toBe(true)
-    await lease[Symbol.asyncDispose]()
+      delayed.resolve()
+      await request
+      lease = await switching
+      expect(exclusive).toBe(true)
+    } finally {
+      delayed.resolve()
+      await request.catch(() => undefined)
+      lease ??= await switching?.catch(() => undefined)
+      await lease?.[Symbol.asyncDispose]()
+    }
   })
 
   test("admits a physical reassignable child after intent without releasing its ancestor early", async () => {
