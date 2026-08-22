@@ -60,8 +60,11 @@ import type {
   FilePartSource,
   FileProvenanceResponses,
   FilePublicationCapabilitiesResponses,
+  FilePublicationErrors,
   FilePublicationResponses,
+  FileRawErrors,
   FileRawResponses,
+  FileReadErrors,
   FileReadResponses,
   FileRenameErrors,
   FileRenameResponses,
@@ -70,9 +73,11 @@ import type {
   FileReviewsCurrentResponses,
   FileReviewsFinalizeErrors,
   FileReviewsFinalizeResponses,
+  FileReviewsHistoryErrors,
   FileReviewsHistoryResponses,
   FileReviewsResolveErrors,
   FileReviewsResolveResponses,
+  FileReviewsRunErrors,
   FileReviewsRunResponses,
   FileStatusResponses,
   FileTrashCreateErrors,
@@ -2240,6 +2245,7 @@ export class Project2 extends HeyApiClient {
         | "project_formatter"
         | "project_lsp"
         | "provider_token_command"
+        | "publication_export"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2953,6 +2959,7 @@ export class Session extends HeyApiClient {
   public create<ThrowOnError extends boolean = false>(
     parameters?: {
       directory?: string
+      id?: string
       parentID?: string
       title?: string
       permission?: PermissionRuleset
@@ -2965,6 +2972,7 @@ export class Session extends HeyApiClient {
         {
           args: [
             { in: "query", key: "directory" },
+            { in: "body", key: "id" },
             { in: "body", key: "parentID" },
             { in: "body", key: "title" },
             { in: "body", key: "permission" },
@@ -3651,6 +3659,8 @@ export class Session extends HeyApiClient {
       model?: string
       arguments: string
       command: string
+      effort?: ResearchEffort
+      delegation?: boolean
       variant?: string
       tier?: string
       parts?: Array<{
@@ -3676,6 +3686,8 @@ export class Session extends HeyApiClient {
             { in: "body", key: "model" },
             { in: "body", key: "arguments" },
             { in: "body", key: "command" },
+            { in: "body", key: "effort" },
+            { in: "body", key: "delegation" },
             { in: "body", key: "variant" },
             { in: "body", key: "tier" },
             { in: "body", key: "parts" },
@@ -4151,9 +4163,9 @@ export class Runtime extends HeyApiClient {
 
 export class Search extends HeyApiClient {
   /**
-   * Search sessions, messages, and artifacts
+   * Search sessions, messages, files, and artifacts
    *
-   * Case-insensitive plain-text search across session titles, recent conversation text, and artifact files in the project.
+   * Case-insensitive plain-text search across session titles, recent conversation text, up to 500 visible workspace files, and artifact files in the project.
    */
   public query<ThrowOnError extends boolean = false>(
     parameters: {
@@ -5098,6 +5110,7 @@ export class Reviews extends HeyApiClient {
     parameters: {
       directory?: string
       path: string
+      sessionID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5108,6 +5121,7 @@ export class Reviews extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "path" },
+            { in: "query", key: "sessionID" },
           ],
         },
       ],
@@ -5127,6 +5141,7 @@ export class Reviews extends HeyApiClient {
   public run<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
+      sessionID?: string
       path: string
       actor?: string
     },
@@ -5138,13 +5153,14 @@ export class Reviews extends HeyApiClient {
         {
           args: [
             { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
             { in: "body", key: "path" },
             { in: "body", key: "actor" },
           ],
         },
       ],
     )
-    return (options?.client ?? this.client).post<FileReviewsRunResponses, unknown, ThrowOnError>({
+    return (options?.client ?? this.client).post<FileReviewsRunResponses, FileReviewsRunErrors, ThrowOnError>({
       url: "/file/reviews",
       ...options,
       ...params,
@@ -5165,6 +5181,7 @@ export class Reviews extends HeyApiClient {
     parameters: {
       directory?: string
       path: string
+      sessionID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5175,11 +5192,12 @@ export class Reviews extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "path" },
+            { in: "query", key: "sessionID" },
           ],
         },
       ],
     )
-    return (options?.client ?? this.client).get<FileReviewsHistoryResponses, unknown, ThrowOnError>({
+    return (options?.client ?? this.client).get<FileReviewsHistoryResponses, FileReviewsHistoryErrors, ThrowOnError>({
       url: "/file/reviews/history",
       ...options,
       ...params,
@@ -5196,6 +5214,7 @@ export class Reviews extends HeyApiClient {
       id: string
       finding: string
       directory?: string
+      sessionID?: string
       status: "resolved" | "overridden"
       actor: string
       reason: string
@@ -5210,6 +5229,7 @@ export class Reviews extends HeyApiClient {
             { in: "path", key: "id" },
             { in: "path", key: "finding" },
             { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
             { in: "body", key: "status" },
             { in: "body", key: "actor" },
             { in: "body", key: "reason" },
@@ -5238,6 +5258,7 @@ export class Reviews extends HeyApiClient {
     parameters: {
       id: string
       directory?: string
+      sessionID?: string
       actor: string
     },
     options?: Options<never, ThrowOnError>,
@@ -5249,6 +5270,7 @@ export class Reviews extends HeyApiClient {
           args: [
             { in: "path", key: "id" },
             { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
             { in: "body", key: "actor" },
           ],
         },
@@ -5327,7 +5349,7 @@ export class File_ extends HeyApiClient {
         },
       ],
     )
-    return (options?.client ?? this.client).get<FileReadResponses, unknown, ThrowOnError>({
+    return (options?.client ?? this.client).get<FileReadResponses, FileReadErrors, ThrowOnError>({
       url: "/file/content",
       ...options,
       ...params,
@@ -5454,6 +5476,8 @@ export class File_ extends HeyApiClient {
       directory?: string
       path: string
       sessionID?: string
+      maxBytes?: number
+      inline?: "true" | "false"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5465,11 +5489,13 @@ export class File_ extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "path" },
             { in: "query", key: "sessionID" },
+            { in: "query", key: "maxBytes" },
+            { in: "query", key: "inline" },
           ],
         },
       ],
     )
-    return (options?.client ?? this.client).get<FileRawResponses, unknown, ThrowOnError>({
+    return (options?.client ?? this.client).get<FileRawResponses, FileRawErrors, ThrowOnError>({
       url: "/file/raw",
       ...options,
       ...params,
@@ -5635,6 +5661,7 @@ export class File_ extends HeyApiClient {
   public publication<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
+      sessionID?: string
       path: string
       format: "html" | "pdf" | "docx" | "latex" | "pptx"
       readiness?: "draft" | "reviewed"
@@ -5648,6 +5675,7 @@ export class File_ extends HeyApiClient {
         {
           args: [
             { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
             { in: "body", key: "path" },
             { in: "body", key: "format" },
             { in: "body", key: "readiness" },
@@ -5656,7 +5684,7 @@ export class File_ extends HeyApiClient {
         },
       ],
     )
-    return (options?.client ?? this.client).post<FilePublicationResponses, unknown, ThrowOnError>({
+    return (options?.client ?? this.client).post<FilePublicationResponses, FilePublicationErrors, ThrowOnError>({
       url: "/file/publication",
       ...options,
       ...params,

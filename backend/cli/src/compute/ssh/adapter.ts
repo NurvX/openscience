@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process"
 import crypto from "node:crypto"
-import { createReadStream } from "node:fs"
+import { constants as FS } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import type { Readable } from "node:stream"
 import type { ModalAdapter } from "../modal/adapter"
 
 export namespace SshAdapter {
@@ -54,17 +55,122 @@ export namespace SshAdapter {
     files: { path: string; size: number; sha256: string }[]
   }
 
+  export type OperationOptions = {
+    signal?: AbortSignal
+    timeoutMs?: number
+  }
+
+  const STDOUT_BYTES = 256 * 1024
+  const STDERR_BYTES = 64 * 1024
+  const MANIFEST_BYTES = 256 * 1024
+  const COMMAND_TIMEOUT = 300_000
+  const STOP_GRACE = 1_000
+
+  const BOUNDED_SUBPROCESS = String.raw`
+def bounded(argv, stdout_limit=4 * 1024 * 1024, stderr_limit=64 * 1024, timeout=15):
+    if stdout_limit < 0 or stderr_limit < 0 or timeout <= 0:
+        raise RuntimeError("Invalid remote command capture limits")
+    options = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "close_fds": True,
+    }
+    if os.name == "posix":
+        options["start_new_session"] = True
+    process = subprocess.Popen(argv, **options)
+    selector = None
+    streams = ((process.stdout, "stdout", stdout_limit), (process.stderr, "stderr", stderr_limit))
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    def stop():
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except (OSError, ProcessLookupError):
+            pass
+    try:
+        selector = selectors.DefaultSelector()
+        for stream, label, limit in streams:
+            if stream is None:
+                continue
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, (label, limit))
+        deadline = time.monotonic() + timeout
+        failure = ""
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = "Remote command timed out after " + str(timeout) + " seconds"
+                break
+            for key, _ in selector.select(min(remaining, 0.1)):
+                label, limit = key.data
+                try:
+                    chunk = os.read(key.fd, 65536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                target = buffers[label]
+                accepted = min(len(chunk), max(0, limit - len(target)))
+                if accepted:
+                    target.extend(chunk[:accepted])
+                if accepted != len(chunk):
+                    failure = "Remote command " + label + " exceeded " + str(limit) + " bytes"
+                    break
+            if failure:
+                break
+        if failure:
+            raise RuntimeError(failure)
+        remaining = max(0.01, deadline - time.monotonic())
+        try:
+            code = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Remote command timed out after " + str(timeout) + " seconds") from None
+        return subprocess.CompletedProcess(
+            argv,
+            code,
+            buffers["stdout"].decode("utf-8", errors="replace"),
+            buffers["stderr"].decode("utf-8", errors="replace"),
+        )
+    except BaseException:
+        stop()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            stop()
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        for stream, _, _ in streams:
+            if stream is not None and not stream.closed:
+                stream.close()
+        if process.returncode is None:
+            stop()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                stop()
+`
+
   const SUPERVISOR = String.raw`#!/usr/bin/env python3
 import ctypes
 import hashlib
 import json
 import os
 import pathlib
+import selectors
 import shutil
 import signal
 import subprocess
 import sys
 import time
+
+${BOUNDED_SUBPROCESS}
 
 root = pathlib.Path(sys.argv[1]).resolve()
 script = pathlib.Path(sys.argv[2]).resolve()
@@ -95,7 +201,7 @@ def identity(pid):
         text = stat.read_text(encoding="utf-8")
         fields = text[text.rfind(")") + 2:].split()
         return "proc:" + fields[19]
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = bounded(["ps", "-p", str(pid), "-o", "lstart="], stdout_limit=4096, timeout=5)
     return "ps:" + result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else ""
 
 darwin_library = None
@@ -228,7 +334,7 @@ def leased(refresh=False):
     now = time.monotonic()
     if not refresh and now - lease_checked < 2.0:
         return lease_cache
-    result = subprocess.run([lease_tool, "-t", str(lease_path)], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = bounded([lease_tool, "-t", str(lease_path)], stdout_limit=1024 * 1024, timeout=5)
     lease_checked = now
     lease_cache = [int(value) for value in result.stdout.split() if value.isdigit() and int(value) != os.getpid()] if result.returncode in (0, 1) else []
     return lease_cache
@@ -271,7 +377,7 @@ def tagged(refresh=False):
     if not refresh and now - tag_checked < 0.5:
         return tag_cache
     token = "OPENSCIENCE_JOB_ID=" + hashlib.sha256(str(root).encode()).hexdigest()
-    result = subprocess.run(["ps", "eww", "-axo", "pid=,command="], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = bounded(["ps", "eww", "-axo", "pid=,command="], stdout_limit=16 * 1024 * 1024, timeout=10)
     if result.returncode != 0:
         return []
     found = []
@@ -286,7 +392,7 @@ def tagged(refresh=False):
 def cgroup_members():
     if not unit or not pathlib.Path("/sys/fs/cgroup").is_dir():
         return []
-    result = subprocess.run(["systemctl", "--user", "show", unit, "--property=ControlGroup", "--value"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = bounded(["systemctl", "--user", "show", unit, "--property=ControlGroup", "--value"], stdout_limit=64 * 1024, timeout=5)
     group = result.stdout.strip()
     if result.returncode != 0 or not group.startswith("/"):
         return []
@@ -532,6 +638,7 @@ import hashlib
 import json
 import os
 import pathlib
+import selectors
 import shlex
 import shutil
 import signal
@@ -540,6 +647,8 @@ import sys
 import tarfile
 import tempfile
 import time
+
+${BOUNDED_SUBPROCESS}
 
 root = pathlib.Path(__file__).resolve().parent
 
@@ -571,7 +680,7 @@ def identity(pid):
             return "proc:" + text[text.rfind(")") + 2:].split()[19]
         except (FileNotFoundError, ProcessLookupError, IndexError):
             return ""
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = bounded(["ps", "-p", str(pid), "-o", "lstart="], stdout_limit=4096, timeout=5)
     return "ps:" + result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else ""
 
 def runtime():
@@ -649,14 +758,14 @@ def scope_ready():
     if not shutil.which("systemd-run") or not shutil.which("systemctl"):
         return False
     name = "openscience-probe-" + str(os.getpid()) + "-" + str(time.time_ns()) + ".scope"
-    result = subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "--unit=" + name, "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = bounded(["systemd-run", "--user", "--scope", "--quiet", "--unit=" + name, "true"], stdout_limit=4096, stderr_limit=4096, timeout=10)
     return result.returncode == 0
 
 def scope_empty(value):
     unit = value.get("unit") if value else ""
     if not unit:
         return True
-    result = subprocess.run(["systemctl", "--user", "is-active", unit], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = bounded(["systemctl", "--user", "is-active", unit], stdout_limit=4096, timeout=5)
     return result.stdout.strip() not in ("active", "activating", "deactivating", "reloading")
 
 def workload(value):
@@ -721,18 +830,18 @@ def flags(value):
 
 def recover_scheduler(value, name):
     if value["scheduler"] == "slurm":
-        live = subprocess.run(["squeue", "-h", "--name=" + name, "-o", "%A|%j"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        live = bounded(["squeue", "-h", "--name=" + name, "-o", "%A|%j"], timeout=15)
         for line in live.stdout.splitlines():
             fields = line.strip().split("|", 1)
             if len(fields) == 2 and fields[1] == name and fields[0]:
                 return "slurm:" + fields[0]
-        history = subprocess.run(["sacct", "-n", "-X", "--name=" + name, "--format=JobIDRaw,JobName", "-P"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        history = bounded(["sacct", "-n", "-X", "--name=" + name, "--format=JobIDRaw,JobName", "-P"], timeout=15)
         for line in history.stdout.splitlines():
             fields = line.strip().split("|", 1)
             if len(fields) == 2 and fields[1] == name and fields[0]:
                 return "slurm:" + fields[0]
         return ""
-    query = subprocess.run(["qstat", "-f"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    query = bounded(["qstat", "-f"], timeout=15)
     identifier = ""
     matched = False
     for line in query.stdout.splitlines() + [""]:
@@ -781,7 +890,11 @@ def submit(token):
     atomic("intent.json", json.dumps({"scheduler": value["scheduler"], "name": name, "created_at": time.time_ns()}, separators=(",", ":")))
     if value["scheduler"] == "slurm":
         command = ["sbatch", "--parsable", "--job-name=" + name, "--output=" + str(log), "--error=" + str(log)] + flags(value) + [str(script)]
-        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            result = bounded(command, stdout_limit=64 * 1024, stderr_limit=64 * 1024, timeout=30)
+        except Exception:
+            intent.unlink(missing_ok=True)
+            raise
         if result.returncode != 0:
             intent.unlink(missing_ok=True)
             raise RuntimeError("sbatch failed: " + result.stderr.strip())
@@ -791,7 +904,11 @@ def submit(token):
         identifier = "slurm:" + identifier
     elif value["scheduler"] == "pbs":
         command = ["qsub", "-N", name, "-j", "oe", "-o", str(log)] + flags(value) + [str(script)]
-        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            result = bounded(command, stdout_limit=64 * 1024, stderr_limit=64 * 1024, timeout=30)
+        except Exception:
+            intent.unlink(missing_ok=True)
+            raise
         if result.returncode != 0:
             intent.unlink(missing_ok=True)
             raise RuntimeError("qsub failed: " + result.stderr.strip())
@@ -844,20 +961,20 @@ def slurm_result(raw_state, raw_exit):
 def scheduler_status(identifier, value):
     raw = identifier.split(":", 1)[1]
     if identifier.startswith("slurm:"):
-        live = subprocess.run(["squeue", "-h", "-j", raw, "-o", "%T"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        live = bounded(["squeue", "-h", "-j", raw, "-o", "%T"], timeout=15)
         state = live.stdout.strip().splitlines()
         if state:
             name = state[0].upper()
             return {"state": "queued" if name in ("PENDING", "CONFIGURING") else "running", "detail": name}
-        history = subprocess.run(["sacct", "-n", "-X", "-P", "-j", raw, "--format=State,ExitCode"], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        history = bounded(["sacct", "-n", "-X", "-P", "-j", raw, "--format=State,ExitCode"], timeout=15)
         rows = [line for line in history.stdout.splitlines() if line.strip()]
         if rows:
             fields = rows[0].split("|")
             return slurm_result(fields[0], fields[1] if len(fields) > 1 else "1:0")
         return {"state": "unknown", "detail": "Slurm no longer reports this job and no exit marker was found"}
-    query = subprocess.run(["qstat", "-xf", raw], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    query = bounded(["qstat", "-xf", raw], timeout=15)
     if query.returncode != 0:
-        query = subprocess.run(["qstat", "-f", raw], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        query = bounded(["qstat", "-f", raw], timeout=15)
     text = query.stdout
     match = next((line.split("=", 1)[1].strip() for line in text.splitlines() if "job_state" in line and "=" in line), "")
     code = next((line.split("=", 1)[1].strip() for line in text.splitlines() if "Exit_status" in line and "=" in line), "")
@@ -900,9 +1017,9 @@ def cancel(token, identifier):
     if identifier != remote_id():
         raise RuntimeError("OpenScience SSH remote id mismatch")
     if identifier.startswith("slurm:"):
-        result = subprocess.run(["scancel", identifier.split(":", 1)[1]], stderr=subprocess.PIPE, text=True)
+        result = bounded(["scancel", identifier.split(":", 1)[1]], stdout_limit=4096, timeout=30)
     elif identifier.startswith("pbs:"):
-        result = subprocess.run(["qdel", identifier.split(":", 1)[1]], stderr=subprocess.PIPE, text=True)
+        result = bounded(["qdel", identifier.split(":", 1)[1]], stdout_limit=4096, timeout=30)
     else:
         pid = int(identifier.split(":", 1)[1])
         value = runtime()
@@ -922,7 +1039,7 @@ def cancel(token, identifier):
             except ProcessLookupError:
                 result = subprocess.CompletedProcess([], 0, "", "")
         elif not scope_empty(value):
-            result = subprocess.run(["systemctl", "--user", "kill", "--signal=TERM", "--kill-whom=all", value["unit"]], stderr=subprocess.PIPE, text=True)
+            result = bounded(["systemctl", "--user", "kill", "--signal=TERM", "--kill-whom=all", value["unit"]], stdout_limit=4096, timeout=30)
         else:
             response({"cancelled": False, "detail": "Direct SSH ownership supervisor disappeared before descendant shutdown was proven"})
             return
@@ -948,7 +1065,7 @@ def cancel(token, identifier):
             if attempt == 100 and alive(value) and hasattr(signal, "SIGUSR1"):
                 os.kill(pid, signal.SIGUSR1)
             if attempt == 100 and not alive(value) and not scope_empty(value):
-                subprocess.run(["systemctl", "--user", "kill", "--signal=KILL", "--kill-whom=all", value["unit"]], stderr=subprocess.DEVNULL)
+                bounded(["systemctl", "--user", "kill", "--signal=KILL", "--kill-whom=all", value["unit"]], stdout_limit=4096, timeout=30)
             if attempt == 200 and alive(value):
                 force_responsibility(value)
             time.sleep(0.02)
@@ -986,25 +1103,38 @@ def harvest(token):
             relative = source.relative_to(work).as_posix()
             if relative in files:
                 continue
-            size = source.stat().st_size
+            before = source.stat()
+            size = before.st_size
             digest = hashlib.sha256()
             with source.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(chunk)
-            files[relative] = {"path": relative, "size": size, "sha256": digest.hexdigest()}
+                after = os.fstat(handle.fileno())
+            if before.st_dev != after.st_dev or before.st_ino != after.st_ino or size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+                raise RuntimeError("SSH output changed during harvest: " + relative)
+            files[relative] = {"path": relative, "size": size, "sha256": digest.hexdigest(), "dev": after.st_dev, "ino": after.st_ino, "mtime_ns": after.st_mtime_ns}
     ordered = [files[key] for key in sorted(files)]
     if len(ordered) > 200:
         raise RuntimeError("SSH outputs exceed the 200 file recovery limit")
     if sum(item["size"] for item in ordered) > 20 * 1024 * 1024 * 1024:
         raise RuntimeError("SSH outputs exceed the 20 GiB recovery limit")
-    manifest = json.dumps({"files": ordered}, separators=(",", ":")).encode()
+    manifest = json.dumps({"files": [{key: value for key, value in item.items() if key in ("path", "size", "sha256")} for item in ordered]}, separators=(",", ":")).encode()
     with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as archive:
         info = tarfile.TarInfo("manifest.json")
         info.size = len(manifest)
         import io
         archive.addfile(info, io.BytesIO(manifest))
         for item in ordered:
-            archive.add(str(work / item["path"]), arcname="files/" + item["path"], recursive=False)
+            source = work / item["path"]
+            with source.open("rb") as handle:
+                current = os.fstat(handle.fileno())
+                if current.st_dev != item["dev"] or current.st_ino != item["ino"] or current.st_size != item["size"] or current.st_mtime_ns != item["mtime_ns"]:
+                    raise RuntimeError("SSH output changed during harvest: " + item["path"])
+                info = tarfile.TarInfo("files/" + item["path"])
+                info.size = item["size"]
+                info.mode = current.st_mode & 0o777
+                info.mtime = current.st_mtime
+                archive.addfile(info, handle)
 
 def release(token):
     own(token)
@@ -1041,11 +1171,22 @@ else:
     (root / "owner").write_text(owner + "\n", encoding="utf-8")
 incoming = pathlib.Path(tempfile.mkdtemp(prefix="incoming-", dir=root))
 try:
+    received = 0
+    members = 0
+    names = set()
     with tarfile.open(fileobj=sys.stdin.buffer, mode="r|*") as archive:
         for member in archive:
             name = pathlib.PurePosixPath(member.name)
             if name.is_absolute() or ".." in name.parts or not (member.isfile() or member.isdir()):
                 raise RuntimeError("Unsafe OpenScience SSH staging archive")
+            normalized = name.as_posix()
+            if normalized in names:
+                raise RuntimeError("Duplicate OpenScience SSH staging archive member")
+            names.add(normalized)
+            members += 1
+            received += member.size
+            if members > 10050 or received > 128 * 1024 * 1024:
+                raise RuntimeError("OpenScience SSH staging archive exceeds its approved limits")
             target = (incoming / pathlib.Path(*name.parts)).resolve()
             if incoming.resolve() != target and incoming.resolve() not in target.parents:
                 raise RuntimeError("OpenScience SSH staging archive escaped its root")
@@ -1096,31 +1237,150 @@ finally:
     }
   }
 
-  async function collect(proc: ReturnType<typeof spawn>, timeout: number) {
-    const out: Buffer[] = []
-    const err: Buffer[] = []
-    proc.stdout?.on("data", (chunk: Buffer) => out.push(chunk))
-    proc.stderr?.on("data", (chunk: Buffer) => err.push(chunk))
-    const done = new Promise<{ code: number | null; error?: string }>((resolve) => {
-      proc.once("error", (error) => resolve({ code: null, error: error.message }))
-      proc.once("exit", (code) => resolve({ code }))
-    })
-    const result = await Promise.race([
-      done,
-      Bun.sleep(timeout).then(() => ({ code: null, error: "Connection timed out" })),
-    ])
-    if (proc.exitCode === null) proc.kill("SIGKILL")
-    return {
-      ...result,
-      stdout: Buffer.concat(out),
-      stderr: Buffer.concat(err).toString("utf8").trim(),
+  async function collect(
+    proc: ReturnType<typeof spawn>,
+    options: OperationOptions & {
+      maxStdoutBytes?: number
+      maxStderrBytes?: number
+      write?: (chunk: Uint8Array) => Promise<void>
+    },
+  ) {
+    const timeout = options.timeoutMs ?? COMMAND_TIMEOUT
+    const maxout = options.maxStdoutBytes ?? STDOUT_BYTES
+    const maxerr = options.maxStderrBytes ?? STDERR_BYTES
+    if (!Number.isSafeInteger(timeout) || timeout <= 0) throw new Error("SSH command timeout must be positive")
+    if (!Number.isSafeInteger(maxout) || maxout < 0) throw new Error("SSH stdout limit must be nonnegative")
+    if (!Number.isSafeInteger(maxerr) || maxerr <= 0) throw new Error("SSH stderr limit must be positive")
+
+    const output = { chunks: [] as Buffer[], size: 0 }
+    const errors = { chunks: [] as Buffer[], size: 0 }
+    const stopped = Promise.withResolvers<void>()
+    const done = Promise.withResolvers<{ code: number | null; error?: string }>()
+    const state = { failure: undefined as Error | undefined, aborted: false }
+    const stop = (error: Error, aborted = false) => {
+      if (state.failure) return
+      state.failure = error
+      state.aborted = aborted
+      if (proc.exitCode === null && proc.signalCode === null) {
+        try {
+          proc.kill("SIGKILL")
+        } catch {
+          // The child may have exited between the stream event and the kill.
+        }
+      }
+      proc.stdout?.destroy(error)
+      proc.stderr?.destroy(error)
+      stopped.resolve()
+    }
+    const abort = () => stop(new Error("SSH operation was aborted"), true)
+    const pump = async (
+      stream: Readable | null,
+      label: "stdout" | "stderr",
+      limit: number,
+      target: typeof output,
+      write?: (chunk: Uint8Array) => Promise<void>,
+    ) => {
+      if (!stream) return
+      for await (const value of stream) {
+        if (state.failure) return
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
+        const remaining = limit - target.size
+        const accepted = chunk.subarray(0, Math.max(0, remaining))
+        if (accepted.byteLength) {
+          if (write) await write(accepted)
+          else target.chunks.push(accepted.slice())
+          target.size += accepted.byteLength
+        }
+        if (accepted.byteLength === chunk.byteLength) continue
+        stop(new Error(`SSH command ${label} exceeded ${limit} bytes`))
+        return
+      }
+    }
+
+    proc.once("error", (error) => done.resolve({ code: null, error: error.message }))
+    proc.once("exit", (code) => done.resolve({ code }))
+    const streams = Promise.all([
+      pump(proc.stdout, "stdout", maxout, output, options.write),
+      pump(proc.stderr, "stderr", maxerr, errors),
+    ]).catch((error: unknown) => stop(error instanceof Error ? error : new Error(String(error))))
+    const timer = setTimeout(() => stop(new Error("SSH operation timed out")), timeout)
+    options.signal?.addEventListener("abort", abort, { once: true })
+    if (options.signal?.aborted) abort()
+    try {
+      const result = await Promise.race([
+        done.promise,
+        stopped.promise.then(() => ({ code: null, error: state.failure?.message })),
+      ])
+      if (!state.failure) await streams
+      if (state.failure) {
+        await Promise.race([done.promise.catch(() => undefined), Bun.sleep(STOP_GRACE)])
+        await Promise.race([streams, Bun.sleep(STOP_GRACE)])
+        void streams.catch(() => undefined)
+      }
+      if (state.aborted) options.signal?.throwIfAborted()
+      return {
+        ...result,
+        code: state.failure ? null : result.code,
+        error: state.failure?.message ?? result.error,
+        stdout: Buffer.concat(output.chunks, output.size),
+        stderr: Buffer.concat(errors.chunks, errors.size).toString("utf8").trim(),
+      }
+    } finally {
+      clearTimeout(timer)
+      options.signal?.removeEventListener("abort", abort)
     }
   }
 
-  async function hash(file: string) {
-    const value = new Bun.CryptoHasher("sha256")
-    for await (const chunk of createReadStream(file)) value.update(chunk)
-    return value.digest("hex")
+  async function hash(file: string, signal?: AbortSignal, size?: number) {
+    const requested = await fs.lstat(file)
+    if (!requested.isFile() || requested.isSymbolicLink()) {
+      throw new Error(`SSH input changed during secure access: ${file}`)
+    }
+    const expected = await fs.realpath(file)
+    const handle = await fs.open(file, FS.O_RDONLY | (FS.O_NOFOLLOW ?? 0) | (FS.O_NONBLOCK ?? 0))
+    try {
+      const before = await handle.stat()
+      if (
+        !before.isFile() ||
+        requested.dev !== before.dev ||
+        requested.ino !== before.ino ||
+        !Number.isSafeInteger(before.size) ||
+        before.size < 0 ||
+        before.size !== (size ?? before.size)
+      ) {
+        throw new Error(`SSH input changed during secure access: ${file}`)
+      }
+      const value = new Bun.CryptoHasher("sha256")
+      const buffer = Buffer.allocUnsafe(64 * 1024)
+      const offset = { value: 0 }
+      while (offset.value < before.size) {
+        signal?.throwIfAborted()
+        const length = Math.min(buffer.byteLength, before.size - offset.value)
+        const result = await handle.read(buffer, 0, length, offset.value)
+        if (!result.bytesRead) throw new Error(`SSH input changed during secure access: ${file}`)
+        value.update(buffer.subarray(0, result.bytesRead))
+        offset.value += result.bytesRead
+      }
+      const [after, current, canonical] = await Promise.all([handle.stat(), fs.lstat(file), fs.realpath(file)])
+      if (
+        !after.isFile() ||
+        current.isSymbolicLink() ||
+        canonical !== expected ||
+        before.dev !== after.dev ||
+        before.ino !== after.ino ||
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs ||
+        before.ctimeMs !== after.ctimeMs ||
+        current.dev !== after.dev ||
+        current.ino !== after.ino ||
+        offset.value !== before.size
+      ) {
+        throw new Error(`SSH input changed during secure access: ${file}`)
+      }
+      return value.digest("hex")
+    } finally {
+      await handle.close()
+    }
   }
 
   async function identify(keygen: string, line: string) {
@@ -1129,8 +1389,9 @@ finally:
       stdio: ["pipe", "pipe", "pipe"],
     })
     child.stdin?.end(`${line}\n`)
-    const result = await collect(child, 5_000)
-    if (result.code !== 0) throw new Error(result.stderr || "SSH host key fingerprint could not be computed")
+    const result = await collect(child, { timeoutMs: 5_000, maxStdoutBytes: 64 * 1024 })
+    if (result.code !== 0)
+      throw new Error(result.error || result.stderr || "SSH host key fingerprint could not be computed")
     const digest = result.stdout.toString("utf8").match(/SHA256:[A-Za-z0-9+/=]+/)?.[0]
     if (!digest) throw new Error("SSH host key fingerprint could not be parsed")
     return digest
@@ -1180,14 +1441,14 @@ finally:
     ]
   }
 
-  export async function scan(host: Host) {
+  export async function scan(host: Host, options: OperationOptions = {}) {
     const keyscan = Bun.which("ssh-keyscan")
     const keygen = Bun.which("ssh-keygen")
     if (!keyscan || !keygen) throw new Error("OpenSSH key utilities are required for remote compute")
     const base = ["-T", "8", ...(host.port ? ["-p", String(host.port)] : []), host.host]
     const scanned = await collect(
       spawn(keyscan, ["-t", "ed25519,ecdsa,rsa", ...base], { env: env(), stdio: ["ignore", "pipe", "pipe"] }),
-      12_000,
+      { ...options, timeoutMs: options.timeoutMs ?? 12_000 },
     )
     if (scanned.code !== 0 || !scanned.stdout.length) {
       throw new Error(scanned.error || scanned.stderr || "SSH host returned no public key")
@@ -1245,14 +1506,20 @@ finally:
     return `python3 -c ${safe(script)} ${safe(spec.root)}`
   }
 
-  export async function archive(spec: Spec, directory: string) {
+  export async function archive(spec: Spec, directory: string, options: OperationOptions = {}) {
     const root = await fs.mkdtemp(path.join(directory, `${spec.id}.ssh-stage-`))
     const work = path.join(root, "work")
-    await fs.mkdir(work, { recursive: true })
-    await Promise.all(
-      spec.uploads.map(async (file) => {
+    const tar = path.join(directory, `${spec.id}.${crypto.randomUUID()}.tar`)
+    try {
+      await fs.mkdir(work, { recursive: true })
+      for (const file of spec.uploads) {
+        options.signal?.throwIfAborted()
         const current = await fs.realpath(file.canonical).catch(() => undefined)
-        if (!current || current !== file.canonical || (await hash(current)) !== file.sha256) {
+        if (
+          !current ||
+          current !== file.canonical ||
+          (await hash(current, options.signal, file.size)) !== file.sha256
+        ) {
           throw new Error(`SSH input changed after approval: ${file.path}`)
         }
         const target = path.resolve(work, file.path)
@@ -1261,29 +1528,33 @@ finally:
         await fs.mkdir(path.dirname(target), { recursive: true })
         await fs.copyFile(current, target)
         const info = await fs.stat(target)
-        if (info.size !== file.size || (await hash(target)) !== file.sha256) {
+        if (info.size !== file.size || (await hash(target, options.signal, file.size)) !== file.sha256) {
           throw new Error(`SSH input staging integrity check failed: ${file.path}`)
         }
-      }),
-    )
-    const manifest = { files: spec.uploads.map((file) => ({ path: file.path, size: file.size, sha256: file.sha256 })) }
-    await Promise.all([
-      fs.writeFile(path.join(root, "inputs.json"), JSON.stringify(manifest), { mode: 0o600 }),
-      fs.writeFile(path.join(root, "spec.json"), JSON.stringify({ ...spec, uploads: undefined, owner: undefined }), {
-        mode: 0o600,
-      }),
-      fs.writeFile(path.join(root, "control.py"), CONTROL, { mode: 0o700 }),
-      fs.writeFile(path.join(root, "supervisor.py"), SUPERVISOR, { mode: 0o700 }),
-    ])
-    const tar = path.join(directory, `${spec.id}.${crypto.randomUUID()}.tar`)
-    const proc = Bun.spawn(["tar", "-cf", tar, "-C", root, "."], { stdout: "ignore", stderr: "pipe" })
-    const [code, error] = await Promise.all([proc.exited, new Response(proc.stderr).text()])
-    await fs.rm(root, { recursive: true, force: true })
-    if (code !== 0) {
+      }
+      const manifest = {
+        files: spec.uploads.map((file) => ({ path: file.path, size: file.size, sha256: file.sha256 })),
+      }
+      await Promise.all([
+        fs.writeFile(path.join(root, "inputs.json"), JSON.stringify(manifest), { mode: 0o600 }),
+        fs.writeFile(path.join(root, "spec.json"), JSON.stringify({ ...spec, uploads: undefined, owner: undefined }), {
+          mode: 0o600,
+        }),
+        fs.writeFile(path.join(root, "control.py"), CONTROL, { mode: 0o700 }),
+        fs.writeFile(path.join(root, "supervisor.py"), SUPERVISOR, { mode: 0o700 }),
+      ])
+      const proc = spawn("tar", ["-cf", tar, "-C", root, "."], { stdio: ["ignore", "pipe", "pipe"] })
+      const result = await collect(proc, { ...options, maxStdoutBytes: 1 })
+      if (result.code !== 0) {
+        throw new Error(`Could not package SSH inputs: ${result.error || result.stderr || `tar exited ${result.code}`}`)
+      }
+      return tar
+    } catch (error) {
       await fs.rm(tar, { force: true })
-      throw new Error(`Could not package SSH inputs: ${error.trim()}`)
+      throw error
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
     }
-    return tar
   }
 
   export function parse<T>(buffer: Buffer): T {
@@ -1298,50 +1569,55 @@ finally:
     try {
       await fs.writeFile(script, CONTROL, { mode: 0o700 })
       const proc = spawn("python3", [script, "__slurm", state, exit], { stdio: ["ignore", "pipe", "pipe"] })
-      const result = await collect(proc, 5_000)
-      if (result.code !== 0) throw new Error(result.stderr || "Slurm state parser failed")
+      const result = await collect(proc, { timeoutMs: 5_000, maxStdoutBytes: 64 * 1024 })
+      if (result.code !== 0) throw new Error(result.error || result.stderr || "Slurm state parser failed")
       return parse<Result>(result.stdout)
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
   }
 
-  async function member(archive: string, name: string, target?: string) {
-    const output = target ? await fs.open(target, "w", 0o600) : undefined
+  async function member(
+    archive: string,
+    name: string,
+    options: OperationOptions & { maxBytes: number; target?: string },
+  ) {
+    const output = options.target ? await fs.open(options.target, "wx", 0o600) : undefined
     try {
       const proc = spawn("tar", ["-xOf", archive, "--", name], {
-        stdio: ["ignore", output?.fd ?? "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
       })
-      const chunks: Buffer[] = []
-      const errors: Buffer[] = []
-      proc.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk))
-      proc.stderr?.on("data", (chunk: Buffer) => errors.push(chunk))
-      const code = await new Promise<number | null>((resolve) => {
-        proc.once("error", () => resolve(null))
-        proc.once("exit", resolve)
+      const result = await collect(proc, {
+        ...options,
+        maxStdoutBytes: options.maxBytes,
+        write: output
+          ? async (chunk) => {
+              const cursor = { value: 0 }
+              while (cursor.value < chunk.byteLength) {
+                const written = await output.write(chunk, cursor.value, chunk.byteLength - cursor.value)
+                if (!written.bytesWritten) throw new Error(`SSH output archive member ${name} could not be written`)
+                cursor.value += written.bytesWritten
+              }
+            }
+          : undefined,
       })
-      if (code !== 0)
-        throw new Error(Buffer.concat(errors).toString("utf8").trim() || `SSH output archive is missing ${name}`)
-      return Buffer.concat(chunks)
+      if (result.code !== 0) {
+        throw new Error(result.error || result.stderr || `SSH output archive is missing ${name}`)
+      }
+      return result.stdout
     } finally {
       await output?.close().catch(() => undefined)
     }
   }
 
-  async function install(root: string, staging: string, files: Manifest["files"]) {
+  async function install(root: string, staging: string, files: Manifest["files"], options: OperationOptions) {
     const proc = spawn("python3", ["-c", BROKER, root, staging], {
       stdio: ["pipe", "pipe", "pipe"],
     })
-    const errors: Buffer[] = []
-    proc.stderr?.on("data", (chunk: Buffer) => errors.push(chunk))
     proc.stdin?.end(JSON.stringify({ files }))
-    const code = await new Promise<number | null>((resolve) => {
-      proc.once("error", () => resolve(null))
-      proc.once("exit", resolve)
-    })
-    if (code === 0) return
-    const detail = Buffer.concat(errors)
-      .toString("utf8")
+    const result = await collect(proc, { ...options, maxStdoutBytes: 4 * 1024 })
+    if (result.code === 0) return
+    const detail = (result.error || result.stderr)
       .trim()
       .split("\n")
       .at(-1)
@@ -1349,8 +1625,10 @@ finally:
     throw new Error(detail || "SSH output installation broker failed")
   }
 
-  export async function deliver(archive: string, root: string) {
-    const parsed: unknown = JSON.parse((await member(archive, "manifest.json")).toString("utf8"))
+  export async function deliver(archive: string, root: string, options: OperationOptions = {}) {
+    const parsed: unknown = JSON.parse(
+      (await member(archive, "manifest.json", { ...options, maxBytes: MANIFEST_BYTES })).toString("utf8"),
+    )
     const manifest = parsed as Partial<Manifest>
     if (!Array.isArray(manifest.files)) throw new Error("SSH output archive has no valid manifest")
     const files = manifest.files.map((item) => {
@@ -1379,18 +1657,19 @@ finally:
     const staging = await fs.mkdtemp(path.join(path.dirname(archive), "ssh-delivery-"))
     try {
       for (const item of files) {
+        options.signal?.throwIfAborted()
         const staged = path.resolve(staging, item.path)
         if (staging !== staged && !staged.startsWith(`${staging}${path.sep}`)) {
           throw new Error(`SSH output escaped local staging: ${item.path}`)
         }
         await fs.mkdir(path.dirname(staged), { recursive: true })
-        await member(archive, `files/${item.path}`, staged)
+        await member(archive, `files/${item.path}`, { ...options, maxBytes: item.size, target: staged })
         const info = await fs.stat(staged)
-        if (info.size !== item.size || (await hash(staged)) !== item.sha256) {
+        if (info.size !== item.size || (await hash(staged, options.signal, item.size)) !== item.sha256) {
           throw new Error(`SSH output failed integrity verification: ${item.path}`)
         }
       }
-      await install(root, staging, files)
+      await install(root, staging, files, options)
       return files.map((item) => ({ ...item, modified_at: new Date().toISOString() }))
     } finally {
       await fs.rm(staging, { recursive: true, force: true })

@@ -6,6 +6,7 @@ import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 import { PermissionNext } from "../../src/permission/next"
 import { Agent } from "../../src/agent/agent"
+import { SessionFilesystem } from "../../src/session/filesystem"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 
@@ -181,7 +182,7 @@ describe("tool.read external_directory permission", () => {
               },
             },
           ),
-        ).rejects.toThrow("symbolic link")
+        ).rejects.toBeInstanceOf(SessionFilesystem.InvalidPathError)
         expect(await fs.readFile(path.join(outside.path, "secret.txt"), "utf8")).toBe("must remain private")
       },
     })
@@ -233,6 +234,56 @@ describe("tool.read env file permissions in the default contained mode", () => {
 })
 
 describe("tool.read truncation", () => {
+  test("streams a bounded window from a huge sparse text file", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const handle = await fs.open(path.join(dir, "huge.txt"), "w")
+        await handle.write(`first\nsecond\n${"padding\n".repeat(10_000)}`)
+        await handle.truncate(512 * 1024 * 1024)
+        await handle.close()
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const read = await ReadTool.init()
+        const result = await read.execute({ filePath: path.join(tmp.path, "huge.txt"), limit: 1 }, ctx)
+        expect(result.output).toContain("first")
+        expect(result.output).not.toContain("second")
+        expect(result.output).toContain("File has more lines")
+        expect(result.output.length).toBeLessThan(10_000)
+        expect(result.metadata.truncated).toBe(true)
+      },
+    })
+  })
+
+  test("rejects an oversized PDF before allocating its contents", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const handle = await fs.open(path.join(dir, "huge.pdf"), "w")
+        await handle.write("%PDF-1.7\n")
+        await handle.truncate(32 * 1024 * 1024 + 1)
+        await handle.close()
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const read = await ReadTool.init()
+        await expect(read.execute({ filePath: path.join(tmp.path, "huge.pdf") }, ctx)).rejects.toThrow(
+          "PDF too large to attach (33554433 bytes > 33554432)",
+        )
+      },
+    })
+  })
+
+  test("rejects invalid line windows before touching the file", async () => {
+    const read = await ReadTool.init()
+    await expect(read.execute({ filePath: "missing.txt", offset: -1 }, ctx)).rejects.toThrow("invalid arguments")
+    await expect(read.execute({ filePath: "missing.txt", offset: 1.5 }, ctx)).rejects.toThrow("invalid arguments")
+    await expect(read.execute({ filePath: "missing.txt", limit: 10_001 }, ctx)).rejects.toThrow("invalid arguments")
+  })
+
   test("truncates large file by bytes and sets truncated metadata", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {

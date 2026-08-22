@@ -9,6 +9,7 @@ import { OpenScience } from "../openscience"
 import { AuthoritySignal } from "../project/authority-signal"
 import { Instance } from "../project/instance"
 import { ProjectTrust } from "../project/trust"
+import { ExecutionAuthority } from "../project/execution"
 import { Sandbox } from "../sandbox/sandbox"
 import { CommandRuntime } from "../science/command/registry"
 import { Shell } from "../shell/shell"
@@ -16,8 +17,35 @@ import { Filesystem } from "../util/filesystem"
 import { escapeHtml } from "../util/html"
 import { PublicationReview } from "./review"
 import { SafeFileIO } from "./safe-io"
+import { Log } from "../util/log"
 
 export namespace PublicationFile {
+  const log = Log.create({ service: "file.publication" })
+
+  type TestHooks = {
+    timeoutMs?: number
+    job?: (path: string) => void
+    afterForcedTermination?: () => void | Promise<void>
+  }
+
+  const hooks = { value: undefined as TestHooks | undefined }
+
+  /** Deterministic process-lifecycle barriers for publication tests. */
+  export function testing(input: TestHooks) {
+    if (!process.env.OPENSCIENCE_TEST_HOME) throw new Error("PublicationFile test hooks are disabled outside tests")
+    const prior = hooks.value
+    hooks.value = input
+    return {
+      [Symbol.dispose]() {
+        if (hooks.value === input) hooks.value = prior
+      },
+    }
+  }
+
+  export type Authority = PublicationReview.Authority & {
+    write(file: string): Promise<string>
+  }
+
   export const Format = z.enum(["html", "pdf", "docx", "latex", "pptx"])
   export type Format = z.infer<typeof Format>
 
@@ -66,6 +94,8 @@ export namespace PublicationFile {
 
   const exportTimeoutMs = 120_000
   const diagnosticLimit = 64 * 1024
+  const sourceLimit = 32 * 1024 * 1024
+  const outputLimit = 256 * 1024 * 1024
 
   export async function capabilities(): Promise<Capabilities> {
     const options = { PATH: process.env.PATH }
@@ -85,22 +115,23 @@ export namespace PublicationFile {
     })
   }
 
-  export async function render(root: string, input: Input): Promise<Result> {
+  export async function render(root: string, input: Input, authority?: Authority): Promise<Result> {
     const parsed = Input.parse(input)
-    const source = resolve(root, parsed.path)
+    const requested = resolve(root, parsed.path)
+    const source = authority ? await authority.read(requested) : requested
     if (![".md", ".markdown"].includes(path.extname(source).toLowerCase())) {
       throw new Error("Publication export currently requires a Markdown report")
     }
     if (!(await Filesystem.containsCanonical(root, source))) {
       throw new Error("Publication path escapes the project directory")
     }
-    if (!(await Bun.file(source).exists())) throw new Error(`Report not found: ${parsed.path}`)
-    const snapshot = await Bun.file(source).arrayBuffer()
-    const markdown = new TextDecoder().decode(snapshot)
-    const artifactHash = await hash(snapshot)
+    const snapshot = await SafeFileIO.optional(source, { maxBytes: sourceLimit })
+    if (!snapshot) throw new Error(`Report not found: ${parsed.path}`)
+    const markdown = snapshot.bytes.toString("utf8")
+    const artifactHash = hash(snapshot.bytes)
     const review =
       parsed.readiness === "reviewed"
-        ? await PublicationReview.assertReady(parsed.path, parsed.review_id!, artifactHash)
+        ? await PublicationReview.assertReady(source, parsed.review_id!, artifactHash, authority)
         : undefined
     const support = await capabilities()
     if (!support.formats[parsed.format]) {
@@ -114,10 +145,6 @@ export namespace PublicationFile {
     // resource bytes through host executables. Do not create even the export
     // directory until the user has explicitly trusted that project.
     if (parsed.format !== "html") {
-      const canonicalRoot = await Filesystem.canonical(root)
-      if (canonicalRoot !== Instance.directory) {
-        throw new Error("Publication export project does not match the active project")
-      }
       await ProjectTrust.require(Instance.project, "publication_export")
     }
 
@@ -134,7 +161,18 @@ export namespace PublicationFile {
       "exports",
       `${stem}-${stamp.slice(0, 8)}-${stamp.slice(8)}-${nonce}.${extensions[parsed.format]}`,
     )
-    const target = path.join(root, relative)
+    const requestedTarget = path.join(root, relative)
+    const target = authority ? await authority.write(requestedTarget) : requestedTarget
+    if (target !== requestedTarget) throw new Error("Publication output path changed during authorization")
+    const verify = async () => {
+      if (!authority) return
+      const [currentSource, currentTarget] = await Promise.all([authority.read(source), authority.write(target)])
+      if (currentSource !== source || currentTarget !== target) {
+        throw new Error("Publication filesystem authority changed while the export was running")
+      }
+    }
+    const resultPath =
+      authority && !Filesystem.contains(Instance.directory, target) ? target : relative.split(path.sep).join("/")
     if (parsed.format === "html") {
       const renderer = new Renderer()
       renderer.html = ({ text }) => escapeHtml(text)
@@ -191,9 +229,16 @@ ${body}
 </body>
       </html>
 `
-      await SafeFileIO.write(target, document)
+      if (authority) {
+        await AuthoritySignal.exclusive(async () => {
+          await verify()
+          await SafeFileIO.write(target, document)
+        })
+      } else {
+        await SafeFileIO.write(target, document)
+      }
       return Result.parse({
-        path: relative.split(path.sep).join("/"),
+        path: resultPath,
         format: parsed.format,
         size: Buffer.byteLength(document),
         created_at: new Date().toISOString(),
@@ -206,14 +251,21 @@ ${body}
     // a private, one-run directory. The sandbox sees the project read-only and
     // can write only here; host-side SafeFileIO performs the final no-follow,
     // no-overwrite install into exports after the child exits successfully.
-    const job = await fs.mkdtemp(path.join(os.tmpdir(), "openscience-publication-"))
+    // macOS commonly exposes the temporary root through `/var` while its
+    // physical spelling is `/private/var`. Keep every later no-follow check,
+    // sandbox grant, and converter argument on the same canonical path.
+    const job = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openscience-publication-")))
+    hooks.value?.job?.(job)
     const snapshotFile = path.join(job, "source.md")
     const generatedFile = path.join(job, `result.${extensions[parsed.format]}`)
     let lifecycle:
       | {
           child: ChildProcess
           sandbox: ReturnType<typeof Sandbox.wrapArgv>
+          command: string
           closed: boolean
+          reaped: boolean
+          reaping?: Promise<void>
         }
       | undefined
     let releaseRequested = false
@@ -225,17 +277,35 @@ ${body}
       }))
     const requestRelease = async () => {
       releaseRequested = true
-      if (!lifecycle || lifecycle.closed || stopped(lifecycle.child)) await release()
+      if (!lifecycle || (lifecycle.closed && lifecycle.reaped)) await release()
     }
 
     try {
       await fs.chmod(job, 0o700)
-      await fs.writeFile(snapshotFile, Buffer.from(snapshot), { flag: "wx", mode: 0o600 })
+      await fs.writeFile(snapshotFile, snapshot.bytes, { flag: "wx", mode: 0o600 })
+      const prepared = authority?.sessionID
+        ? await ExecutionAuthority.require({
+            projectID: Instance.project.id,
+            sessionID: authority.sessionID,
+            capability: "publication_export",
+          })
+        : undefined
       const launched = await AuthoritySignal.exclusive(async () => {
         // This final check shares the same interprocess lease as trust
         // revocation. Once spawn wins, the child is durably registered before
         // revocation can be acknowledged; if revocation wins, no child starts.
         await ProjectTrust.require(Instance.project, "publication_export")
+        await verify()
+        const current = authority?.sessionID
+          ? await ExecutionAuthority.require({
+              projectID: Instance.project.id,
+              sessionID: authority.sessionID,
+              capability: "publication_export",
+            })
+          : undefined
+        if (prepared && current?.generation !== prepared.generation) {
+          throw new Error("Publication execution authority changed while the converter was being prepared; retry it")
+        }
         const toolPath = process.env.PATH
         const pandoc = Bun.which("pandoc", { PATH: toolPath })
         const pdfEngine =
@@ -264,7 +334,7 @@ ${body}
           // Publication converters only need to read the manuscript and its
           // resources. They never receive write authority to the project.
           workspace: [],
-          readable: [root],
+          readable: authority?.scan === false ? [source] : [root],
           extraWritable: [job],
           unreadable: OpenScience.kernelSensitivePaths(),
           options,
@@ -294,18 +364,21 @@ ${body}
         }
 
         const output = completion(child)
-        const stop = () => Shell.killTree(child, { exited: () => stopped(child), detached })
+        const stop = async () => {
+          await Shell.killTree(child, { exited: () => stopped(child), detached })
+          await hooks.value?.afterForcedTermination?.()
+        }
         const registered = await CommandRuntime.start(
           {
             projectID: Instance.project.id,
-            sessionID: "publication",
+            sessionID: authority?.sessionID ?? "publication",
             messageID: "publication",
             description: `Export ${path.basename(source)} as ${parsed.format.toUpperCase()}`,
             command: `pandoc ${parsed.format} export`,
           },
           child,
           stop,
-          { windowsRelease: wrapped.release },
+          { authorityGeneration: current?.generation, windowsRelease: wrapped.release },
         ).catch(async (error) => {
           void output.catch(() => undefined)
           if (!stopped(child)) await stop()
@@ -315,29 +388,62 @@ ${body}
         const safeStop = async () => {
           await CommandRuntime.stop(registered.id, registered.projectID, registered.sessionID)
         }
-        return { child, output, registered, sandbox, stop: safeStop, pdfEngine }
+        return { child, output, registered, sandbox, stop: safeStop, pdfEngine, generation: current?.generation }
       })
       lifecycle = {
         child: launched.child,
         sandbox: launched.sandbox,
+        command: launched.registered.id,
         closed: stopped(launched.child),
+        reaped: false,
+      }
+      const reap = () => {
+        const current = lifecycle
+        if (!current || current.reaped) return Promise.resolve()
+        if (current.reaping) return current.reaping
+        current.reaping = CommandRuntime.settle(current.command)
+          .then(async () => {
+            current.reaped = true
+            if (releaseRequested && current.closed) await release()
+          })
+          .finally(() => {
+            if (!current.reaped) current.reaping = undefined
+          })
+        return current.reaping
       }
       const closed = () => {
         if (!lifecycle) return
         lifecycle.closed = true
-        if (releaseRequested) void release()
+        void reap().catch((error) => {
+          log.error("late publication child reaping failed", {
+            command: lifecycle?.command,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
       }
       launched.child.once("close", closed)
       launched.child.once("error", closed)
-      if (stopped(launched.child)) lifecycle.closed = true
-
-      const timeout = timeoutAfter(launched.child, launched.stop)
-      let result: Awaited<ReturnType<typeof completion>>
-      try {
-        result = await Promise.race([launched.output, timeout.promise])
-      } finally {
-        timeout.cancel()
+      if (stopped(launched.child)) {
+        lifecycle.closed = true
+        await reap()
       }
+
+      const stop = async () => {
+        await launched.stop()
+        await reap()
+      }
+      const timeout = timeoutAfter(launched.child, stop, hooks.value?.timeoutMs ?? exportTimeoutMs)
+      const outcome = await Promise.race([launched.output, timeout.promise])
+        .then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(timeout.cancel)
+      if (stopped(launched.child) && !lifecycle.reaped) {
+        await reap()
+      }
+      if ("error" in outcome) throw outcome.error
+      const result = outcome.result
       if (result.code !== 0) {
         throw new Error(result.stderr.trim() || result.stdout.trim() || `Pandoc exited with code ${result.code}`)
       }
@@ -347,12 +453,23 @@ ${body}
       // revoked while it was running.
       const size = await AuthoritySignal.exclusive(async () => {
         await ProjectTrust.require(Instance.project, "publication_export")
-        const generated = await SafeFileIO.read(generatedFile)
+        await verify()
+        if (authority?.sessionID) {
+          const current = await ExecutionAuthority.require({
+            projectID: Instance.project.id,
+            sessionID: authority.sessionID,
+            capability: "publication_export",
+          })
+          if (current.generation !== launched.generation) {
+            throw new Error("Publication execution authority changed before the converted artifact was accepted")
+          }
+        }
+        const generated = await SafeFileIO.read(generatedFile, { maxBytes: outputLimit })
         await SafeFileIO.write(target, generated.bytes)
         return generated.bytes.length
       })
       return Result.parse({
-        path: relative.split(path.sep).join("/"),
+        path: resultPath,
         format: parsed.format,
         size,
         created_at: new Date().toISOString(),
@@ -388,17 +505,17 @@ ${body}
     })
   }
 
-  function timeoutAfter(child: ChildProcess, stop: () => Promise<void>) {
+  function timeoutAfter(child: ChildProcess, stop: () => Promise<void>, timeoutMs: number) {
     let timer: ReturnType<typeof setTimeout> | undefined
     const promise = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         void stop()
           .then(() => waitForStop(child))
           .then(
-            () => reject(new Error(`Pandoc timed out after ${Math.round(exportTimeoutMs / 1_000)} seconds`)),
+            () => reject(new Error(`Pandoc timed out after ${Math.round(timeoutMs / 1_000)} seconds`)),
             (error) => reject(new AggregateError([error], "Pandoc timed out and could not be stopped")),
           )
-      }, exportTimeoutMs)
+      }, timeoutMs)
       timer.unref()
     })
     return {
@@ -454,8 +571,9 @@ ${body}
     return undefined
   }
 
-  async function hash(value: ArrayBuffer) {
-    const digest = await crypto.subtle.digest("SHA-256", value)
-    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+  function hash(value: Uint8Array) {
+    const hasher = new Bun.CryptoHasher("sha256")
+    hasher.update(value)
+    return hasher.digest("hex")
   }
 }

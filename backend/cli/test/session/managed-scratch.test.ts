@@ -125,6 +125,17 @@ describe("managed project session scratch", () => {
     })
   })
 
+  test("reports scratch artifacts relative to the owning session workspace", async () => {
+    await managed(async () => {
+      const session = await Session.create({ title: "relative scratch artifacts" })
+      await File.write("nested/result.csv", "sample,value\nfirst,1\n", { sessionID: session.id })
+
+      expect((await File.artifacts({ sessionID: session.id })).map((artifact) => artifact.path)).toEqual([
+        "nested/result.csv",
+      ])
+    })
+  })
+
   test("deletes only the removed session's managed scratch directory", async () => {
     const external = await fs.mkdtemp(path.join(Global.Path.data, "managed-scratch-connected-"))
     try {
@@ -270,6 +281,39 @@ describe("managed project session scratch", () => {
       expect(await Bun.file(trashed.trashRoot!).exists()).toBe(false)
     })
   })
+
+  test("sizes and sweeps dozens of expired recovery trees without an unbounded cleanup fan-out", async () => {
+    await managed(async () => {
+      const now = Date.now()
+      const records: SessionWorkspace.Info[] = []
+      for (const index of Array.from({ length: 24 }, (_, index) => index)) {
+        const session = await Session.create({ title: `bulk purge ${index}` })
+        const workspace = await SessionFilesystem.workspace(session.id)
+        const content = `recoverable-${index}`
+        for (const directory of Array.from({ length: 4 }, (_, item) => item)) {
+          const target = path.join(workspace, `batch-${directory}`, "nested")
+          await fs.mkdir(target, { recursive: true })
+          for (const file of Array.from({ length: 4 }, (_, item) => item)) {
+            await fs.writeFile(path.join(target, `${file}.txt`), content)
+          }
+        }
+        await Session.remove(session.id)
+        const record = await SessionWorkspace.get(session.id)
+        expect(record.size).toBe(16 * Buffer.byteLength(content))
+        await Storage.update<SessionWorkspace.Info>(["session_workspace", Instance.project.id, session.id], (draft) => {
+          draft.trashedAt = now - 8 * 24 * 60 * 60 * 1000
+        })
+        records.push(record)
+      }
+
+      await SessionWorkspace.sweep(now)
+
+      for (const record of records) {
+        await expect(SessionWorkspace.get(record.sessionID)).rejects.toBeInstanceOf(Storage.NotFoundError)
+        expect(await Bun.file(record.trashRoot!).exists()).toBe(false)
+      }
+    })
+  }, 30_000)
 
   test("defaults Bash and Python, R, and biology kernels to the owning scratch root", async () => {
     await managed(async (root) => {

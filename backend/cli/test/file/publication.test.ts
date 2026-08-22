@@ -5,10 +5,15 @@ import path from "node:path"
 import { Bus } from "../../src/bus"
 import { PublicationFile } from "../../src/file/publication"
 import { PublicationReview } from "../../src/file/review"
+import { File } from "../../src/file"
 import { Instance } from "../../src/project/instance"
 import { ProjectTrust } from "../../src/project/trust"
 import { CommandRuntime } from "../../src/science/command/registry"
+import { Session } from "../../src/session"
+import { SessionFilesystem } from "../../src/session/filesystem"
 import { sandboxedExecution, tmpdir, trustProject } from "../fixture/fixture"
+
+const posixTest = process.platform === "win32" ? test.skip : test
 
 describe("PublicationFile", () => {
   test("detects real local publication export capabilities", async () => {
@@ -125,6 +130,106 @@ describe("PublicationFile", () => {
     })
   })
 
+  posixTest("reaps background converter descendants before accepting and returning an export", async () => {
+    await using _sandbox = await sandboxedExecution()
+    await using tmp = await tmpdir({
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "report.md"), "# Descendant-safe export\n")
+        const bin = path.join(directory, "bin")
+        await fs.mkdir(bin, { recursive: true })
+        await Bun.write(
+          path.join(bin, "pandoc"),
+          `#!/bin/sh
+output=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    output=$1
+  fi
+  shift
+done
+sleep 600 </dev/null >/dev/null 2>&1 &
+pid=$!
+printf '%s' "$pid" > "$output"
+exit 0
+`,
+        )
+        await fs.chmod(path.join(bin, "pandoc"), 0o755)
+        return bin
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const prior = process.env.PATH
+        process.env.PATH = `${tmp.extra}${path.delimiter}${prior ?? ""}`
+        const descendant = { pid: 0 }
+        try {
+          const result = await PublicationFile.render(tmp.path, { path: "report.md", format: "docx" })
+          descendant.pid = Number((await Bun.file(path.join(tmp.path, result.path)).text()).trim())
+          expect(descendant.pid).toBeGreaterThan(0)
+          expect(() => process.kill(descendant.pid, 0)).toThrow()
+          expect(CommandRuntime.list(Instance.project.id, "publication")).toEqual([])
+        } finally {
+          process.env.PATH = prior
+          if (descendant.pid > 0) {
+            try {
+              process.kill(descendant.pid, "SIGKILL")
+            } catch {}
+          }
+        }
+      },
+    })
+  })
+
+  posixTest("settles and releases a publication child that exits after forced-stop reporting fails", async () => {
+    await using _sandbox = await sandboxedExecution()
+    await using tmp = await tmpdir({
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "report.md"), "# Late child cleanup\n")
+        const bin = path.join(directory, "bin")
+        await fs.mkdir(bin, { recursive: true })
+        await Bun.write(path.join(bin, "pandoc"), "#!/bin/sh\ntrap '' TERM\nwhile true; do sleep 1; done\n")
+        await fs.chmod(path.join(bin, "pandoc"), 0o755)
+        return bin
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const prior = process.env.PATH
+        process.env.PATH = `${tmp.extra}${path.delimiter}${prior ?? ""}`
+        const state = { job: "", forced: 0 }
+        using _ = PublicationFile.testing({
+          timeoutMs: 20,
+          job: (value) => (state.job = value),
+          afterForcedTermination: () => {
+            state.forced++
+            throw new Error("injected post-termination reporting failure")
+          },
+        })
+        try {
+          await expect(PublicationFile.render(tmp.path, { path: "report.md", format: "docx" })).rejects.toThrow()
+          for (const _ of Array.from({ length: 400 })) {
+            const released = state.job && !(await Bun.file(state.job).exists())
+            if (released && CommandRuntime.list(Instance.project.id, "publication").length === 0) break
+            await Bun.sleep(10)
+          }
+          expect(state.job).not.toBe("")
+          expect(state.forced).toBeGreaterThan(0)
+          expect(await Bun.file(state.job).exists()).toBe(false)
+          expect(CommandRuntime.list(Instance.project.id, "publication")).toEqual([])
+        } finally {
+          process.env.PATH = prior
+        }
+      },
+    })
+  })
+
   test("reaps a registered publication converter before trust revocation is acknowledged", async () => {
     await using tmp = await tmpdir({
       init: async (directory) => {
@@ -172,6 +277,68 @@ while true; do sleep 1; done
           expect((await outcome)?.message).toContain("Pandoc exited")
           expect(CommandRuntime.list(Instance.project.id, "publication")).toEqual([])
           expect(await Bun.file(path.join(tmp.path, "exports")).exists()).toBe(false)
+        } finally {
+          unsubscribe()
+          process.env.PATH = prior
+        }
+      },
+    })
+  })
+
+  test("owns a connected-folder converter with the real session and reaps it on grant revocation", async () => {
+    await using _sandbox = await sandboxedExecution()
+    await using connected = await tmpdir({
+      init: async (directory) => {
+        await Bun.write(path.join(directory, "report.md"), "# Connected revocable export\n")
+        const bin = path.join(directory, "bin")
+        await fs.mkdir(bin, { recursive: true })
+        await Bun.write(path.join(bin, "pandoc"), "#!/bin/sh\nwhile true; do sleep 1; done\n")
+        await fs.chmod(path.join(bin, "pandoc"), 0o755)
+        return bin
+      },
+    })
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const session = await Session.create({})
+        await using cleanup = { [Symbol.asyncDispose]: () => Session.remove(session.id) }
+        const grant = await SessionFilesystem.grant({
+          sessionID: session.id,
+          path: connected.path,
+          access: "write",
+          scope: "session",
+        })
+        const unsubscribe = Bus.subscribe(SessionFilesystem.Event.Changed, async (event) => {
+          if (event.properties.grant.time.revoked) {
+            await CommandRuntime.stopSession(Instance.project.id, event.properties.sessionID)
+          }
+        })
+        const prior = process.env.PATH
+        process.env.PATH = `${connected.extra}${path.delimiter}${prior ?? ""}`
+        try {
+          const pending = File.publication(
+            { path: path.join(connected.path, "report.md"), format: "docx" },
+            { sessionID: session.id },
+          )
+          const outcome = pending.then(
+            () => undefined,
+            (error) => error as Error,
+          )
+          await (async () => {
+            for (const _ of Array.from({ length: 200 })) {
+              if (CommandRuntime.list(Instance.project.id, session.id).length) return
+              await Bun.sleep(10)
+            }
+            throw new Error("Timed out waiting for the session-owned Pandoc process")
+          })()
+          expect(CommandRuntime.list(Instance.project.id, "publication")).toEqual([])
+          await SessionFilesystem.revoke(session.id, grant.id)
+          expect((await outcome)?.message).toContain("Pandoc exited")
+          expect(CommandRuntime.list(Instance.project.id, session.id)).toEqual([])
+          expect(await Bun.file(path.join(connected.path, "exports")).exists()).toBe(false)
         } finally {
           unsubscribe()
           process.env.PATH = prior

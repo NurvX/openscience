@@ -148,6 +148,19 @@ describe("floating prompt surface", () => {
     )
   })
 
+  test("makes first-session bootstrap recoverable after an ambiguous create response", () => {
+    const submit = source.indexOf("const handleSubmit = async")
+    const candidate = source.indexOf('Identifier.descending("session")', submit)
+    const create = source.indexOf(".create({ id: candidate })", candidate)
+    const recover = source.indexOf(".get({ sessionID: candidate })", create)
+
+    expect(candidate).toBeGreaterThan(submit)
+    expect(create).toBeGreaterThan(candidate)
+    expect(recover).toBeGreaterThan(create)
+    expect(source.slice(submit, candidate)).toContain("store.bootstrapID")
+    expect(source.slice(recover, source.indexOf("if (!session)", recover))).toContain("if (recovered) return recovered")
+  })
+
   test("uses draft-safe rollback for every post-dispatch failure path", () => {
     const calls = source.match(/restoreInputAfterFailure\(\)/g) ?? []
 
@@ -239,7 +252,15 @@ describe("composer control consolidation", () => {
   test("sends the standard research effort through the SDK prompt", () => {
     expect(source).toContain('const researchEffort = "normal" as const')
     expect(source).toContain("effort: researchEffort")
+    expect(source).toContain("delegation: capabilities()?.delegation_enabled ?? true")
     expect(source).toContain("await client.session.prompt(request)")
+  })
+
+  test("carries research controls through every slash-command dispatch", () => {
+    expect(source).toContain("const delegation = capabilities()?.delegation_enabled ?? true")
+    expect(source.match(/effort: researchEffort/g)?.length ?? 0).toBeGreaterThanOrEqual(4)
+    expect(source.match(/delegation,/g)?.length ?? 0).toBeGreaterThanOrEqual(3)
+    expect(source.match(/\.command\(request\)/g)?.length ?? 0).toBe(3)
   })
 
   test("offers clear delegation and reviewer controls without duplicating Compute", () => {

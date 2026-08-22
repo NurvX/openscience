@@ -8,7 +8,11 @@ import { SessionTraceStore } from "./trace-store"
 import { SessionHarness } from "./harness"
 import { SessionResearch } from "./research"
 import { Review } from "@/science/provenance/review"
+import { Provenance } from "@/science/provenance/store"
 import { Instance } from "@/project/instance"
+import { TokenUsage } from "@synsci/util/token-usage"
+import { TaskAttempt } from "@/tool/task-attempt"
+import { ArtifactStore } from "@/artifact/store"
 import z from "zod"
 
 export namespace SessionTrace {
@@ -136,6 +140,8 @@ export namespace SessionTrace {
     path: z.string().optional(),
     kind: z.string().optional(),
     sha256: z.string().optional(),
+    provenanceID: z.string().optional(),
+    producedAt: z.number().optional(),
     durable: z.boolean(),
     completedAt: z.number().optional(),
   })
@@ -407,12 +413,13 @@ export namespace SessionTrace {
     const parts = assistants.flatMap((message) =>
       message.parts.filter((part): part is MessageV2.ToolPart => part.type === "tool"),
     )
-    const reviews =
+    const scope = { projectID: Instance.project.id, directory: Instance.directory }
+    const [reviews, graph] = await Promise.all([
       contract || parts.some((part) => part.tool === "provenance_review" || part.tool === "task")
-        ? await Review.list({ projectID: Instance.project.id, directory: Instance.directory }).catch(
-            () => [] as Review.Entry[],
-          )
-        : []
+        ? Review.list(scope).catch(() => [] as Review.Entry[])
+        : [],
+      contract ? Provenance.project(scope).catch(() => ({ nodes: [], edges: [] })) : { nodes: [], edges: [] },
+    ])
     const tools = parts.map((part) => ({
       id: part.id,
       callID: part.callID,
@@ -428,11 +435,12 @@ export namespace SessionTrace {
     const manifests = new Set(stored.harness.map((item) => item.messageID))
     const inference = assistants
       .filter((message) => {
+        if (TaskAttempt.syntheticWrapper(message)) return false
         if (runtimeGate(message.info)) return false
         if (message.info.providerID === "openscience" && message.info.modelID === "local") return false
         if (manifests.has(message.info.id)) return true
         const tokens = message.info.tokens
-        const used = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+        const used = TokenUsage.total(tokens)
         return message.info.cost > 0 || used > 0 || message.info.finish !== undefined
       })
       .map((message) => {
@@ -551,15 +559,23 @@ export namespace SessionTrace {
       .map((part) => {
         const meta = metadata(part)
         const saved = object(meta.savedArtifact)
+        const versionID = string(saved?.versionID)
+        const sha256 = string(saved?.sha256)
+        const target = versionID && sha256 ? ArtifactStore.reviewTargetID(versionID, sha256) : undefined
+        const edge = target ? graph.edges.find((item) => item.to === target && item.relation === "produced") : undefined
+        const producer = edge ? graph.nodes.find((item) => item.id === edge.from && item.kind === "run") : undefined
+        const producedAt = producer ? Date.parse(producer.recordedAt) : Number.NaN
         return {
           toolID: part.id,
           messageID: part.messageID,
           action: "save_file" as const,
           artifactID: string(saved?.id),
-          versionID: string(saved?.versionID),
+          versionID,
           path: string(saved?.path) ?? string(part.state.input.path),
           kind: string(saved?.kind),
-          sha256: string(saved?.sha256),
+          sha256,
+          provenanceID: producer?.id,
+          producedAt: Number.isFinite(producedAt) ? producedAt : undefined,
           durable: true,
           completedAt: times(part, now).completedAt,
         }

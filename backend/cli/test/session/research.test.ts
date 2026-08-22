@@ -16,10 +16,10 @@ function verified(label: string): SessionResearch.EvidenceReference {
 function artifact(path: string, index: number) {
   const sha256 = index.toString(16).padStart(64, "0")
   const versionID = `ver-${index}`
-  return { path, artifactID: `art-${index}`, versionID, sha256 }
+  return { path, artifactID: `art-${index}`, versionID, sha256, provenanceID: `run-${index}` }
 }
 
-function target(item: ReturnType<typeof artifact>) {
+function target(item: { versionID: string; sha256: string }) {
   return `artifact-version:${item.versionID}:${item.sha256.slice(0, 16)}`
 }
 
@@ -225,8 +225,181 @@ test("review coverage requires a structured disposition for every required immut
     })
     expect(assessment.gates.find((gate) => gate.id === "review")).toMatchObject({
       status: "pending",
-      detail: "1 required Result has no structured review disposition",
+      detail: `1 current required Result version has no structured review disposition: ${target(metrics)}`,
     })
+  } finally {
+    await SessionResearch.remove(sessionID)
+  }
+})
+
+test("review coverage follows the latest immutable version of each required Result", async () => {
+  const sessionID = `ses_research_${crypto.randomUUID()}`
+  try {
+    const contract = await SessionResearch.define(sessionID, {
+      objective: "Review the corrected result",
+      domain: "general",
+      template: "minimal",
+      deliverables: [{ path: "report.md", label: "Report", required: true }],
+    })
+    const superseded = { ...artifact("report.md", 30), completedAt: 1 }
+    const current = { ...artifact("report.md", 31), artifactID: superseded.artifactID, completedAt: 2 }
+    const assessment = SessionResearch.assess(contract, {
+      artifacts: [superseded, current],
+      jobs: [],
+      kernels: [],
+      findings: [{ target: target(current), verdict: "supports", severity: "info" }],
+      reviewed: true,
+      busy: false,
+    })
+    expect(assessment.gates.find((gate) => gate.id === "review")).toMatchObject({
+      status: "passed",
+      detail: "Independent review recorded a disposition for every required Result",
+    })
+
+    const stale = SessionResearch.assess(contract, {
+      artifacts: [superseded, current],
+      jobs: [],
+      kernels: [],
+      findings: [{ target: target(superseded), verdict: "supports", severity: "info" }],
+      reviewed: true,
+      busy: false,
+    })
+    expect(stale.gates.find((gate) => gate.id === "review")).toMatchObject({
+      status: "pending",
+      detail: `1 current required Result version has no structured review disposition: ${target(current)}`,
+    })
+  } finally {
+    await SessionResearch.remove(sessionID)
+  }
+})
+
+test("empirical readiness requires immutable producing-run lineage for every current Result", async () => {
+  const sessionID = `ses_research_${crypto.randomUUID()}`
+  try {
+    const contract = await SessionResearch.define(sessionID, {
+      objective: "Measure a calibrated estimator",
+      domain: "statistics",
+      template: "empirical",
+      deliverables: [{ path: "metrics.json", label: "Metrics", required: true }],
+    })
+    const metrics = { ...artifact("metrics.json", 40), provenanceID: undefined }
+    const assessment = SessionResearch.assess(contract, {
+      artifacts: [metrics],
+      jobs: [],
+      kernels: [],
+      findings: [{ target: target(metrics), verdict: "supports", severity: "info" }],
+      reviewed: true,
+      busy: false,
+    })
+    expect(assessment.gates.find((gate) => gate.id === "deliverables")).toMatchObject({
+      status: "pending",
+      complete: 0,
+      detail: "1 current empirical Result has no immutable producing-run lineage: metrics.json",
+    })
+    expect(await SessionResearch.prompt(sessionID)).toContain(
+      "every required empirical Result must be saved with artifact provenance_id",
+    )
+  } finally {
+    await SessionResearch.remove(sessionID)
+  }
+})
+
+test("preregistration freezes an immutable plan and verifies result chronology structurally", async () => {
+  const sessionID = `ses_research_${crypto.randomUUID()}`
+  try {
+    const contract = await SessionResearch.define(sessionID, {
+      objective: "Run a preregistered estimator study",
+      domain: "statistics",
+      template: "empirical",
+      deliverables: [{ path: "metrics.json", label: "Metrics", required: true }],
+    })
+    expect(await SessionResearch.prompt(sessionID)).toContain("this work is exploratory")
+    const plan = artifact("analysis-plan.md", 50)
+    const frozen = await SessionResearch.preregister(sessionID, {
+      kind: "artifact",
+      ref: `${plan.artifactID}:${plan.versionID}`,
+      artifactID: plan.artifactID,
+      versionID: plan.versionID,
+      path: plan.path,
+      sha256: plan.sha256,
+      verifiedAt: 1,
+    })
+    for (const check of contract.checks) {
+      await SessionResearch.check(sessionID, {
+        id: check.id,
+        status: "passed",
+        evidenceRefs: [verified(check.id)],
+      })
+    }
+    const metrics = { ...artifact("metrics.json", 51), producedAt: frozen.preregistration!.frozenAt + 1 }
+    const evidence = {
+      artifacts: [plan, metrics],
+      jobs: [],
+      kernels: [],
+      findings: [],
+      reviewed: false,
+      busy: false,
+    }
+    expect(SessionResearch.assess((await SessionResearch.read(sessionID))!, evidence).gates).toContainEqual(
+      expect.objectContaining({ id: "checks", status: "passed", complete: 3, total: 3 }),
+    )
+
+    const changed = { ...plan, sha256: "f".repeat(64) }
+    expect(
+      SessionResearch.assess((await SessionResearch.read(sessionID))!, { ...evidence, artifacts: [changed, metrics] })
+        .gates,
+    ).toContainEqual(
+      expect.objectContaining({
+        id: "checks",
+        status: "failed",
+        detail: `Preregistration failed immutable verification for ${plan.versionID}`,
+      }),
+    )
+
+    const premature = { ...metrics, producedAt: frozen.preregistration!.frozenAt - 1 }
+    expect(
+      SessionResearch.assess((await SessionResearch.read(sessionID))!, { ...evidence, artifacts: [plan, premature] })
+        .gates,
+    ).toContainEqual(
+      expect.objectContaining({
+        id: "checks",
+        status: "failed",
+        detail: "1 empirical Result was produced before the analysis plan was frozen: metrics.json",
+      }),
+    )
+    expect(await SessionResearch.prompt(sessionID)).toContain(`frozen immutable version ${plan.versionID}`)
+  } finally {
+    await SessionResearch.remove(sessionID)
+  }
+})
+
+test("preregistration cannot be created after a material trial", async () => {
+  const sessionID = `ses_research_${crypto.randomUUID()}`
+  try {
+    await SessionResearch.define(sessionID, {
+      objective: "Do not backdate the plan",
+      domain: "statistics",
+      template: "empirical",
+    })
+    await SessionResearch.trial(sessionID, {
+      stage: "simulate",
+      branch: "baseline",
+      candidate: "first run",
+      outcome: "neutral",
+      summary: "The first material run already happened",
+    })
+    const plan = artifact("analysis-plan.md", 52)
+    await expect(
+      SessionResearch.preregister(sessionID, {
+        kind: "artifact",
+        ref: `${plan.artifactID}:${plan.versionID}`,
+        artifactID: plan.artifactID,
+        versionID: plan.versionID,
+        path: plan.path,
+        sha256: plan.sha256,
+        verifiedAt: 1,
+      }),
+    ).rejects.toThrow("cannot be preregistered after a material trial")
   } finally {
     await SessionResearch.remove(sessionID)
   }

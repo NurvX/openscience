@@ -26,6 +26,7 @@ import { WindowsJobLauncher } from "../process/windows-job-launcher"
 import { DARWIN_RESPONSIBILITY_ACTIVATION_SUFFIX } from "../process/darwin-responsibility-launcher"
 import { DataRootBarrier } from "../global/data-root-barrier"
 import { SecretFile } from "../util/secret-file"
+import { ProcessOutput } from "../util/process-output"
 
 export class ComputeJobsCorruptError extends Error {
   constructor(
@@ -661,6 +662,77 @@ export namespace ComputeJobs {
     }
   }
 
+  const SSH_STDOUT_BYTES = 256 * 1024
+  const SSH_STDERR_BYTES = 64 * 1024
+  const SSH_DRAIN_TIMEOUT = 1_000
+
+  function boundedChild(proc: ChildProcess, stdout = SSH_STDOUT_BYTES, stderr = SSH_STDERR_BYTES) {
+    const output = { chunks: [] as Buffer[], size: 0 }
+    const errors = { chunks: [] as Buffer[], size: 0 }
+    const failed = Promise.withResolvers<Error>()
+    const state = { error: undefined as Error | undefined }
+    const fail = (error: Error) => {
+      if (state.error) return
+      state.error = error
+      proc.stdout?.pause()
+      proc.stderr?.pause()
+      failed.resolve(error)
+    }
+    const watch = (stream: ChildProcess["stdout"], label: "stdout" | "stderr", limit: number) => {
+      const done = Promise.withResolvers<void>()
+      if (!stream) {
+        done.resolve()
+        return { done: done.promise, close: () => undefined, dispose: () => undefined }
+      }
+      const target = label === "stdout" ? output : errors
+      const data = (value: Buffer) => {
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
+        const remaining = limit - target.size
+        const accepted = chunk.subarray(0, Math.max(0, remaining))
+        if (accepted.byteLength) {
+          target.chunks.push(accepted.slice())
+          target.size += accepted.byteLength
+        }
+        if (accepted.byteLength === chunk.byteLength) return
+        fail(new Error(`SSH operation ${label} exceeded ${limit} bytes`))
+      }
+      const finish = () => done.resolve()
+      const error = (cause: Error) => fail(cause)
+      stream.on("data", data)
+      stream.once("end", finish)
+      stream.once("close", finish)
+      stream.once("error", error)
+      return {
+        done: done.promise,
+        close: () => stream.destroy(),
+        dispose: () => {
+          stream.off("data", data)
+          stream.off("end", finish)
+          stream.off("close", finish)
+          stream.off("error", error)
+        },
+      }
+    }
+    const out = watch(proc.stdout, "stdout", stdout)
+    const err = watch(proc.stderr, "stderr", stderr)
+    return {
+      output,
+      errors,
+      failed: failed.promise,
+      state,
+      fail,
+      finished: Promise.all([out.done, err.done]),
+      close: () => {
+        out.close()
+        err.close()
+      },
+      dispose: () => {
+        out.dispose()
+        err.dispose()
+      },
+    }
+  }
+
   async function sshRun(
     scope: Scope,
     job: Job,
@@ -672,9 +744,13 @@ export namespace ComputeJobs {
       stdout?: string
       timeout?: number
       authorize?: boolean
+      signal?: AbortSignal
       /** Resolves the caller's launch handoff once this control process is
        * durably registered and its pre-exec ownership gate has opened. */
       ready?: () => void
+      /** Persists a known launch failure before potentially slow process-tree
+       * revocation. Cleanup still remains owned by this operation. */
+      failed?: (error: Error) => Promise<void> | void
     } = {},
   ) {
     if (options.authorize !== false) await currentAuthority(authority)
@@ -682,8 +758,6 @@ export namespace ComputeJobs {
     const spec = SshAdapter.argv(host, known, script)
     const input = options.stdin ? await fs.open(options.stdin, "r") : undefined
     const output = options.stdout ? await fs.open(options.stdout, "w", 0o600) : undefined
-    const errors: Buffer[] = []
-    const chunks: Buffer[] = []
     const detached = process.platform !== "win32"
     const ledger = `${credentialProcessID(scope.root, job.id)}-${crypto.randomUUID()}`
     const cleanupGate = async (release?: string) => {
@@ -694,7 +768,7 @@ export namespace ComputeJobs {
       ])
     }
     try {
-      return await AuthoritySignal.exclusive(() =>
+      const launched = await AuthoritySignal.exclusive(() =>
         OpenScience.withSubprocessEnv(process.env, async (env) => {
           if (options.authorize !== false) await currentAuthority(authority)
           const transport = Object.fromEntries(
@@ -744,8 +818,19 @@ export namespace ComputeJobs {
             await cleanupGate(wrapped.release)
             throw error
           }
-          proc.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk))
-          proc.stderr?.on("data", (chunk: Buffer) => errors.push(chunk))
+          const streams = boundedChild(proc)
+          // Output can exceed its bound before Linux finishes establishing
+          // durable process ownership. Start failure publication at the
+          // stream boundary itself so slow registration or reaping can never
+          // leave the durable job queued after the transport has already
+          // failed.
+          const reported = streams.failed.then(async (error) => {
+            const failure = await Promise.resolve(options.failed?.(error)).then(
+              () => undefined,
+              (cause) => cause,
+            )
+            return { error, failure }
+          })
           const done = new Promise<{ code: number | null; error?: string }>((resolve) => {
             proc.once("error", (error) => resolve({ code: null, error: error.message }))
             proc.once("exit", (code) => resolve({ code }))
@@ -794,29 +879,92 @@ export namespace ComputeJobs {
                 exited: () => proc.exitCode !== null || proc.signalCode !== null,
               }).catch((failure) => failures.push(failure))
             }
+            streams.close()
+            await Promise.race([streams.finished, Bun.sleep(SSH_DRAIN_TIMEOUT)])
+            streams.dispose()
             await cleanupGate(wrapped.release)
             if (failures.length) {
               throw new AggregateError([error, ...failures], "SSH control launch ownership cleanup failed")
             }
             throw error
           }
-          try {
-            const result = await Promise.race([
-              done,
-              Bun.sleep(options.timeout ?? 30_000).then(() => ({ code: null, error: "SSH operation timed out" })),
-            ])
-            if (proc.exitCode === null && proc.signalCode === null) {
-              await CredentialProcessLedger.revoke({ id: ledger, kind: "compute" })
-            }
-            await completeCredentialProcess(ledger)
-            const stderr = OpenScience.redactSecrets(Buffer.concat(errors).toString("utf8").trim())
-            if (result.code !== 0) throw new Error(result.error || stderr || `SSH operation exited with ${result.code}`)
-            return { stdout: Buffer.concat(chunks), stderr }
-          } finally {
-            await cleanupGate(wrapped.release)
-          }
+          return { proc, streams, reported, done, release: wrapped.release }
         }),
       )
+      const { proc, streams, reported, done, release } = launched
+      const abort = () => {
+        const reason = options.signal?.reason
+        streams.fail(reason instanceof Error ? reason : new Error("SSH operation was aborted"))
+      }
+      const timer = setTimeout(() => streams.fail(new Error("SSH operation timed out")), options.timeout ?? 30_000)
+      options.signal?.addEventListener("abort", abort, { once: true })
+      if (options.signal?.aborted) abort()
+      try {
+        const outcome = await Promise.race([
+          done.then((result) => ({ result, error: undefined, publication: undefined })),
+          reported.then((result) => ({ result: undefined, error: result.error, publication: result.failure })),
+        ])
+        if (outcome.error) {
+          const failures: unknown[] = outcome.publication ? [outcome.publication] : []
+          await CredentialProcessLedger.revoke({ id: ledger, kind: "compute" }).catch((error) => failures.push(error))
+          await Promise.race([done, Bun.sleep(SSH_DRAIN_TIMEOUT)])
+          streams.close()
+          await Promise.race([streams.finished, Bun.sleep(SSH_DRAIN_TIMEOUT)])
+          if (failures.length) {
+            throw new AggregateError(
+              [outcome.error, ...failures],
+              "SSH operation failed and its owned process group could not be reaped",
+            )
+          }
+          if (options.signal?.aborted) options.signal.throwIfAborted()
+          throw outcome.error
+        }
+        await completeCredentialProcess(ledger).catch(async (error) => {
+          const failures: unknown[] = []
+          await CredentialProcessLedger.revoke({ id: ledger, kind: "compute" }).catch((failure) =>
+            failures.push(failure),
+          )
+          streams.close()
+          await Promise.race([streams.finished, Bun.sleep(SSH_DRAIN_TIMEOUT)])
+          if (failures.length) {
+            throw new AggregateError(
+              [error, ...failures],
+              "SSH control process did not complete and its owned process group could not be reaped",
+            )
+          }
+          throw error
+        })
+        const drained = await Promise.race([
+          streams.finished.then(() => true),
+          streams.failed.then(() => false),
+          Bun.sleep(SSH_DRAIN_TIMEOUT).then(() => false),
+        ])
+        if (!drained || streams.state.error) {
+          streams.close()
+          const publication = streams.state.error ? await reported : undefined
+          if (publication?.failure) {
+            throw new AggregateError(
+              [streams.state.error, publication.failure],
+              "SSH operation output failed and its durable failure could not be published",
+            )
+          }
+          throw streams.state.error ?? new Error("SSH operation output streams did not close after process exit")
+        }
+        const result = outcome.result
+        const stderr = OpenScience.redactSecrets(
+          Buffer.concat(streams.errors.chunks, streams.errors.size).toString("utf8").trim(),
+        )
+        if (result.code !== 0) throw new Error(result.error || stderr || `SSH operation exited with ${result.code}`)
+        return {
+          stdout: Buffer.concat(streams.output.chunks, streams.output.size),
+          stderr,
+        }
+      } finally {
+        clearTimeout(timer)
+        options.signal?.removeEventListener("abort", abort)
+        streams.dispose()
+        await cleanupGate(release)
+      }
     } finally {
       await input?.close().catch(() => undefined)
       await output?.close().catch(() => undefined)
@@ -1347,6 +1495,7 @@ export namespace ComputeJobs {
     argv: string[],
     cwd: string,
     authority: ExecutionAuthority.Decision,
+    partial = false,
   ): Promise<string | undefined> {
     await currentAuthority(authority)
     const planned = Sandbox.wrapArgv({
@@ -1365,9 +1514,9 @@ export namespace ComputeJobs {
         stdout: "pipe",
         stderr: "ignore",
       })
-      const [code, text] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
-      if (code !== 0) return
-      return text.trim() || undefined
+      const result = await ProcessOutput.collect(proc, { maxBytes: 64 * 1024, timeoutMs: 10_000 })
+      if (result.timedOut || (!partial && result.truncated) || (result.code !== 0 && !result.truncated)) return
+      return result.bytes.toString().trim() || undefined
     } finally {
       Sandbox.cleanup(planned)
     }
@@ -1556,7 +1705,7 @@ export namespace ComputeJobs {
       output(["git", "remote", "get-url", "origin"], cwd, authority),
       output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd, authority),
       output(["git", "rev-parse", "HEAD"], cwd, authority),
-      output(["git", "status", "--porcelain"], cwd, authority),
+      output(["git", "-c", "core.fsmonitor=false", "status", "--porcelain"], cwd, authority, true),
       output(["python3", "--version"], cwd, authority),
       Promise.all(lockfiles.map((file) => fingerprint(cwd, file))),
     ])
@@ -1739,7 +1888,13 @@ export namespace ComputeJobs {
     }
   }
 
-  async function stageSsh(job: Job, scope: Scope, files?: SshAdapter.Upload[], ready?: () => void) {
+  async function stageSsh(
+    job: Job,
+    scope: Scope,
+    files?: SshAdapter.Upload[],
+    ready?: () => void,
+    failed?: (error: Error) => Promise<void> | void,
+  ) {
     if (!job.ssh || !job.authority) throw new Error(`SSH job ${job.id} has no staging authority`)
     await fs.mkdir(logsOf(scope.root), { recursive: true })
     const spec = await sshSpec(job, scope, files)
@@ -1754,13 +1909,14 @@ export namespace ComputeJobs {
         stdin: archive,
         timeout: 120_000,
         ready,
+        failed,
       })
     } finally {
       await fs.rm(archive, { force: true })
     }
   }
 
-  async function submitSsh(job: Job, scope: Scope) {
+  async function submitSsh(job: Job, scope: Scope, failed?: (error: Error) => Promise<void> | void) {
     if (!job.ssh || !job.authority) throw new Error(`SSH job ${job.id} has no submission authority`)
     const result = await sshRun(
       scope,
@@ -1768,7 +1924,7 @@ export namespace ComputeJobs {
       job.ssh.host,
       job.authority,
       SshAdapter.invoke(await sshSpec(job, scope), "submit"),
-      { timeout: 30_000 },
+      { timeout: 30_000, failed },
     )
     // Test-only crash point: emulate the local owner disappearing after the
     // remote scheduler accepted and durably named the resource, but before
@@ -1806,27 +1962,49 @@ export namespace ComputeJobs {
   }
 
   async function startSsh(job: Job, scope: Scope, files: SshAdapter.Upload[], ready?: () => void) {
-    await stageSsh(job, scope, files, ready)
-    return submitSsh(job, scope)
+    const failed = async (error: Error) => {
+      await recordSshFailure(job, scope, error)
+    }
+    await stageSsh(job, scope, files, ready, failed)
+    return submitSsh(job, scope, failed)
   }
 
-  async function failSshStart(job: Job, scope: Scope, error: unknown) {
-    const released = await releaseSsh(job, scope, false).then(
-      () => true,
-      () => false,
-    )
+  async function recordSshFailure(job: Job, scope: Scope, error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
     return change(scope.root, (jobs) => {
       const index = jobs.findIndex((item) => item.id === job.id)
       if (index < 0) throw new Error(`Compute job ${job.id} was not found`)
       if (terminal.has(jobs[index]!.status)) return jobs[index]!
-      const message = error instanceof Error ? error.message : String(error)
-      const failed = move(
-        jobs[index]!,
+      const lifecycle = jobs[index]!.lifecycle ?? ComputeLifecycle.from(jobs[index]!.status)
+      const starting = lifecycle.execution === "queued" ? move(jobs[index]!, { type: "start" }) : jobs[index]!
+      const stopped = move(
+        starting,
         { type: "finish", outcome: "failed", message },
         { completed_at: new Date().toISOString(), exit_code: null, error: message },
       )
-      const closed = released ? move(failed, { type: "close" }) : move(failed, { type: "lose" })
-      jobs[index] = Job.parse({ ...closed, provenance: provenance(closed) })
+      jobs[index] = Job.parse({ ...stopped, provenance: provenance(stopped) })
+      return jobs[index]!
+    })
+  }
+
+  async function failSshStart(job: Job, scope: Scope, error: unknown) {
+    const failed = await recordSshFailure(job, scope, error)
+    const released = await releaseSsh(failed, scope, false).then(
+      () => true,
+      async (failure) => {
+        await event(
+          scope.root,
+          job.id,
+          `Remote workspace cleanup failed: ${failure instanceof Error ? failure.message : String(failure)}`,
+        )
+        return false
+      },
+    )
+    return change(scope.root, (jobs) => {
+      const index = jobs.findIndex((item) => item.id === job.id)
+      if (index < 0) throw new Error(`Compute job ${job.id} was not found`)
+      const settled = released ? move(jobs[index]!, { type: "close" }) : move(jobs[index]!, { type: "lose" })
+      jobs[index] = Job.parse({ ...settled, provenance: provenance(settled) })
       return jobs[index]!
     })
   }
@@ -2137,67 +2315,98 @@ export namespace ComputeJobs {
       "command -v qsub >/dev/null 2>&1 && command -v qstat >/dev/null 2>&1 && command -v qdel >/dev/null 2>&1 && printf 'pbs=1\\n' || true",
     ].join("; ")
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openscience-ssh-probe-"))
-    const known = await SshAdapter.known({ ...parsed, ...scanned }, temporary)
-    const argv = SshAdapter.argv({ ...parsed, ...scanned }, known, script)
-    const agent = process.env.SSH_AUTH_SOCK
-    const proc = spawn(argv[0]!, argv.slice(1), {
-      // The broker owns SSH authentication, so it passes only the agent
-      // socket—not private-key files or arbitrary shell credentials.
-      env: agent ? { ...OpenScience.kernelEnv(process.env), SSH_AUTH_SOCK: agent } : OpenScience.kernelEnv(process.env),
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-    const output: Buffer[] = []
-    const errors: Buffer[] = []
-    proc.stdout?.on("data", (chunk: Buffer) => output.push(chunk))
-    proc.stderr?.on("data", (chunk: Buffer) => errors.push(chunk))
-    const done = new Promise<{ code: number | null; error?: string }>((resolve) => {
-      proc.once("error", (error) => resolve({ code: null, error: error.message }))
-      proc.once("exit", (code) => resolve({ code }))
-    })
-    const result = await Promise.race([
-      done,
-      Bun.sleep(12_000).then(() => ({ code: null, error: "Connection timed out" })),
-    ])
-    if (proc.exitCode === null) {
-      await Shell.killTree(proc, {
-        detached: false,
-        exited: () => proc.exitCode !== null,
+    try {
+      const known = await SshAdapter.known({ ...parsed, ...scanned }, temporary)
+      const argv = SshAdapter.argv({ ...parsed, ...scanned }, known, script)
+      const agent = process.env.SSH_AUTH_SOCK
+      const detached = process.platform !== "win32"
+      const proc = spawn(argv[0]!, argv.slice(1), {
+        // The broker owns SSH authentication, so it passes only the agent
+        // socket—not private-key files or arbitrary shell credentials.
+        env: agent
+          ? { ...OpenScience.kernelEnv(process.env), SSH_AUTH_SOCK: agent }
+          : OpenScience.kernelEnv(process.env),
+        detached,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
       })
+      const streams = boundedChild(proc, 64 * 1024, 64 * 1024)
+      const done = new Promise<{ code: number | null; error?: string }>((resolve) => {
+        proc.once("error", (error) => resolve({ code: null, error: error.message }))
+        proc.once("exit", (code) => resolve({ code }))
+      })
+      const timer = setTimeout(() => streams.fail(new Error("Connection timed out")), 12_000)
+      try {
+        const outcome = await Promise.race([
+          done.then((result) => ({ result, error: undefined })),
+          streams.failed.then((error) => ({ result: undefined, error })),
+        ])
+        if (outcome.error) {
+          await Shell.killTree(proc, {
+            detached,
+            exited: () => proc.exitCode !== null || proc.signalCode !== null,
+          })
+          await Promise.race([done, Bun.sleep(SSH_DRAIN_TIMEOUT)])
+          streams.close()
+        }
+        const drained = await Promise.race([
+          streams.finished.then(() => true),
+          streams.failed.then(() => false),
+          Bun.sleep(SSH_DRAIN_TIMEOUT).then(() => false),
+        ])
+        if (!drained) {
+          streams.fail(new Error("SSH probe output streams did not close after process exit"))
+          await Shell.killTree(proc, {
+            detached,
+            exited: () => proc.exitCode !== null || proc.signalCode !== null,
+          })
+          streams.close()
+          await Promise.race([streams.finished, Bun.sleep(SSH_DRAIN_TIMEOUT)])
+        }
+        const failure = outcome.error ?? streams.state.error
+        const result = failure ? { code: null, error: failure.message } : outcome.result!
+        const text = Buffer.concat(streams.output.chunks, streams.output.size).toString("utf8")
+        const connected = result.code === 0 && text.includes("connected=1")
+        const python = text.includes("python=1")
+        const bash = text.includes("bash=1")
+        const slurm = text.includes("slurm=1")
+        const pbs = text.includes("pbs=1")
+        const missing = [
+          !python ? "Python 3" : undefined,
+          !bash ? "Bash" : undefined,
+          parsed.scheduler === "slurm" && !slurm ? "Slurm (sbatch, squeue, sacct, scancel)" : undefined,
+          parsed.scheduler === "pbs" && !pbs ? "PBS (qsub, qstat, qdel)" : undefined,
+        ].filter((value): value is string => !!value)
+        const transportError =
+          result.error ||
+          (result.code === 0
+            ? undefined
+            : Buffer.concat(streams.errors.chunks, streams.errors.size).toString("utf8").trim())
+        const error =
+          transportError ||
+          (connected && missing.length
+            ? `Dispatch prerequisites missing on ${parsed.label}: ${missing.join(", ")}`
+            : undefined)
+        return Probe.parse({
+          ok: connected && missing.length === 0,
+          host: parsed.label,
+          latency_ms: Math.round(performance.now() - started),
+          hostname: text.match(/^hostname=(.+)$/m)?.[1]?.trim(),
+          python,
+          gpu: text.includes("gpu=1"),
+          slurm,
+          pbs,
+          fingerprint: scanned.fingerprint,
+          host_key: scanned.host_key,
+          error: error || undefined,
+        })
+      } finally {
+        clearTimeout(timer)
+        streams.dispose()
+      }
+    } finally {
+      await fs.rm(temporary, { recursive: true, force: true })
     }
-    await fs.rm(temporary, { recursive: true, force: true })
-    const text = Buffer.concat(output).toString("utf8")
-    const connected = result.code === 0 && text.includes("connected=1")
-    const python = text.includes("python=1")
-    const bash = text.includes("bash=1")
-    const slurm = text.includes("slurm=1")
-    const pbs = text.includes("pbs=1")
-    const missing = [
-      !python ? "Python 3" : undefined,
-      !bash ? "Bash" : undefined,
-      parsed.scheduler === "slurm" && !slurm ? "Slurm (sbatch, squeue, sacct, scancel)" : undefined,
-      parsed.scheduler === "pbs" && !pbs ? "PBS (qsub, qstat, qdel)" : undefined,
-    ].filter((value): value is string => !!value)
-    const transportError =
-      result.error || (result.code === 0 ? undefined : Buffer.concat(errors).toString("utf8").trim())
-    const error =
-      transportError ||
-      (connected && missing.length
-        ? `Dispatch prerequisites missing on ${parsed.label}: ${missing.join(", ")}`
-        : undefined)
-    return Probe.parse({
-      ok: connected && missing.length === 0,
-      host: parsed.label,
-      latency_ms: Math.round(performance.now() - started),
-      hostname: text.match(/^hostname=(.+)$/m)?.[1]?.trim(),
-      python,
-      gpu: text.includes("gpu=1"),
-      slurm,
-      pbs,
-      fingerprint: scanned.fingerprint,
-      host_key: scanned.host_key,
-      error: error || undefined,
-    })
   }
 
   async function execute(

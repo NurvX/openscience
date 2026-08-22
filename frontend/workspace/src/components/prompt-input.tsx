@@ -82,11 +82,13 @@ import {
   type ReviewPreferences,
 } from "./prompt-capabilities"
 import { canRestoreFailedSubmission } from "./prompt-submission"
+import { requestFailure, requestStatus } from "@/utils/request-error"
 import {
   slashGroup,
   slashIcon,
   slashMode,
   slashActionSkill,
+  slashEdit,
   slashSource,
   slashTokenAt,
   SLASH_NATIVE,
@@ -607,6 +609,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     intent: SlashMode | null
     slashInline: boolean
     applyingHistory: boolean
+    bootstrapID?: string
+    bootstrapDirectory?: string
   }>({
     popover: null,
     historyIndex: -1,
@@ -616,6 +620,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     intent: null,
     slashInline: false,
     applyingHistory: false,
+    bootstrapID: undefined,
+    bootstrapDirectory: undefined,
   })
 
   const [submitting, setSubmitting] = createSignal(false)
@@ -976,7 +982,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         type: slashMode({ trigger: item.name }) ? "mode" : "action",
       }))
 
-    const all = store.slashInline ? items.filter((item) => item.type === "skill") : [...items, ...commands]
+    const all = store.slashInline
+      ? items.filter((item) => item.type === "skill" || item.type === "mode")
+      : [...items, ...commands]
     const needle = query.trim().replace(/^\/+/, "").toLowerCase()
     const trigger = (item: SlashCommand) => item.trigger.toLowerCase()
     const exact = all.filter((item) => trigger(item) === needle)
@@ -1008,39 +1016,48 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     setIntent(intent)
   }
 
+  const replaceSlash = (value: string) => {
+    const selection = window.getSelection()
+    const cursor = getCursorPosition(editorRef)
+    const text = prompt
+      .current()
+      .map((part) => ("content" in part ? part.content : ""))
+      .join("")
+    const edit = slashEdit(text, cursor, value)
+    if (!selection || selection.rangeCount === 0 || !edit) return false
+
+    const range = selection.getRangeAt(0)
+    setRangeEdge(range, "start", edit.start)
+    setRangeEdge(range, "end", edit.end)
+    range.deleteContents()
+
+    if (edit.value) {
+      const node = document.createTextNode(edit.value)
+      range.insertNode(node)
+      range.setStart(node, edit.value.length)
+    }
+
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    handleInput()
+    requestAnimationFrame(() => editorRef.focus({ preventScroll: true }))
+    return true
+  }
+
   const handleSlashSelect = (cmd: SlashCommand | undefined) => {
     if (!cmd) return
     setStore("popover", null)
 
     const intent = slashMode(cmd)
     if (intent) {
-      enterIntent(intent)
+      if (!replaceSlash("")) return
+      setIntent(intent)
       return
     }
 
     if (cmd.type === "skill") {
-      const selection = window.getSelection()
-      const cursor = getCursorPosition(editorRef)
-      const text = prompt
-        .current()
-        .map((part) => ("content" in part ? part.content : ""))
-        .join("")
-      const token = slashTokenAt(text, cursor)
-      if (!selection || selection.rangeCount === 0 || !token) return
-
-      const range = selection.getRangeAt(0)
-      const value = `/${cmd.trigger} `
-      setRangeEdge(range, "start", token.start)
-      setRangeEdge(range, "end", token.end)
-      range.deleteContents()
-      const node = document.createTextNode(value)
-      range.insertNode(node)
-      range.setStart(node, value.length)
-      range.collapse(true)
-      selection.removeAllRanges()
-      selection.addRange(range)
-      handleInput()
-      requestAnimationFrame(() => editorRef.focus({ preventScroll: true }))
+      replaceSlash(`/${cmd.trigger} `)
       return
     }
 
@@ -1115,11 +1132,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   createEffect(
-    on(
-      () => sync.data.command,
-      () => slashRefetch(),
-      { defer: true },
-    ),
+    on([() => sync.data.command, () => sync.data.skill, () => sync.data.config.permission], () => slashRefetch(), {
+      defer: true,
+    }),
   )
 
   const scrollSlashActive = () => {
@@ -1670,14 +1685,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     if (text.trim().length === 0 && images.length === 0) return
 
-    const errorMessage = (err: unknown) => {
-      if (err && typeof err === "object" && "data" in err) {
-        const data = (err as { data?: { message?: string } }).data
-        if (data?.message) return data.message
-      }
-      if (err instanceof Error) return err.message
-      return language.t("common.requestFailed")
-    }
+    const errorMessage = (err: unknown) => requestFailure(err, "Request").description
 
     const clearInput = () => {
       prompt.reset()
@@ -1702,6 +1710,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       return true
     }
 
+    const researchEffort = "normal" as const
+    const delegation = capabilities()?.delegation_enabled ?? true
     const [head, ...tail] = text.split(" ")
     const name = text.startsWith("/") ? head.slice(1) : undefined
     const command = name ? sync.data.command.find((item) => item.name === name) : undefined
@@ -1714,15 +1724,23 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       setStore("historyIndex", -1)
       setStore("savedPrompt", null)
       props.onSubmit?.()
-      sdk.client.session
-        .command({ sessionID: active.id, command: command.name, arguments: tail.join(" ") })
-        .catch((err) => {
-          showToast({
-            title: language.t("prompt.toast.commandSendFailed.title"),
-            description: errorMessage(err),
-          })
-          restoreInputAfterFailure()
+      const request = {
+        sessionID: active.id,
+        command: command.name,
+        arguments: tail.join(" "),
+        effort: researchEffort,
+        delegation,
+      } satisfies Parameters<typeof sdk.client.session.command>[0] & {
+        effort: "normal"
+        delegation: boolean
+      }
+      sdk.client.session.command(request).catch((err) => {
+        showToast({
+          title: language.t("prompt.toast.commandSendFailed.title"),
+          description: errorMessage(err),
         })
+        restoreInputAfterFailure()
+      })
       setSubmitting(false)
       return
     }
@@ -1744,7 +1762,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const agent = currentAgent.name
     const variant = local.model.variant.prompt()
     const tier = local.model.tier.prompt()
-    const researchEffort = "normal" as const
 
     const restoreBootstrap = () => {
       setSubmitting(false)
@@ -1812,17 +1829,33 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     let session = info()
     if (!session && isNewSession) {
+      const candidate =
+        store.bootstrapID && store.bootstrapDirectory === sessionDirectory
+          ? store.bootstrapID
+          : Identifier.descending("session")
+      setStore({ bootstrapID: candidate, bootstrapDirectory: sessionDirectory })
       session = await client.session
-        .create()
+        .create({ id: candidate })
         .then((x) => x.data ?? undefined)
-        .catch((err) => {
+        .catch(async (err) => {
+          const recovery = await client.session
+            .get({ sessionID: candidate })
+            .then((x) => ({ recovered: x.data ?? undefined, error: undefined as unknown }))
+            .catch((error) => ({ recovered: undefined, error }))
+          const recovered = recovery.recovered
+          if (recovered) return recovered
+          const failure = requestFailure(err, "Create session", {
+            ambiguousCreate: !recovery.error || requestStatus(recovery.error) !== 404,
+            candidate,
+          })
           showToast({
-            title: language.t("prompt.toast.sessionCreateFailed.title"),
-            description: errorMessage(err),
+            title: failure.title,
+            description: failure.description,
           })
           return undefined
         })
       if (session) {
+        setStore({ bootstrapID: undefined, bootstrapDirectory: undefined })
         const project = sync.project
         const href = project
           ? projectHref(project, sessionDirectory, session.id)
@@ -1845,9 +1878,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           command: text,
         })
         .catch((err) => {
+          const failure = requestFailure(err, "Send shell command")
           showToast({
-            title: language.t("prompt.toast.shellSendFailed.title"),
-            description: errorMessage(err),
+            title: failure.title,
+            description: failure.description,
           })
           restoreInputAfterFailure()
         })
@@ -1856,30 +1890,35 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
 
     if (intent) {
-      client.session
-        .command({
-          sessionID: session.id,
-          command: intent,
-          arguments: text,
-          agent,
-          model: `${model.providerID}/${model.modelID}`,
-          variant,
-          tier,
-          parts: images.map((attachment) => ({
-            id: Identifier.ascending("part"),
-            type: "file" as const,
-            mime: attachment.mime,
-            url: attachment.dataUrl,
-            filename: attachment.filename,
-          })),
+      const request = {
+        sessionID: session.id,
+        command: intent,
+        arguments: text,
+        agent,
+        model: `${model.providerID}/${model.modelID}`,
+        effort: researchEffort,
+        delegation,
+        variant,
+        tier,
+        parts: images.map((attachment) => ({
+          id: Identifier.ascending("part"),
+          type: "file" as const,
+          mime: attachment.mime,
+          url: attachment.dataUrl,
+          filename: attachment.filename,
+        })),
+      } satisfies Parameters<typeof client.session.command>[0] & {
+        effort: "normal"
+        delegation: boolean
+      }
+      client.session.command(request).catch((err) => {
+        const failure = requestFailure(err, `Start ${intent} mode`)
+        showToast({
+          title: failure.title,
+          description: failure.description,
         })
-        .catch((err) => {
-          showToast({
-            title: `Could not start ${intent} mode`,
-            description: errorMessage(err),
-          })
-          restoreInputAfterFailure()
-        })
+        restoreInputAfterFailure()
+      })
       setSubmitting(false)
       return
     }
@@ -1889,30 +1928,35 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       const commandName = cmdName.slice(1)
       const customCommand = sync.data.command.find((c) => c.name === commandName)
       if (customCommand) {
-        client.session
-          .command({
-            sessionID: session.id,
-            command: commandName,
-            arguments: args.join(" "),
-            agent,
-            model: `${model.providerID}/${model.modelID}`,
-            variant,
-            tier,
-            parts: images.map((attachment) => ({
-              id: Identifier.ascending("part"),
-              type: "file" as const,
-              mime: attachment.mime,
-              url: attachment.dataUrl,
-              filename: attachment.filename,
-            })),
+        const request = {
+          sessionID: session.id,
+          command: commandName,
+          arguments: args.join(" "),
+          agent,
+          model: `${model.providerID}/${model.modelID}`,
+          effort: researchEffort,
+          delegation,
+          variant,
+          tier,
+          parts: images.map((attachment) => ({
+            id: Identifier.ascending("part"),
+            type: "file" as const,
+            mime: attachment.mime,
+            url: attachment.dataUrl,
+            filename: attachment.filename,
+          })),
+        } satisfies Parameters<typeof client.session.command>[0] & {
+          effort: "normal"
+          delegation: boolean
+        }
+        client.session.command(request).catch((err) => {
+          const failure = requestFailure(err, "Send command")
+          showToast({
+            title: failure.title,
+            description: failure.description,
           })
-          .catch((err) => {
-            showToast({
-              title: language.t("prompt.toast.commandSendFailed.title"),
-              description: errorMessage(err),
-            })
-            restoreInputAfterFailure()
-          })
+          restoreInputAfterFailure()
+        })
         setSubmitting(false)
         return
       }
@@ -1958,7 +2002,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       },
     }))
     const specialist = delegatedSpecialist(
-      capabilities()?.delegation_enabled ?? false,
+      capabilities()?.delegation_enabled ?? true,
       capabilities()?.delegation_specialist ?? null,
       agentAttachments.map((attachment) => attachment.name),
     )
@@ -2222,6 +2266,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         messageID,
         parts: requestParts,
         effort: researchEffort,
+        delegation: capabilities()?.delegation_enabled ?? true,
         variant,
         tier,
       }
@@ -2233,10 +2278,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       if (sessionDirectory === projectDirectory) {
         sync.set("session_status", session.id, { type: "idle" })
       }
-      showToast({
-        title: language.t("prompt.toast.promptSendFailed.title"),
-        description: errorMessage(err),
-      })
+      const failure = requestFailure(err, "Send prompt")
+      showToast({ title: failure.title, description: failure.description })
       removeOptimisticMessage()
       for (const item of commentItems) {
         prompt.context.add({
@@ -2713,7 +2756,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         <Toggle
                           hideLabel
                           disabled={!capabilities()}
-                          checked={capabilities()?.delegation_enabled ?? false}
+                          checked={capabilities()?.delegation_enabled ?? true}
                           onChange={(checked) => saveCapabilities({ delegation_enabled: checked })}
                         >
                           Delegation

@@ -2,17 +2,21 @@ import path from "node:path"
 import z from "zod"
 import { Tool } from "./tool"
 import { Provider } from "@/provider/provider"
-import { resolveCredentialSource, requiresWalletBalance } from "@/session/billing-gate"
 import { OpenScience } from "@/openscience"
 import { Instance } from "@/project/instance"
 import { SafeFileIO } from "@/file/safe-io"
 import { assertExternalDirectory, sessionToolDirectory } from "./external-directory"
+import { AuthoritySignal } from "@/project/authority-signal"
 import { Identifier } from "@/id/id"
 import { Bus } from "@/bus"
 import { File } from "@/file"
 import { FileWatcher } from "@/file/watcher"
+import { Network } from "@/settings/network"
 
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024
+const MAX_IMAGE_RESPONSE_BYTES = Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 1024 * 1024
+const MAX_IMAGE_ERROR_BYTES = 1024 * 1024
+const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
 const DEFAULT_MODEL = "google/gemini-3-pro-image"
 
 type OpenRouterImage = {
@@ -65,6 +69,28 @@ function remoteImageURL(value: unknown): string | undefined {
   }
 }
 
+function decodeImage(value: string) {
+  const whitespace = { value: 0 }
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32) whitespace.value++
+  }
+  const length = value.length - whitespace.value
+  const ceiling = Math.ceil(MAX_IMAGE_BYTES / 3) * 4
+  if (length > ceiling) throw new Error("The generated image exceeds the 30 MB safety limit.")
+  const encoded = whitespace.value ? value.replace(/\s/g, "") : value
+  if (encoded.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+    throw new Error("The image model returned an unsupported image payload.")
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
+  const size = Math.floor((encoded.length * 3) / 4) - padding
+  if (size > MAX_IMAGE_BYTES) throw new Error("The generated image exceeds the 30 MB safety limit.")
+  const bytes = Buffer.from(encoded, "base64")
+  if (bytes.byteLength === 0) throw new Error("The image model returned an empty image.")
+  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("The generated image exceeds the 30 MB safety limit.")
+  return bytes
+}
+
 export function extractGeneratedImage(value: OpenRouterImage) {
   const generated = value.data?.find((item) => typeof item.b64_json === "string" && item.b64_json.length > 0)
   if (generated?.b64_json) {
@@ -72,9 +98,7 @@ export function extractGeneratedImage(value: OpenRouterImage) {
     if (!/^image\/(?:png|jpeg|webp|gif)$/.test(mime)) {
       throw new Error(`The image model returned an unsupported image format (${mime}).`)
     }
-    const bytes = Buffer.from(generated.b64_json.replace(/\s/g, ""), "base64")
-    if (bytes.byteLength === 0) throw new Error("The image model returned an empty image.")
-    if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("The generated image exceeds the 30 MB safety limit.")
+    const bytes = decodeImage(generated.b64_json)
     return { mime, bytes }
   }
 
@@ -88,9 +112,7 @@ export function extractGeneratedImage(value: OpenRouterImage) {
     )
   const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\s]+)$/.exec(url)
   if (!match) throw new Error("The image model returned an unsupported image payload.")
-  const bytes = Buffer.from(match[2].replace(/\s/g, ""), "base64")
-  if (bytes.byteLength === 0) throw new Error("The image model returned an empty image.")
-  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("The generated image exceeds the 30 MB safety limit.")
+  const bytes = decodeImage(match[2])
   return { mime: match[1], bytes }
 }
 
@@ -98,7 +120,51 @@ export function extractGeneratedImageURL(value: OpenRouterImage) {
   return remoteImageURL(value)
 }
 
-async function materializeImage(value: OpenRouterImage, signal: AbortSignal) {
+export async function readBoundedImageResponse(response: Response, maxBytes: number) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError(`Invalid image response limit: ${maxBytes}`)
+  const header = response.headers.get("content-length")
+  const declared = header === null ? undefined : Number(header)
+  if (declared !== undefined && Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new Error(`The image response exceeds the ${maxBytes}-byte safety limit.`)
+  }
+  if (!response.body) return Buffer.alloc(0)
+  const reader = response.body.getReader()
+  const initial =
+    declared !== undefined && Number.isSafeInteger(declared) && declared >= 0
+      ? Math.min(declared, maxBytes)
+      : Math.min(64 * 1024, maxBytes)
+  const bytes = { value: Buffer.allocUnsafe(initial) }
+  const total = { value: 0 }
+  try {
+    while (true) {
+      const result = await reader.read()
+      if (result.done) break
+      if (total.value + result.value.byteLength > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw new Error(`The image response exceeds the ${maxBytes}-byte safety limit.`)
+      }
+      const required = total.value + result.value.byteLength
+      if (required > bytes.value.byteLength) {
+        const capacity = Math.min(maxBytes, Math.max(required, bytes.value.byteLength * 2, 64 * 1024))
+        const expanded = Buffer.allocUnsafe(capacity)
+        bytes.value.copy(expanded, 0, 0, total.value)
+        bytes.value = expanded
+      }
+      bytes.value.set(result.value, total.value)
+      total.value += result.value.byteLength
+    }
+    return bytes.value.subarray(0, total.value)
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+async function materializeImage(
+  value: OpenRouterImage,
+  signal: AbortSignal,
+  authorize: NonNullable<Network.FetchPolicy["authorize"]>,
+) {
   try {
     return extractGeneratedImage(value)
   } catch (error) {
@@ -108,20 +174,40 @@ async function materializeImage(value: OpenRouterImage, signal: AbortSignal) {
   if (!url) {
     throw new Error("The image model completed without returning image bytes or a downloadable image URL.")
   }
-  const response = await fetch(url, { signal })
+  const response = await Network.fetch(
+    url,
+    { signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) },
+    { authorize, maxResponseBytes: MAX_IMAGE_BYTES, streamResponse: true },
+  )
   if (!response.ok) throw new Error(`The generated image could not be downloaded (${response.status}).`)
-  const length = Number(response.headers.get("content-length") ?? 0)
-  if (Number.isFinite(length) && length > MAX_IMAGE_BYTES) {
-    throw new Error("The generated image exceeds the 30 MB safety limit.")
-  }
   const mime = response.headers.get("content-type")?.split(";")[0]?.trim() ?? ""
   if (!/^image\/(?:png|jpeg|webp|gif)$/.test(mime)) {
     throw new Error(`The generated image URL returned an unsupported format (${mime || "unknown"}).`)
   }
-  const bytes = Buffer.from(await response.arrayBuffer())
+  const bytes = await readBoundedImageResponse(response, MAX_IMAGE_BYTES)
   if (bytes.byteLength === 0) throw new Error("The image model returned an empty image.")
-  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("The generated image exceeds the 30 MB safety limit.")
   return { mime, bytes }
+}
+
+export function generatedImageAttachments(input: {
+  bytes: Buffer
+  mime: string
+  filepath: string
+  sessionID: string
+  messageID: string
+}) {
+  if (input.bytes.byteLength > MAX_IMAGE_ATTACHMENT_BYTES) return []
+  return [
+    {
+      id: Identifier.ascending("part"),
+      sessionID: input.sessionID,
+      messageID: input.messageID,
+      type: "file" as const,
+      mime: input.mime,
+      filename: path.basename(input.filepath),
+      url: `data:${input.mime};base64,${input.bytes.toString("base64")}`,
+    },
+  ]
 }
 
 function requestError(status: number, body: OpenRouterImage | undefined, raw: string, managed: boolean) {
@@ -161,7 +247,7 @@ export const GenerateImageTool = Tool.define("generate_image", {
       .min(1)
       .max(10_000)
       .default("generated-image.png")
-      .describe("PNG, JPEG, WebP, or GIF destination in the connected workspace"),
+      .describe("PNG, JPEG, or WebP destination in the connected workspace"),
     input_path: z
       .string()
       .trim()
@@ -180,28 +266,48 @@ export const GenerateImageTool = Tool.define("generate_image", {
     const requested = path.isAbsolute(params.output_path)
       ? params.output_path
       : path.join(directory, params.output_path)
-    const output = (await assertExternalDirectory(ctx, requested, { access: "write" }))?.path ?? requested
+    using outputAccess = await assertExternalDirectory(ctx, requested, { access: "write" })
+    const output = outputAccess?.path ?? requested
     const extension = path.extname(output).toLowerCase()
-    if (![".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(extension)) {
-      throw new Error("output_path must end in .png, .jpg, .jpeg, .webp, or .gif")
+    if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+      throw new Error("output_path must end in .png, .jpg, .jpeg, or .webp")
     }
-    const approved = await SafeFileIO.optional(output)
-    const source = params.input_path
-      ? (
-          await assertExternalDirectory(
-            ctx,
-            path.isAbsolute(params.input_path) ? params.input_path : path.join(directory, params.input_path),
-            { access: "read" },
-          )
-        )?.path
+    const approved = await SafeFileIO.optional(output, { maxBytes: MAX_IMAGE_BYTES }).catch((error) => {
+      if (error instanceof SafeFileIO.LimitError) {
+        throw new Error("The existing output image exceeds the 30 MB safety limit; rename or remove it first.")
+      }
+      throw error
+    })
+    using inputAccess = params.input_path
+      ? await assertExternalDirectory(
+          ctx,
+          path.isAbsolute(params.input_path) ? params.input_path : path.join(directory, params.input_path),
+          { access: "read" },
+        )
       : undefined
-    const input = source ? await SafeFileIO.read(source) : undefined
+    const source = inputAccess?.path
+    const sourceExtension = source ? path.extname(source).toLowerCase() : undefined
+    if (sourceExtension && ![".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(sourceExtension)) {
+      throw new Error("input_path must end in .png, .jpg, .jpeg, .webp, or .gif")
+    }
+    const input = source
+      ? await SafeFileIO.read((await inputAccess?.revalidate()) ?? source, { maxBytes: MAX_IMAGE_BYTES }).catch(
+          (error) => {
+            if (error instanceof SafeFileIO.LimitError) {
+              throw new Error("The input image exceeds the 30 MB safety limit.")
+            }
+            throw error
+          },
+        )
+      : undefined
     const inputMime = source
-      ? path.extname(source).toLowerCase() === ".webp"
+      ? sourceExtension === ".webp"
         ? "image/webp"
-        : [".jpg", ".jpeg"].includes(path.extname(source).toLowerCase())
-          ? "image/jpeg"
-          : "image/png"
+        : sourceExtension === ".gif"
+          ? "image/gif"
+          : sourceExtension && [".jpg", ".jpeg"].includes(sourceExtension)
+            ? "image/jpeg"
+            : "image/png"
       : undefined
 
     const provider = await Provider.getProvider("openrouter").catch(() => undefined)
@@ -214,8 +320,22 @@ export const GenerateImageTool = Tool.define("generate_image", {
       )
     }
 
-    const credential = await resolveCredentialSource("openrouter", params.model)
-    const managed = requiresWalletBalance(credential)
+    // This tool calls fetch directly instead of going through Provider.getSDK(),
+    // so enforce the same credential/host invariant here. The effective token,
+    // not the spend-toggle label, determines whether this is a wallet request.
+    // Otherwise a custom/stale base URL could receive the scoped thk_* token.
+    const managed = OpenScience.isManagedKeyValue(key)
+    const proxy = Provider.isAtlasProxyBaseURL(base)
+    if (managed && !proxy) {
+      throw new Error(
+        "OpenScience refused to send the wallet credential outside its managed image proxy. Run openscience sync and retry.",
+      )
+    }
+    if (!managed && proxy) {
+      throw new Error(
+        "OpenScience refused to send your connected OpenRouter key to the managed wallet proxy. Reconnect OpenRouter and retry.",
+      )
+    }
     if (managed) {
       const balance = await OpenScience.getBalance().catch(() => null)
       if (balance !== null && balance <= 0) {
@@ -254,11 +374,13 @@ export const GenerateImageTool = Tool.define("generate_image", {
     const request = async (endpoint: string, payload: Record<string, unknown>) => {
       const response = await fetch(`${base}/${endpoint}`, {
         method: "POST",
-        signal: ctx.abort,
+        signal: AbortSignal.any([ctx.abort, AbortSignal.timeout(120_000)]),
         headers,
         body: JSON.stringify(payload),
       })
-      const raw = await response.text()
+      const raw = (
+        await readBoundedImageResponse(response, response.ok ? MAX_IMAGE_RESPONSE_BYTES : MAX_IMAGE_ERROR_BYTES)
+      ).toString("utf8")
       const body = (() => {
         try {
           return JSON.parse(raw) as OpenRouterImage
@@ -287,11 +409,32 @@ export const GenerateImageTool = Tool.define("generate_image", {
     })
     if (!direct.response.ok) throw requestError(direct.response.status, direct.body, direct.raw, managed)
     if (!direct.body) throw new Error("Nano Banana returned an unreadable response.")
-    const image = await materializeImage(direct.body, ctx.abort)
-    await SafeFileIO.write(output, image.bytes, approved)
+    const approvedHosts = new Set<string>()
+    const image = await materializeImage(direct.body, ctx.abort, async (input) => {
+      if (approvedHosts.has(input.host)) return
+      await ctx.ask({
+        permission: "network",
+        patterns: [input.host],
+        always: [input.host],
+        metadata: { url: input.url, network: { host: input.host } },
+      })
+      approvedHosts.add(input.host)
+    })
+    await AuthoritySignal.exclusive(async () => {
+      const current = (await outputAccess?.revalidate()) ?? output
+      if (current !== output) throw new Error("Image output authority changed before the write")
+      await SafeFileIO.write(current, image.bytes, approved)
+    })
     await Bus.publish(File.Event.Edited, { file: output })
     await Bus.publish(FileWatcher.Event.Updated, { file: output, event: approved ? "change" : "add" })
 
+    const attachments = generatedImageAttachments({
+      bytes: image.bytes,
+      mime: image.mime,
+      filepath: output,
+      sessionID: ctx.sessionID,
+      messageID: ctx.messageID,
+    })
     return {
       title: path.relative(directory, output),
       output: `Generated ${path.basename(output)} with ${params.model} via ${managed ? "OpenScience wallet Credits" : "the connected OpenRouter key"}.`,
@@ -301,23 +444,14 @@ export const GenerateImageTool = Tool.define("generate_image", {
         size: image.bytes.byteLength,
         model: params.model,
         route: managed ? "wallet" : "byok",
+        attachment: attachments.length ? "inline" : "artifact_only",
         artifact: {
           kind: "image",
           title: path.basename(output),
           data: { path: output, mime: image.mime },
         },
       },
-      attachments: [
-        {
-          id: Identifier.ascending("part"),
-          sessionID: ctx.sessionID,
-          messageID: ctx.messageID,
-          type: "file" as const,
-          mime: image.mime,
-          filename: path.basename(output),
-          url: `data:${image.mime};base64,${image.bytes.toString("base64")}`,
-        },
-      ],
+      attachments,
     }
   },
 })

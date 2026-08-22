@@ -1,7 +1,194 @@
 import { describe, expect, test } from "bun:test"
-import { extractGeneratedImage, extractGeneratedImageURL } from "../../src/tool/generate-image"
+import path from "node:path"
+import { Instance } from "../../src/project/instance"
+import { Provider } from "../../src/provider/provider"
+import { SessionFilesystem } from "../../src/session/filesystem"
+import {
+  GenerateImageTool,
+  extractGeneratedImage,
+  extractGeneratedImageURL,
+  generatedImageAttachments,
+  readBoundedImageResponse,
+} from "../../src/tool/generate-image"
+import type { Tool } from "../../src/tool/tool"
+import { executionSession, tmpdir } from "../fixture/fixture"
 
 describe("generate_image response parsing", () => {
+  test("executes the native BYOK image route and writes its result into the session workspace", async () => {
+    const requests: Array<{ url: string; authorization: string | null; body: Record<string, unknown> }> = []
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    )
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requests.push({
+          url: new URL(request.url).pathname,
+          authorization: request.headers.get("authorization"),
+          body: (await request.json()) as Record<string, unknown>,
+        })
+        return Response.json({ data: [{ b64_json: image.toString("base64"), media_type: "image/png" }] })
+      },
+    })
+    try {
+      await using tmp = await tmpdir({
+        git: true,
+        config: {
+          provider: {
+            openrouter: {
+              options: {
+                apiKey: "sk-local-image-route",
+                baseURL: `http://127.0.0.1:${server.port}/v1`,
+              },
+            },
+          },
+        },
+      })
+      await Instance.provide({
+        directory: tmp.path,
+        init: async () => Provider.invalidate(),
+        fn: async () => {
+          const session = await executionSession()
+          const workspace = await SessionFilesystem.workspace(session.id)
+          const asks: Parameters<Tool.Context["ask"]>[0][] = []
+          const tool = await GenerateImageTool.init()
+          const result = await tool.execute(
+            {
+              prompt: "A precise monochrome benchmark schematic",
+              output_path: "figures/benchmark.png",
+              model: "google/gemini-3-pro-image",
+              aspect_ratio: "16:9",
+            },
+            {
+              sessionID: session.id,
+              messageID: "msg_generate_image",
+              callID: "call_generate_image",
+              agent: "research",
+              abort: new AbortController().signal,
+              messages: [],
+              metadata() {},
+              async ask(input) {
+                asks.push(input)
+              },
+            },
+          )
+
+          expect(requests).toHaveLength(1)
+          expect(requests[0]).toMatchObject({
+            url: "/v1/images",
+            authorization: "Bearer sk-local-image-route",
+            body: {
+              model: "google/gemini-3-pro-image",
+              prompt: "A precise monochrome benchmark schematic",
+              n: 1,
+              output_format: "png",
+              aspect_ratio: "16:9",
+            },
+          })
+          expect(asks.map((request) => request.permission)).toEqual(["generate_image", "edit"])
+          expect(await Bun.file(path.join(workspace, "figures", "benchmark.png")).arrayBuffer()).toEqual(
+            image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
+          )
+          expect(result).toMatchObject({
+            title: "figures/benchmark.png",
+            metadata: { route: "byok", mime: "image/png", size: image.byteLength, attachment: "inline" },
+          })
+          expect(result.attachments).toHaveLength(1)
+        },
+      })
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("rejects a managed wallet token pointed at a non-Atlas image host", async () => {
+    const requests = { value: 0 }
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requests.value++
+        return Response.json({ data: [] })
+      },
+    })
+    try {
+      await using tmp = await tmpdir({
+        git: true,
+        config: {
+          provider: {
+            openrouter: {
+              options: {
+                apiKey: "thk_managed-image-route",
+                baseURL: `http://127.0.0.1:${server.port}/v1`,
+              },
+            },
+          },
+        },
+      })
+      await Instance.provide({
+        directory: tmp.path,
+        init: async () => Provider.invalidate(),
+        fn: async () => {
+          const session = await executionSession()
+          const tool = await GenerateImageTool.init()
+          await expect(
+            tool.execute(
+              {
+                prompt: "A benchmark schematic",
+                output_path: "figure.png",
+                model: "google/gemini-3-pro-image",
+              },
+              {
+                sessionID: session.id,
+                messageID: "msg_managed_image",
+                callID: "call_managed_image",
+                agent: "research",
+                abort: new AbortController().signal,
+                messages: [],
+                metadata() {},
+                async ask() {},
+              },
+            ),
+          ).rejects.toThrow("refused to send the wallet credential outside its managed image proxy")
+          expect(requests.value).toBe(0)
+        },
+      })
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("rejects GIF output before constructing an unsupported OpenRouter request", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Provider.invalidate(),
+      fn: async () => {
+        const session = await executionSession()
+        const tool = await GenerateImageTool.init()
+        await expect(
+          tool.execute(
+            {
+              prompt: "A benchmark schematic",
+              output_path: "figure.gif",
+              model: "google/gemini-3-pro-image",
+            },
+            {
+              sessionID: session.id,
+              messageID: "msg_gif_image",
+              callID: "call_gif_image",
+              agent: "research",
+              abort: new AbortController().signal,
+              messages: [],
+              metadata() {},
+              async ask() {},
+            },
+          ),
+        ).rejects.toThrow("output_path must end in .png, .jpg, .jpeg, or .webp")
+      },
+    })
+  })
+
   test("extracts the dedicated OpenRouter Image API response", () => {
     const bytes = Buffer.from("dedicated-image-bytes")
     const image = extractGeneratedImage({
@@ -62,5 +249,82 @@ describe("generate_image response parsing", () => {
     expect(() =>
       extractGeneratedImage({ choices: [{ message: { content: [{ type: "text", text: "no image" }] } }] }),
     ).toThrow("without returning image bytes")
+  })
+
+  test("streams successful response bodies within an explicit byte ceiling", async () => {
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(Buffer.from("first"))
+          controller.enqueue(Buffer.from("second"))
+          controller.close()
+        },
+      }),
+    )
+
+    expect((await readBoundedImageResponse(response, 11)).toString()).toBe("firstsecond")
+  })
+
+  test("cancels a streamed response as soon as its real body exceeds the ceiling", async () => {
+    const cancelled = { value: false }
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(Buffer.from("1234"))
+          controller.enqueue(Buffer.from("5678"))
+        },
+        cancel() {
+          cancelled.value = true
+        },
+      }),
+      { headers: { "content-length": "4" } },
+    )
+
+    await expect(readBoundedImageResponse(response, 6)).rejects.toThrow("6-byte safety limit")
+    expect(cancelled.value).toBe(true)
+  })
+
+  test("rejects an oversized declared response before accumulating its body", async () => {
+    const cancelled = { value: false }
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(Buffer.from("small"))
+        },
+        cancel() {
+          cancelled.value = true
+        },
+      }),
+      { headers: { "content-length": "100" } },
+    )
+
+    await expect(readBoundedImageResponse(response, 10)).rejects.toThrow("10-byte safety limit")
+    expect(cancelled.value).toBe(true)
+  })
+
+  test("keeps large generated images artifact-only instead of embedding a huge data URL", () => {
+    const attachments = generatedImageAttachments({
+      bytes: Buffer.alloc(8 * 1024 * 1024 + 1),
+      mime: "image/png",
+      filepath: "/workspace/large.png",
+      sessionID: "ses_test",
+      messageID: "msg_test",
+    })
+
+    expect(attachments).toEqual([])
+  })
+
+  test("retains an inline attachment for a small generated image", () => {
+    const attachments = generatedImageAttachments({
+      bytes: Buffer.from("small image"),
+      mime: "image/png",
+      filepath: "/workspace/small.png",
+      sessionID: "ses_test",
+      messageID: "msg_test",
+    })
+
+    expect(attachments).toHaveLength(1)
+    expect(attachments[0]?.filename).toBe("small.png")
+    expect(attachments[0]?.url).toBe(`data:image/png;base64,${Buffer.from("small image").toString("base64")}`)
   })
 })

@@ -3,6 +3,8 @@ import { APICallError } from "ai"
 import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
 import { NamedError } from "@synsci/util/error"
+import { SessionProcessor } from "../../src/session/processor"
+import { Provider } from "../../src/provider/provider"
 
 function apiError(headers?: Record<string, string>): MessageV2.APIError {
   return new MessageV2.APIError({
@@ -131,6 +133,27 @@ describe("session.retry.retryable", () => {
     ["unavailable", { error: { code: "service_unavailable" } }, "Provider is overloaded"],
   ])("retries positive transient %s signals", (_label, body, expected) => {
     expect(SessionRetry.retryable(wrap(JSON.stringify(body)))).toBe(expected)
+  })
+})
+
+describe("SessionProcessor.providerFailureAction", () => {
+  test("drains the authoritative tool outcome instead of replaying a provider request", () => {
+    const error = apiError()
+    expect(SessionProcessor.providerFailureAction(error, error, false)).toEqual({ type: "retry", message: "boom" })
+    expect(SessionProcessor.providerFailureAction(error, error, true)).toEqual({ type: "drain", message: "boom" })
+  })
+
+  test("retries one side-effect-free idle request but drains a started tool", () => {
+    const error = new Provider.IdleTimeoutError("stream", 300_000)
+    const normalized = wrap(error.message)
+    expect(SessionProcessor.providerFailureAction(error, normalized, false)).toEqual({
+      type: "retry-idle",
+      message: error.message,
+    })
+    expect(SessionProcessor.providerFailureAction(error, normalized, true)).toEqual({
+      type: "drain",
+      message: error.message,
+    })
   })
 })
 

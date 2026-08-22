@@ -3,9 +3,11 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { Global } from "@/global"
 import { JsonStore } from "@/util/jsonstore"
+import { TaskAttempt } from "@/tool/task-attempt"
 import type { MessageV2 } from "@/session/message-v2"
 import { SessionTraceStore } from "@/session/trace-store"
 import { Context } from "@/util/context"
+import { TokenUsage } from "@synsci/util/token-usage"
 import z from "zod"
 
 export namespace SessionResearch {
@@ -28,15 +30,18 @@ export namespace SessionResearch {
     verifiedAt: z.number().int().nonnegative(),
   }
 
+  export const ArtifactReference = z.object({
+    ...Reference,
+    kind: z.literal("artifact"),
+    artifactID: z.string().trim().min(1),
+    versionID: z.string().trim().min(1),
+    path: z.string().trim().min(1),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  export type ArtifactReference = z.infer<typeof ArtifactReference>
+
   export const EvidenceReference = z.discriminatedUnion("kind", [
-    z.object({
-      ...Reference,
-      kind: z.literal("artifact"),
-      artifactID: z.string().trim().min(1),
-      versionID: z.string().trim().min(1),
-      path: z.string().trim().min(1),
-      sha256: z.string().regex(/^[a-f0-9]{64}$/),
-    }),
+    ArtifactReference,
     z.object({
       ...Reference,
       kind: z.literal("tool"),
@@ -47,6 +52,12 @@ export namespace SessionResearch {
     }),
   ])
   export type EvidenceReference = z.infer<typeof EvidenceReference>
+
+  export const Preregistration = z.object({
+    artifact: ArtifactReference,
+    frozenAt: z.number().int().positive(),
+  })
+  export type Preregistration = z.infer<typeof Preregistration>
 
   export const Metric = z.object({
     name: z.string().trim().min(1).max(120),
@@ -166,6 +177,20 @@ export namespace SessionResearch {
   })
   export type RuntimeUsage = z.infer<typeof RuntimeUsage>
 
+  const LegacyTokens = 5_000_000
+  export const RuntimeDefaults = {
+    modelCalls: 128,
+    toolCalls: 1_024,
+    // The 90% finalization boundary must not precede the model-call boundary
+    // for 128k-class long-context calls. 20M leaves room for 128 such calls
+    // while still bounding cumulative inference across the session tree.
+    tokens: 20_000_000,
+    wallClockMs: 24 * 60 * 60_000,
+    costUsd: 200,
+  } as const
+
+  const LimitOrigin = z.enum(["default", "explicit", "unknown"])
+
   export const Budget = z.object({
     reserveUsd: z.number().min(0).max(100).default(1),
     finalizationCalls: z.number().int().nonnegative().default(0),
@@ -174,24 +199,23 @@ export namespace SessionResearch {
     lastBalanceUsd: z.number().optional(),
     limits: z
       .object({
-        modelCalls: z.number().int().positive().max(10_000).default(128),
-        toolCalls: z.number().int().positive().max(100_000).default(1_024),
-        tokens: z.number().int().positive().max(1_000_000_000).default(5_000_000),
+        modelCalls: z.number().int().positive().max(10_000).default(RuntimeDefaults.modelCalls),
+        toolCalls: z.number().int().positive().max(100_000).default(RuntimeDefaults.toolCalls),
+        tokens: z.number().int().positive().max(1_000_000_000).default(RuntimeDefaults.tokens),
         wallClockMs: z
           .number()
           .int()
           .positive()
           .max(30 * 24 * 60 * 60_000)
-          .default(24 * 60 * 60_000),
-        costUsd: z.number().positive().max(100_000).default(200),
+          .default(RuntimeDefaults.wallClockMs),
+        costUsd: z.number().positive().max(100_000).default(RuntimeDefaults.costUsd),
       })
-      .default({
-        modelCalls: 128,
-        toolCalls: 1_024,
-        tokens: 5_000_000,
-        wallClockMs: 24 * 60 * 60_000,
-        costUsd: 200,
-      }),
+      .default(RuntimeDefaults),
+    limitOrigins: z
+      .object({
+        tokens: LimitOrigin,
+      })
+      .optional(),
     runtimeFinalizationCalls: z.number().int().nonnegative().default(0),
     runtimeModelCalls: z.number().int().nonnegative().default(0),
     runtimeFinalizing: z.boolean().default(false),
@@ -212,6 +236,7 @@ export namespace SessionResearch {
     stages: z.array(Stage),
     deliverables: z.array(Deliverable),
     checks: z.array(Check),
+    preregistration: Preregistration.optional(),
     failures: z.array(Failure),
     trials: z.array(Trial).default([]),
     budget: Budget,
@@ -385,6 +410,9 @@ export namespace SessionResearch {
         finalizing: false,
         exhausted: false,
         limits: input.limits ?? {},
+        limitOrigins: {
+          tokens: input.limits?.tokens === undefined ? "default" : "explicit",
+        },
         runtimeFinalizationCalls: 0,
         runtimeModelCalls: 0,
         runtimeFinalizing: false,
@@ -403,6 +431,67 @@ export namespace SessionResearch {
     return parsed.success ? parsed.data : undefined
   }
 
+  async function legacyTokenOrigin(sessionID: string, contract: Contract): Promise<z.infer<typeof LimitOrigin>> {
+    const known = contract.budget.limitOrigins?.tokens
+    if (known) return known
+    // Any non-default value in the old schema could only have come from an
+    // explicit max_tokens input. Keep it fail-closed.
+    if (contract.budget.limits.tokens !== LegacyTokens) return "explicit"
+
+    const { Session } = await import("@/session")
+    const messages = await Session.messages({ sessionID }).catch(() => [] as MessageV2.WithParts[])
+    const definitions = messages
+      .flatMap((message) => message.parts)
+      .filter(
+        (part): part is MessageV2.ToolPart & { state: MessageV2.ToolStateCompleted } =>
+          part.type === "tool" &&
+          part.tool === "research_contract" &&
+          part.state.status === "completed" &&
+          part.state.input.action === "define",
+      )
+    // A persisted explicit limit is authoritative even when it equals the old
+    // default. If history is missing, ambiguity also stays bounded.
+    if (definitions.some((part) => typeof part.state.input.max_tokens === "number")) return "explicit"
+    if (!definitions.length) return "unknown"
+    return "default"
+  }
+
+  async function migrateRuntimeDefaults(sessionID: string, options?: { resume?: boolean }) {
+    const stored = await read(sessionID)
+    if (!stored) return
+    const inferred = await legacyTokenOrigin(sessionID, stored)
+    const next =
+      inferred === "default" &&
+      stored.budget.limits.tokens === LegacyTokens &&
+      (!stored.budget.runtimeExhausted || options?.resume)
+        ? RuntimeDefaults.tokens
+        : stored.budget.limits.tokens
+    if (stored.budget.limitOrigins?.tokens === inferred && next === stored.budget.limits.tokens) return stored
+    await JsonStore.update(file(sessionID), (data) => {
+      const current = Contract.parse(data)
+      const origin =
+        current.budget.limitOrigins?.tokens ??
+        (current.budget.limits.tokens === stored.budget.limits.tokens ? inferred : "explicit")
+      const tokens =
+        origin === "default" &&
+        current.budget.limits.tokens === LegacyTokens &&
+        (!current.budget.runtimeExhausted || options?.resume)
+          ? RuntimeDefaults.tokens
+          : current.budget.limits.tokens
+      return {
+        ...current,
+        budget: {
+          ...current.budget,
+          limits: { ...current.budget.limits, tokens },
+          limitOrigins: { tokens: origin },
+          updatedAt: Date.now(),
+        },
+        updatedAt: Date.now(),
+      }
+    })
+    return read(sessionID)
+  }
+
   export async function define(
     sessionID: string,
     input: {
@@ -414,6 +503,7 @@ export namespace SessionResearch {
       limits?: Partial<Budget["limits"]>
     },
   ): Promise<Contract> {
+    await migrateRuntimeDefaults(sessionID)
     // A contract can be created late in a long session. Snapshot everything
     // that happened before this definition so the new bounded run is charged
     // only for work performed under its contract, not the entire chat history.
@@ -436,6 +526,7 @@ export namespace SessionResearch {
         ...next,
         stages,
         checks,
+        preregistration: current.data.preregistration,
         failures: current.data.failures,
         trials: current.data.trials,
         budget: {
@@ -450,10 +541,7 @@ export namespace SessionResearch {
               current.data.budget.limits.toolCalls,
               input.limits?.toolCalls ?? current.data.budget.limits.toolCalls,
             ),
-            tokens: Math.min(
-              current.data.budget.limits.tokens,
-              input.limits?.tokens ?? current.data.budget.limits.tokens,
-            ),
+            tokens: Math.min(current.data.budget.limits.tokens, input.limits?.tokens ?? Infinity),
             wallClockMs: Math.min(
               current.data.budget.limits.wallClockMs,
               input.limits?.wallClockMs ?? current.data.budget.limits.wallClockMs,
@@ -463,8 +551,43 @@ export namespace SessionResearch {
               input.limits?.costUsd ?? current.data.budget.limits.costUsd,
             ),
           },
+          limitOrigins: {
+            tokens:
+              input.limits?.tokens !== undefined && input.limits.tokens <= current.data.budget.limits.tokens
+                ? "explicit"
+                : (current.data.budget.limitOrigins?.tokens ?? "unknown"),
+          },
         },
         createdAt: current.data.createdAt,
+        updatedAt: Date.now(),
+      })
+    })
+    return (await read(sessionID))!
+  }
+
+  export async function preregister(sessionID: string, artifact: ArtifactReference): Promise<Contract> {
+    await JsonStore.update(file(sessionID), (data) => {
+      const current = Contract.parse(data)
+      if (current.template !== "empirical") {
+        throw new Error("Only an empirical research contract can be preregistered")
+      }
+      if (current.trials.length) {
+        throw new Error("The analysis plan cannot be preregistered after a material trial has been recorded")
+      }
+      if (current.preregistration) {
+        if (
+          current.preregistration.artifact.versionID === artifact.versionID &&
+          current.preregistration.artifact.sha256 === artifact.sha256
+        ) {
+          return current
+        }
+        throw new Error(
+          `The analysis plan is already frozen at ${current.preregistration.artifact.versionID}; preregistration is immutable`,
+        )
+      }
+      return Contract.parse({
+        ...current,
+        preregistration: { artifact, frozenAt: Date.now() },
         updatedAt: Date.now(),
       })
     })
@@ -889,7 +1012,15 @@ export namespace SessionResearch {
   }
 
   export type Evidence = {
-    artifacts: Array<{ artifactID?: string; versionID?: string; path?: string; sha256?: string }>
+    artifacts: Array<{
+      artifactID?: string
+      versionID?: string
+      path?: string
+      sha256?: string
+      provenanceID?: string
+      producedAt?: number
+      completedAt?: number
+    }>
     jobs: Array<{ status: string }>
     kernels: Array<{ status: string }>
     findings: Array<{ target?: string; verdict?: string; status?: string; severity?: string }>
@@ -922,17 +1053,28 @@ export namespace SessionResearch {
     const paths = evidence.artifacts.flatMap((item) => (item.path ? [item.path] : []))
     const missing = required.filter((item) => !paths.some((value) => match(item.path, value)))
     const stages = contract.stages.filter((stage) => stage.status === "completed").length
-    const checks = contract.checks.filter((check) => check.status === "passed" && check.evidenceRefs.length).length
-    const failed = contract.checks.filter((check) => check.status === "failed").length
     const open = evidence.findings.filter(
       (finding) =>
         finding.verdict === "refutes" &&
         finding.status !== "confirmed" &&
         (finding.severity === "blocking" || finding.severity === "major"),
     ).length
-    const requiredArtifacts = required.flatMap((item) =>
+    const matched = required.flatMap((item) =>
       evidence.artifacts.filter((artifact) => artifact.path && match(item.path, artifact.path)),
     )
+    // A Result path may be saved repeatedly while review findings are being
+    // corrected. Completion applies to the current immutable version, not every
+    // superseded version that remains in the audit trail.
+    const current = new Map<string, (typeof matched)[number]>()
+    for (const artifact of matched) {
+      const key = artifact.path ?? artifact.artifactID ?? artifact.versionID ?? "unknown"
+      const prior = current.get(key)
+      if (prior && (prior.completedAt ?? 0) > (artifact.completedAt ?? 0)) continue
+      current.set(key, artifact)
+    }
+    const requiredArtifacts = [...current.values()]
+    const unlinked =
+      contract.template === "empirical" ? requiredArtifacts.filter((artifact) => !artifact.provenanceID) : []
     const targets = [
       ...new Set(
         requiredArtifacts.map((artifact) =>
@@ -947,6 +1089,30 @@ export namespace SessionResearch {
     )
     const unreviewed = targets.filter((target) => !reviewedTargets.has(target))
     const reviewed = targets.length ? unreviewed.length === 0 : evidence.reviewed
+    const preregistration = contract.preregistration
+    const frozen = preregistration
+      ? evidence.artifacts.some(
+          (artifact) =>
+            artifact.artifactID === preregistration.artifact.artifactID &&
+            artifact.versionID === preregistration.artifact.versionID &&
+            artifact.sha256 === preregistration.artifact.sha256,
+        )
+      : false
+    const premature = preregistration
+      ? requiredArtifacts.filter(
+          (artifact) =>
+            artifact.versionID !== preregistration.artifact.versionID &&
+            artifact.producedAt !== undefined &&
+            artifact.producedAt <= preregistration.frozenAt,
+        )
+      : []
+    const preregistrationFailed = Boolean(preregistration && (!frozen || premature.length))
+    const preregistrationPassed = Boolean(preregistration && frozen && !premature.length)
+    const checks =
+      contract.checks.filter((check) => check.status === "passed" && check.evidenceRefs.length).length +
+      Number(preregistrationPassed)
+    const failed = contract.checks.filter((check) => check.status === "failed").length + Number(preregistrationFailed)
+    const checkTotal = contract.checks.length + Number(Boolean(preregistration))
     const running = evidence.jobs.filter((job) => job.status === "queued" || job.status === "running").length
     const jobFailures = evidence.jobs.filter(
       (job) => job.status === "failed" || job.status === "interrupted" || job.status === "cancelled",
@@ -961,7 +1127,7 @@ export namespace SessionResearch {
       runtimeFailures > 0 &&
       stages === contract.stages.length &&
       missing.length === 0 &&
-      checks === contract.checks.length &&
+      checks === checkTotal &&
       failed === 0 &&
       reviewed &&
       open === 0
@@ -977,22 +1143,28 @@ export namespace SessionResearch {
       {
         id: "deliverables",
         label: "Required Results",
-        status: missing.length ? "pending" : "passed",
-        complete: required.length - missing.length,
+        status: missing.length || unlinked.length ? "pending" : "passed",
+        complete: Math.max(0, required.length - missing.length - unlinked.length),
         total: required.length,
         detail: missing.length
           ? `${missing.length} required ${missing.length === 1 ? "Result" : "Results"} missing`
-          : "All required Results saved",
+          : unlinked.length
+            ? `${unlinked.length} current empirical ${unlinked.length === 1 ? "Result has" : "Results have"} no immutable producing-run lineage: ${unlinked.map((artifact) => artifact.path ?? artifact.versionID ?? "unknown").join(", ")}`
+            : "All required Results saved",
       },
       {
         id: "checks",
         label: "Verification checks",
-        status: failed ? "failed" : checks === contract.checks.length ? "passed" : "pending",
+        status: failed ? "failed" : checks === checkTotal ? "passed" : "pending",
         complete: checks,
-        total: contract.checks.length,
-        detail: failed
-          ? `${failed} verification ${failed === 1 ? "check failed" : "checks failed"}`
-          : `${checks}/${contract.checks.length} checks passed`,
+        total: checkTotal,
+        detail: preregistrationFailed
+          ? !frozen
+            ? `Preregistration failed immutable verification for ${preregistration?.artifact.versionID ?? "unknown"}`
+            : `${premature.length} empirical ${premature.length === 1 ? "Result was" : "Results were"} produced before the analysis plan was frozen: ${premature.map((artifact) => artifact.path ?? artifact.versionID ?? "unknown").join(", ")}`
+          : failed
+            ? `${failed} verification ${failed === 1 ? "check failed" : "checks failed"}`
+            : `${checks}/${checkTotal} checks passed`,
       },
       {
         id: "review",
@@ -1005,7 +1177,7 @@ export namespace SessionResearch {
           : reviewed
             ? "Independent review recorded a disposition for every required Result"
             : unreviewed.length
-              ? `${unreviewed.length} required ${unreviewed.length === 1 ? "Result has" : "Results have"} no structured review disposition`
+              ? `${unreviewed.length} current required ${unreviewed.length === 1 ? "Result version has" : "Result versions have"} no structured review disposition: ${unreviewed.join(", ")}`
               : "Independent review has not recorded a structured disposition",
       },
       {
@@ -1097,16 +1269,21 @@ export namespace SessionResearch {
     reason?: string
     boundary?: "hard" | "finalization"
     finalizationCall?: number
+    textOnly?: boolean
+  }
+
+  export function exhaustionMessage(input: Pick<RuntimeDecision, "boundary" | "reason">) {
+    const reason = input.reason ?? "configured limit reached"
+    const scope =
+      "Research-runtime usage is cumulative across model calls and delegated child sessions in this bounded run; it is separate from the model's context-window limit."
+    if ((input.boundary ?? "hard") === "hard") {
+      return `This bounded research run reached its hard runtime limit: ${reason}. ${scope} Existing Results and checkpoints are preserved. Reply \`continue\` or run \`/resume\` to start a fresh bounded run from the same state.`
+    }
+    return `This bounded research run reached its finalization boundary: ${reason}. Its two reserved finalization turns are complete. ${scope} Existing Results and checkpoints are preserved. Reply \`continue\` or run \`/resume\` to start a fresh bounded run from the same state.`
   }
 
   function messageTokens(message: MessageV2.Assistant) {
-    return (
-      message.tokens.input +
-      message.tokens.output +
-      message.tokens.reasoning +
-      message.tokens.cache.read +
-      message.tokens.cache.write
-    )
+    return TokenUsage.total(message.tokens)
   }
 
   function runtimeGate(error: MessageV2.Assistant["error"]) {
@@ -1133,25 +1310,30 @@ export namespace SessionResearch {
       const retries = trace.retries.filter((item) => included(item.createdAt))
       const harness = trace.harness.filter((item) => included(item.createdAt))
       const manifests = new Set(harness.map((item) => item.messageID))
-      const inference = (message: MessageV2.Assistant) => {
-        if (runtimeGate(message.error)) return false
-        if (message.providerID === "openscience" && message.modelID === "local") return false
+      const inference = (message: MessageV2.WithParts) => {
+        if (message.info.role !== "assistant") return false
+        if (TaskAttempt.syntheticWrapper(message)) return false
+        if (runtimeGate(message.info.error)) return false
+        if (message.info.providerID === "openscience" && message.info.modelID === "local") return false
         return (
-          manifests.has(message.id) || message.cost > 0 || messageTokens(message) > 0 || message.finish !== undefined
+          manifests.has(message.info.id) ||
+          message.info.cost > 0 ||
+          messageTokens(message.info) > 0 ||
+          message.info.finish !== undefined
         )
       }
       const completed = messages.filter((message) => {
         if (message.info.role !== "assistant") return false
         const terminal = message.info.time.completed !== undefined || message.info.error !== undefined
         if (!terminal || !included(message.info.time.completed ?? message.info.time.created)) return false
-        return inference(message.info)
+        return inference(message)
       }).length
       const local = messages.reduce<RuntimeUsage>(
         (total, message) => {
           const assistant = message.info.role === "assistant" ? message.info : undefined
           const counted =
             assistant &&
-            inference(assistant) &&
+            inference(message) &&
             (before === undefined ||
               ((assistant.time.completed !== undefined || assistant.error !== undefined) &&
                 included(assistant.time.completed ?? assistant.time.created)))
@@ -1245,6 +1427,7 @@ export namespace SessionResearch {
   export async function resume(sessionID: string) {
     const anchor = await runtimeContract(sessionID)
     if (!anchor) return { resumed: false as const, reason: "No research contract is active." }
+    await migrateRuntimeDefaults(anchor, { resume: true })
     const observed = await runtimeUsage(anchor)
     const result = { resumed: false, epoch: 0, sessionID: anchor, reason: "The current bounded run is still active." }
     await JsonStore.update(file(anchor), (data) => {
@@ -1286,6 +1469,7 @@ export namespace SessionResearch {
   export async function runtimePreflight(sessionID: string): Promise<RuntimeDecision> {
     const anchor = await runtimeContract(sessionID)
     if (!anchor) return { decision: "allow" as const }
+    await migrateRuntimeDefaults(anchor)
     const observed = await runtimeUsage(anchor)
     const contract = (await read(anchor))!
     // Contracts saved before runtime epochs were introduced are migrated from
@@ -1304,12 +1488,12 @@ export namespace SessionResearch {
       const used = Math.max(reserved, measured.modelCalls)
       const usage = { ...measured, modelCalls: used }
       const limits = current.budget.limits
-      const hard =
-        used >= limits.modelCalls ||
-        usage.toolCalls >= limits.toolCalls ||
-        usage.tokens >= limits.tokens ||
-        usage.wallClockMs >= limits.wallClockMs ||
-        usage.costUsd >= limits.costUsd
+      const modelHard = used >= limits.modelCalls
+      const toolHard = usage.toolCalls >= limits.toolCalls
+      const tokenHard = usage.tokens >= limits.tokens
+      const timeHard = usage.wallClockMs >= limits.wallClockMs
+      const costHard = usage.costUsd >= limits.costUsd
+      const hard = modelHard || toolHard || tokenHard || timeHard || costHard
       const reasons = [
         ...(used >= Math.max(1, limits.modelCalls - 2) ? [`model-call limit (${used}/${limits.modelCalls})`] : []),
         ...(usage.toolCalls >= limits.toolCalls * 0.9
@@ -1325,19 +1509,37 @@ export namespace SessionResearch {
       ]
       const reason = reasons.join(", ") || (legacy ? undefined : current.budget.runtimeReason)
       const finalizing = reasons.length > 0 || (!legacy && current.budget.runtimeFinalizing)
-      const decision =
-        hard || (finalizing && current.budget.runtimeFinalizationCalls >= 2)
+      const prior = current.budget.lastUsage
+      // One model/tool step can legitimately jump from below the 90% reserve
+      // straight past a token, tool, or elapsed-time ceiling. Claim one
+      // text-only emergency response atomically so the user is not stranded
+      // without a result. Cost, model-call, wallet, and provider denials never
+      // qualify: none of them may authorize another paid provider request.
+      const emergency =
+        hard &&
+        !modelHard &&
+        !costHard &&
+        current.budget.runtimeFinalizationCalls === 0 &&
+        prior !== undefined &&
+        (toolHard || tokenHard || timeHard) &&
+        (!toolHard || prior.toolCalls < limits.toolCalls * 0.9) &&
+        (!tokenHard || prior.tokens < limits.tokens * 0.9) &&
+        (!timeHard || prior.wallClockMs < limits.wallClockMs * 0.9)
+      const decision = emergency
+        ? ("finalize" as const)
+        : hard || (finalizing && current.budget.runtimeFinalizationCalls >= 2)
           ? ("block" as const)
           : finalizing
             ? ("finalize" as const)
             : ("allow" as const)
-      const boundary = hard ? ("hard" as const) : decision === "block" ? ("finalization" as const) : undefined
+      const boundary = decision === "block" ? (hard ? ("hard" as const) : ("finalization" as const)) : undefined
       const calls = used + Number(decision !== "block")
       result.decision = decision
       result.usage = { ...usage, modelCalls: calls }
       result.reason = reason
       result.boundary = boundary
       result.finalizationCall = decision === "finalize" ? current.budget.runtimeFinalizationCalls + 1 : undefined
+      result.textOnly = emergency || undefined
       return {
         ...current,
         budget: {
@@ -1404,7 +1606,13 @@ export namespace SessionResearch {
       `Objective: ${contract.objective}`,
       `Domain: ${contract.domain}`,
       `Required Results: ${contract.deliverables.map((item) => item.path).join(", ") || "none"}`,
-      `Runtime limits: ${contract.budget.limits.modelCalls} model calls; ${contract.budget.limits.toolCalls} tool calls; ${contract.budget.limits.tokens} tokens; ${Math.round(contract.budget.limits.wallClockMs / 60_000)} minutes; $${contract.budget.limits.costUsd.toFixed(2)}`,
+      `Preregistration: ${contract.preregistration ? `frozen immutable version ${contract.preregistration.artifact.versionID} (${contract.preregistration.artifact.sha256}) at ${new Date(contract.preregistration.frozenAt).toISOString()}` : "none; this work is exploratory and must not be described as preregistered. To freeze an empirical plan before material trials, save it as a Result and call research_contract preregister with that artifact reference."}`,
+      ...(contract.template === "empirical" && contract.deliverables.some((item) => item.required)
+        ? [
+            "Result lineage: every required empirical Result must be saved with artifact provenance_id bound to its actual producing run; an unlinked Result cannot pass completion.",
+          ]
+        : []),
+      `Cumulative runtime limits (all model calls and delegated child sessions; separate from the model context window): ${contract.budget.limits.modelCalls} model calls; ${contract.budget.limits.toolCalls} tool calls; ${contract.budget.limits.tokens} tokens; ${Math.round(contract.budget.limits.wallClockMs / 60_000)} minutes; $${contract.budget.limits.costUsd.toFixed(2)}`,
       "Stages:",
       stages,
       "Checks:",

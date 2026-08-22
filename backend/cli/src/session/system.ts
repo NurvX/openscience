@@ -113,10 +113,12 @@ export namespace SystemPrompt {
           ),
         ]
       : []
-    const names = new Set(skills.map((skill) => skill.name))
-    const invoked = [...(message ?? "").matchAll(/(?:^|[\s([{])\/([a-z0-9][a-z0-9_-]*)(?=\s|$)/gi)]
+    const names = new Map(skills.map((skill) => [skill.name.toLowerCase(), skill.name]))
+    const invoked = [...(message ?? "").matchAll(/(?:^|[\s([{'\"])\/([a-z0-9][a-z0-9_-]*)(?=$|[^a-z0-9_/-])/gi)]
       .map((match) => match[1].toLowerCase())
-      .filter((name, index, all) => names.has(name) && all.indexOf(name) === index)
+      .map((name) => names.get(name))
+      .filter((name): name is string => !!name)
+      .filter((name, index, all) => all.indexOf(name) === index)
     const route = [
       {
         when: "Venue-specific paper formatting, submission checks, or page limits",
@@ -139,7 +141,10 @@ export namespace SystemPrompt {
         skills: ["generate-image"],
       },
     ]
-      .map((item) => ({ ...item, skills: item.skills.filter((skill) => names.has(skill)) }))
+      .map((item) => ({
+        ...item,
+        skills: item.skills.map((skill) => names.get(skill)).filter((skill): skill is string => !!skill),
+      }))
       .filter((item) => item.skills.length > 0)
     const routing = route.length
       ? [
@@ -221,6 +226,7 @@ Keep only one item in_progress at a time.
         `  Platform: ${process.platform}`,
         `  Today's date: ${new Date().toDateString()}`,
         `</env>`,
+        `An OpenScience project is a research context that may aggregate multiple connected folders and individual files. The paths above are routing information, not a claim that any one directory is "the user's project folder." Do not expose scratch, managed-project, or connected-folder paths in a generic greeting. Mention a path only when the user asks about location or when it is needed to complete their request.`,
         `Work directly in a connected project folder when the user refers to its files. Do not ask the user to copy or clone an already-connected folder into the session scratch directory. Use the scratch directory only for temporary work or outputs that do not belong in a connected folder.`,
         `<files>`,
         `  ${

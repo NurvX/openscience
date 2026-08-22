@@ -10,6 +10,9 @@ import { SessionResearch } from "../../src/session/research"
 import { Provenance } from "../../src/science/provenance/store"
 import { Review } from "../../src/science/provenance/review"
 import { tmpdir } from "../fixture/fixture"
+import { TokenUsage } from "@synsci/util/token-usage"
+import { TaskAttempt } from "../../src/tool/task-attempt"
+import { ArtifactStore } from "../../src/artifact/store"
 
 test("builds one local observable harness trace without reasoning or copied outputs", async () => {
   await using tmp = await tmpdir({ git: true })
@@ -140,7 +143,9 @@ test("builds one local observable harness trace without reasoning or copied outp
             input: { action: "save_file", path: "result.csv" },
             output: "saved",
             title: "Registered artifact",
-            metadata: { savedArtifact: { id: "artifact_1", versionID: "version_1" } },
+            metadata: {
+              savedArtifact: { id: "artifact_1", versionID: "version_1", sha256: "e".repeat(64) },
+            },
             time: { start: started + 290, end: started + 320 },
           },
         },
@@ -277,6 +282,25 @@ test("builds one local observable harness trace without reasoning or copied outp
         template: "minimal",
         deliverables: [{ path: "result.csv", label: "Result table", required: true }],
       })
+      const scope = { projectID: Instance.project.id, directory: Instance.directory }
+      const run = await Provenance.recordOwned(scope, {
+        id: "run_artifact_trace",
+        kind: "run",
+        label: "Produce trace result",
+        tool: "python",
+        sessionID: session.id,
+        meta: { sessionID: session.id, projectID: Instance.project.id },
+      } as Parameters<typeof Provenance.record>[0])
+      const target = ArtifactStore.reviewTargetID("version_1", "e".repeat(64))
+      await Provenance.recordOwned(scope, {
+        id: target,
+        kind: "artifact",
+        label: "Trace result",
+        artifactType: "dataset",
+        contentHash: "e".repeat(64),
+        meta: { sessionID: session.id, projectID: Instance.project.id },
+      } as Parameters<typeof Provenance.record>[0])
+      await Provenance.linkOwned(scope, { from: run.id, to: target, relation: "produced" })
 
       const trace = await SessionTrace.build(session.id)
       expect(trace.summary).toMatchObject({
@@ -297,6 +321,13 @@ test("builds one local observable harness trace without reasoning or copied outp
         retryCount: 1,
       })
       expect(trace.summary.toolParallelism).toBeCloseTo(362 / 312)
+      expect(trace.summary.tokens).toEqual({
+        input: 100,
+        output: 50,
+        reasoning: 20,
+        cache: { read: 10, write: 2 },
+      })
+      expect(TokenUsage.total(trace.summary.tokens)).toBe(162)
       expect(trace.inference[0]).toMatchObject({
         provider: "openai-codex",
         model: "gpt-5",
@@ -328,6 +359,7 @@ test("builds one local observable harness trace without reasoning or copied outp
         artifactID: "artifact_1",
         versionID: "version_1",
         path: "result.csv",
+        provenanceID: run.id,
       })
       expect(trace.reviewerFindings[0]).toMatchObject({
         claim: "accuracy is 99%",
@@ -362,6 +394,88 @@ test("builds one local observable harness trace without reasoning or copied outp
       await Session.remove(session.id)
       expect(await SessionTraceStore.read(session.id)).toEqual({ approvals: {}, retries: [], harness: [] })
       expect(await SessionResearch.read(session.id)).toBeUndefined()
+    },
+  })
+})
+
+test("synthetic Task wrappers are not model calls in traces or research usage", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const parent = await Session.create({ title: "Synthetic Task wrapper" })
+      const child = await Session.create({ parentID: parent.id, title: "Real child inference" })
+      const started = Date.now()
+      const user: MessageV2.User = {
+        id: "msg_task_wrapper_user",
+        sessionID: parent.id,
+        role: "user",
+        effort: "normal",
+        time: { created: started },
+        agent: "research",
+        model: { providerID: "test-provider", modelID: "test-model" },
+      }
+      const wrapper: MessageV2.Assistant = {
+        id: "msg_task_wrapper_assistant",
+        sessionID: parent.id,
+        role: "assistant",
+        time: { created: started + 1, completed: started + 2 },
+        parentID: user.id,
+        modelID: "test-model",
+        providerID: "test-provider",
+        mode: "execute",
+        agent: "execute",
+        path: { cwd: tmp.path, root: tmp.path },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        finish: "tool-calls",
+      }
+      const childUser: MessageV2.User = {
+        ...user,
+        id: "msg_task_child_user",
+        sessionID: child.id,
+        time: { created: started + 3 },
+      }
+      const inference: MessageV2.Assistant = {
+        ...wrapper,
+        id: "msg_task_child_assistant",
+        sessionID: child.id,
+        parentID: childUser.id,
+        time: { created: started + 4, completed: started + 5 },
+        cost: 0.01,
+        tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+        finish: "stop",
+      }
+      await Session.updateMessage(user)
+      await Session.updateMessage(wrapper)
+      await Session.updatePart({
+        id: "prt_task_wrapper",
+        sessionID: parent.id,
+        messageID: wrapper.id,
+        type: "tool",
+        tool: "task",
+        callID: "call_task_wrapper",
+        metadata: TaskAttempt.wrapper({ messageID: user.id, partID: "prt_source_subtask" }),
+        state: {
+          status: "completed",
+          input: { description: "Synthetic wrapper", subagent_type: "execute" },
+          output: "child handoff",
+          title: "Synthetic wrapper",
+          metadata: { sessionId: child.id },
+          time: { start: started + 1, end: started + 2 },
+        },
+      })
+      await Session.updateMessage(childUser)
+      await Session.updateMessage(inference)
+
+      const usage = await SessionResearch.runtimeUsage(parent.id)
+      const trace = await SessionTrace.build(parent.id)
+      expect(usage).toMatchObject({ modelCalls: 1, tokens: 15, costUsd: 0.01 })
+      expect(trace.summary.inferenceCalls).toBe(0)
+      expect(trace.inference).toEqual([])
+      expect(trace.tools.map((tool) => tool.name)).toEqual(["task"])
+
+      await Session.remove(parent.id)
     },
   })
 })
