@@ -4,8 +4,8 @@ import z from "zod"
 import { OpenScience } from "../../../openscience"
 import { lazy } from "../../../util/lazy"
 
-// Settings → Billing. Read-only view of Credits: balance, plan
-// billing mode, lifetime spend, and the recent credit ledger. Adding funds is a
+// Settings → Billing. Read-only view of pay-as-you-go Credits: balance,
+// routing mode, lifetime spend, and the recent credit ledger. Adding funds is a
 // hand-off to app.syntheticsciences.ai/billing -
 // no payment UI in-app. Degrades to a signed-out shape when there's no Atlas
 // session, and to empty sections when an Atlas endpoint is unavailable.
@@ -14,7 +14,7 @@ export const WalletState = z.object({
   balanceUsd: z.number().nullable().describe("Wallet balance in USD; null when signed out or unavailable"),
   billingMode: z.enum(["managed", "byok"]).nullable(),
   managedSupported: z.boolean(),
-  lifetimeSpentUsd: z.number(),
+  lifetimeSpentUsd: z.number().nullable(),
   transactions: z.array(
     z.object({
       id: z.string(),
@@ -32,7 +32,7 @@ const SIGNED_OUT: WalletState = {
   balanceUsd: null,
   billingMode: null,
   managedSupported: false,
-  lifetimeSpentUsd: 0,
+  lifetimeSpentUsd: null,
   transactions: [],
 }
 
@@ -46,10 +46,16 @@ async function readWallet(): Promise<WalletState> {
   ])
   return {
     signedIn: true,
-    balanceUsd: credits?.balanceUsd ?? mode?.balance_usd ?? null,
+    // Financial display comes only from the authoritative Wallet response.
+    // Compatibility mode metadata may synthesize zero when that read failed;
+    // never turn an unavailable balance into "$0.00".
+    balanceUsd: credits?.balanceUsd ?? null,
     billingMode: mode?.mode ?? null,
     managedSupported: mode?.managed_supported ?? false,
-    lifetimeSpentUsd: (credits?.lifetimeSpentCents ?? 0) / 100,
+    lifetimeSpentUsd:
+      credits?.lifetimeSpentCents === null || credits?.lifetimeSpentCents === undefined
+        ? null
+        : credits.lifetimeSpentCents / 100,
     transactions: (txns ?? []).map((t) => ({
       id: t.id,
       amountCents: t.amountCents,
@@ -64,7 +70,7 @@ export const WalletSettingsRoutes = lazy(() =>
   new Hono().get(
     "/",
     describeRoute({
-      summary: "Get credit balance, plan mode, and recent transactions",
+      summary: "Get wallet balance, routing mode, and recent transactions",
       operationId: "settings.wallet.get",
       responses: {
         200: {

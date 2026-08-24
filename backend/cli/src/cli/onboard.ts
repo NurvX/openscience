@@ -16,35 +16,21 @@ import { AuthLoginCommand } from "./cmd/auth"
 import { runLocalModelSetup } from "./cmd/local"
 import { Installation } from "../installation"
 import { webVersion } from "../web/assets"
-import { BYOK_LLM_ENV_KEYS } from "../openscience/synced-env-policy"
 import { Instance } from "../project/instance"
+import { BILLING_URL } from "../endpoints"
+import { BYOK_LLM_ENV_KEYS } from "../openscience/synced-env-policy"
 
-const PLAN_URL = process.env.SYNSC_AUTH_URL?.replace(/\/+$/, "") || "https://app.syntheticsciences.ai/cli"
 const MARKER = path.join(Global.Path.state, "onboarded")
-
-function hasProviderEnv(): boolean {
-  return BYOK_LLM_ENV_KEYS.some((key) => !!process.env[key])
-}
 
 async function currentConfig() {
   return Instance.provide({ directory: process.cwd(), fn: () => Config.get() })
 }
 
-/** True once the user has any usable way to run a model: a managed Gateway
- *  session, a saved BYOK key, a provider env var, or an explicit default
- *  model in config. Used to decide whether to auto-launch onboarding and
- *  whether to warn about a missing model. */
+/** Authentication is the only first-run completion condition. Provider keys
+ * and local models remain usable routes, but they do not replace the durable
+ * Synthetic Sciences account that owns settings and trace consent. */
 export async function isConfigured(): Promise<boolean> {
-  if (await OpenScience.isAuthenticated()) return true
-  if (hasProviderEnv()) return true
-  try {
-    if (Object.keys(await Auth.all()).length > 0) return true
-  } catch {}
-  try {
-    const config = await currentConfig()
-    if (config.model) return true
-  } catch {}
-  return false
+  return OpenScience.isAuthenticated()
 }
 
 async function isOnboarded(): Promise<boolean> {
@@ -68,49 +54,51 @@ export async function needsOnboarding(): Promise<boolean> {
   if (process.env.OPENSCIENCE_NO_ONBOARD === "1") return false
   if (process.env.CI) return false
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false
-  if (await isOnboarded()) return false
   if (await isConfigured()) return false
+  // Legacy releases could write this marker after choosing "Not now" while
+  // still signed out. It must not bypass the account-first flow.
+  if (await isOnboarded()) return true
   return true
 }
 
 async function onboardManaged(): Promise<void> {
   const existing = await OpenScience.getSession()
   if (existing) {
-    prompts.log.success("Already connected to your Gateway account.")
+    prompts.log.success("Already connected to your Synthetic Sciences account.")
     await OpenScience.syncServices().catch(() => {})
   } else {
     const ok = await runAtlasLogin({})
     if (!ok) {
-      prompts.log.warn("Skipped Gateway sign-in. Run `openscience login` anytime to connect.")
+      prompts.log.warn("Sign-in did not finish. Run `openscience login` anytime to connect.")
       return
     }
   }
 
-  const mode = await OpenScience.getBillingMode().catch(() => null)
-  const balance = mode?.balance_usd ?? (await OpenScience.getBalance().catch(() => null)) ?? 0
-  prompts.log.info(`Credits: $${balance.toFixed(2)}`)
+  const credits = await OpenScience.getCredits().catch(() => null)
+  const balance = credits?.balanceUsd ?? null
+  prompts.log.info(balance === null ? "Wallet: unavailable" : `Wallet: $${balance.toFixed(2)}`)
 
-  if (balance <= 0) {
+  if (balance !== null && balance <= 0) {
     const add = await prompts.confirm({
-      message: "Add funds now so you can use managed models?",
+      message: "Add wallet credits now for pay-as-you-go models and enhanced search?",
       initialValue: true,
     })
     if (!prompts.isCancel(add) && add) {
-      prompts.log.info(`Opening ${PLAN_URL} …`)
-      prompts.log.message("Top up in the Plan tab, then come back here — your balance updates automatically.")
-      openUrl(PLAN_URL)
+      prompts.log.info(`Opening ${BILLING_URL} …`)
+      prompts.log.message("Top up in Billing, then come back here — your balance updates automatically.")
+      openUrl(BILLING_URL)
     } else {
-      prompts.log.info(`No problem — top up anytime with \`openscience wallet\` or at ${PLAN_URL}.`)
+      prompts.log.info(`No problem — top up anytime with \`openscience wallet\` or at ${BILLING_URL}.`)
     }
   }
   prompts.log.info(
-    "Managed models are metered from your wallet. Switch to your own keys anytime with `openscience keys add`.",
+    "Usage is pay as you go from your wallet. Switch to your own keys anytime with `openscience keys add`.",
   )
 }
 
 async function onboardByok(): Promise<void> {
   prompts.log.info(
-    "Bring your own key or sign in with a subscription (ChatGPT/Codex, Claude Max) — pick next. " +
+    "Bring your own key or sign in with ChatGPT/Codex or Claude Max — pick next. " +
       "Saved model credentials use an owner-only local auth file, not the system keychain.",
   )
   // Reuse the proven provider picker + key/OAuth flow. It also handles
@@ -130,60 +118,42 @@ function onboardSkip(): void {
   prompts.log.info("No problem — you can explore projects and files without a model.")
   prompts.log.message(
     "Connect a model before using chat:\n" +
-      "  openscience login       connect Gateway managed models (prepaid wallet)\n" +
-      "  openscience keys add    add your own provider key (always free)\n" +
+      "  openscience login       connect credit-backed models (pay as you go)\n" +
+      "  openscience keys add    add a provider-billed account or key\n" +
       "  openscience local add   use a local model (Ollama / LM Studio / OpenAI-compatible)",
   )
 }
 
-async function offerAtlasCli(): Promise<void> {
-  if (Bun.which("atlas")) return
-  const yes = await prompts.confirm({
-    message: "Install the Gateway CLI companion? (research graph — maps, runs, library)",
-    initialValue: false,
-  })
-  if (prompts.isCancel(yes) || !yes) return
-
-  if (!Bun.which("npm")) {
-    prompts.log.info("Install it later with: npm i -g @synsci/atlas@latest")
-    return
-  }
-  const spin = prompts.spinner()
-  spin.start("Installing @synsci/atlas…")
-  try {
-    const proc = Bun.spawn(["npm", "install", "-g", "@synsci/atlas@latest"], { stdout: "ignore", stderr: "pipe" })
-    const code = await proc.exited
-    if (code === 0) {
-      spin.stop("Gateway CLI installed — it shares your session, so it's already signed in.")
-    } else {
-      spin.stop("Couldn't install automatically. Run: npm i -g @synsci/atlas@latest", 1)
-    }
-  } catch {
-    spin.stop("Couldn't install automatically. Run: npm i -g @synsci/atlas@latest", 1)
-  }
-}
-
-/** The first-run setup wizard. Managed-first, but bring-your-own-key and
- *  "not now" stay one keystroke away — OpenScience never requires an account. */
+/** The first-run setup wizard. Account connection comes first and persists as
+ * a device credential; model billing and credential choices remain separate. */
 export async function runOnboarding(opts?: { force?: boolean }): Promise<void> {
   prompts.intro(opts?.force ? "OpenScience setup" : "Welcome to OpenScience")
+
+  if (!(await OpenScience.isAuthenticated())) {
+    prompts.log.info("Connect a free Synthetic Sciences account once on this device.")
+    const ok = await runAtlasLogin({})
+    if (!ok) {
+      prompts.cancel("Sign-in is required. Run `openscience login` when you're ready.")
+      return
+    }
+  }
 
   const choice = await prompts.select({
     message: "How do you want to power the models?",
     initialValue: "managed",
     options: [
-      { value: "managed", label: "Gateway managed", hint: "★ recommended · prepaid wallet · zero setup" },
-      { value: "byok", label: "Your own keys", hint: "Anthropic · OpenAI · Google · 100+ providers · always free" },
+      { value: "managed", label: "Credits", hint: "★ recommended · pay as you go · zero setup" },
+      { value: "byok", label: "Provider accounts", hint: "Anthropic · OpenAI · Google · billed by provider" },
       {
         value: "local",
         label: "Local models",
         hint: "Ollama · LM Studio · OpenAI-compatible endpoint · free, offline",
       },
-      { value: "skip", label: "Not now", hint: "explore without chat, set up anytime" },
+      { value: "skip", label: "Set up models later", hint: "your account is already connected" },
     ],
   })
   if (prompts.isCancel(choice)) {
-    prompts.cancel("Setup cancelled — run `openscience init` whenever you're ready.")
+    prompts.cancel("Your account is connected. Run `openscience init` to finish model setup.")
     await markOnboarded()
     return
   }
@@ -193,14 +163,13 @@ export async function runOnboarding(opts?: { force?: boolean }): Promise<void> {
   else if (choice === "local") await onboardLocal()
   else onboardSkip()
 
-  await offerAtlasCli()
   await markOnboarded()
   prompts.outro("You're all set.")
 }
 
 export const InitCommand = cmd({
   command: ["init", "onboard"],
-  describe: "set up OpenScience — models, keys, and Gateway",
+  describe: "set up OpenScience — models, accounts, and credits",
   async handler() {
     UI.empty()
     UI.println(UI.logo("  "))
@@ -390,14 +359,18 @@ export const DoctorCommand = cmd({
 
     const session = await OpenScience.getSession()
     if (session) {
-      prompts.log.success("Gateway account: connected")
-      const mode = await OpenScience.getBillingMode().catch(() => null)
+      prompts.log.success("Synthetic Sciences account: connected")
+      const [mode, credits] = await Promise.all([
+        OpenScience.getBillingMode().catch(() => null),
+        OpenScience.getCredits().catch(() => null),
+      ])
       if (mode) {
-        const suffix = mode.managed_supported ? "" : " (managed not provisioned)"
-        prompts.log.info(`Wallet: $${mode.balance_usd.toFixed(2)}${suffix}`)
+        const suffix = mode.managed_supported ? "" : " (credits unavailable)"
+        const amount = credits ? `$${credits.balanceUsd.toFixed(2)}` : "unavailable"
+        prompts.log.info(`Wallet: ${amount}${suffix}`)
       }
     } else {
-      prompts.log.info("Gateway account: not connected  (run `openscience login`)")
+      prompts.log.info("Synthetic Sciences account: not connected  (run `openscience login`)")
     }
 
     try {
@@ -434,7 +407,16 @@ export const DoctorCommand = cmd({
       prompts.log[sandboxLine.level](sandboxLine.msg)
     } catch {}
 
-    if (!(await isConfigured())) {
+    const accountConnected = await isConfigured()
+    const modelSourceAvailable = await Instance.provide({
+      directory: process.cwd(),
+      fn: async () => Object.keys(await Provider.list()).length > 0,
+    }).catch(() => false)
+    if (!accountConnected) {
+      prompts.log.warn(
+        "A Synthetic Sciences account is required before chat. Run `openscience login` once on this device.",
+      )
+    } else if (!modelSourceAvailable) {
       prompts.log.warn("No model source configured — chat is unavailable. Run `openscience init` to connect one.")
     }
     prompts.outro("Done")

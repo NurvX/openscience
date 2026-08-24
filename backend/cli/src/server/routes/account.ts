@@ -40,7 +40,8 @@ export const AccountRoutes = lazy(() =>
       "/session",
       describeRoute({
         summary: "Get local session status",
-        description: "Check whether this OpenScience server has a local Gateway session without contacting Gateway.",
+        description:
+          "Check whether this OpenScience server has a local Synthetic Sciences session without a network request.",
         operationId: "account.session",
         responses: {
           200: {
@@ -70,7 +71,7 @@ export const AccountRoutes = lazy(() =>
                   z.object({
                     session: z.boolean(),
                     user: z.unknown().optional(),
-                    balance_usd: z.number(),
+                    balance_usd: z.number().nullable(),
                     billing_mode: BillingMode.nullable(),
                   }),
                 ),
@@ -81,14 +82,13 @@ export const AccountRoutes = lazy(() =>
       }),
       async (c) => {
         const session = await OpenScience.getSession()
-        const [user, balance, billing] = session
-          ? await Promise.all([OpenScience.getProfile(), OpenScience.getBalance(), OpenScience.getBillingMode()])
+        const [user, credits, billing] = session
+          ? await Promise.all([OpenScience.getProfile(), OpenScience.getCredits(), OpenScience.getBillingMode()])
           : [null, null, null]
         return c.json({
           session: !!session,
           user: user ?? (session?.user_id ? { user_id: session.user_id } : undefined),
-          // -1 is the wire encoding for "unknown" (schema: number)
-          balance_usd: balance ?? -1,
+          balance_usd: credits?.balanceUsd ?? null,
           billing_mode: billing,
         })
       },
@@ -101,11 +101,11 @@ export const AccountRoutes = lazy(() =>
         responses: {
           200: {
             description: "Balance",
-            content: { "application/json": { schema: resolver(z.object({ balance_usd: z.number() })) } },
+            content: { "application/json": { schema: resolver(z.object({ balance_usd: z.number().nullable() })) } },
           },
         },
       }),
-      async (c) => c.json({ balance_usd: (await OpenScience.getBalance()) ?? -1 }),
+      async (c) => c.json({ balance_usd: (await OpenScience.getCredits())?.balanceUsd ?? null }),
     )
     .get(
       "/devices",
@@ -168,7 +168,7 @@ export const AccountRoutes = lazy(() =>
     .post(
       "/login-key",
       describeRoute({
-        summary: "Sign in with a Gateway API key",
+        summary: "Sign in with a Synthetic Sciences API key",
         operationId: "account.loginKey",
         responses: {
           200: {

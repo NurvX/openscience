@@ -26,7 +26,6 @@ import {
 import { useDialog } from "@synsci/ui/context/dialog"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
-import { uiStore } from "@/atlas/store/ui"
 import { FONT_MONO, FONT_SANS, sectionTitle } from "@/styles/tokens"
 import { IconRefresh, IconPlus, IconNetwork, IconArrowRight } from "@/atlas/shared/Icon"
 import { createAtlasAPI, type AtlasNode } from "@/atlas/api/atlas"
@@ -278,10 +277,9 @@ export function AtlasCanvas(): JSX.Element {
       if (document.visibilityState !== "visible") return
       runWithOwner(owner, () => {
         if (graphId() === undefined) {
-          // Unlinked (Initialize hero showing): an agent-driven `openscience project init`
-          // (e.g. from the initialize-atlas-graph skill) may have just created this
-          // folder's graph. Re-arm the one-shot auto-select and re-resolve so the new
-          // graph is picked up and selected automatically.
+          // Unlinked (Initialize hero showing): another local client may have just
+          // created this folder's graph. Re-arm the one-shot auto-select and re-resolve
+          // so the new graph is picked up and selected automatically.
           settled = false
           void refetchFolderProject()
           void refetchGraphs()
@@ -572,7 +570,7 @@ export function AtlasCanvas(): JSX.Element {
       // throws before this point.
       if (!project_id)
         throw new Error(
-          result.message ?? `atlas project initialization failed${result.error ? `: ${result.error}` : ""}`,
+          result.message ?? `research graph initialization failed${result.error ? `: ${result.error}` : ""}`,
         )
       settled = true
       await refetchAll()
@@ -745,7 +743,7 @@ export function AtlasCanvas(): JSX.Element {
             <IconNetwork size={13} strokeWidth={1.6} />
           </span>
           <span
-            title={selectedGraph()?.title || selectedGraph()?.node_id || "Gateway graph (account-scoped)"}
+            title={selectedGraph()?.title || selectedGraph()?.node_id || "Synthetic Sciences graph (account-scoped)"}
             style={{
               "font-family": FONT_SANS,
               "font-size": "13px",
@@ -835,11 +833,6 @@ export function AtlasCanvas(): JSX.Element {
                           // the agent or the `atlas` binary. initGraph() refetches and
                           // selects the new root, and toasts a typed error on failure.
                           onInit={() => void initGraph()}
-                          // Secondary: route through the agent — drop the
-                          // initialize-atlas-graph skill invocation in the composer
-                          // WITHOUT sending, so the user can review/run it (useful when
-                          // the direct call reports a plan/auth issue to resolve in chat).
-                          onChat={() => uiStore.setPrefill("/initialize-atlas-graph")}
                           busy={initializing()}
                         />
                       }
@@ -856,7 +849,7 @@ export function AtlasCanvas(): JSX.Element {
                       "letter-spacing": "0.04em",
                     }}
                   >
-                    loading atlas nodes…
+                    loading research nodes…
                   </span>
                 </Show>
               }
@@ -872,7 +865,7 @@ export function AtlasCanvas(): JSX.Element {
             width="100%"
             height="100%"
             role="group"
-            aria-label="Gateway research graph. Use Tab to move between nodes and Enter to open one."
+            aria-label="Synthetic Sciences research graph. Use Tab to move between nodes and Enter to open one."
             style={{ display: "block", cursor: panStart ? "grabbing" : "grab", "touch-action": "none" }}
             onpointerdown={onPointerDown}
             onpointermove={onPointerMove}
@@ -1591,9 +1584,9 @@ function EmptyHero(props: { onCreate: () => void }): JSX.Element {
   )
 }
 
-// Shown when the current folder has no Atlas project graph yet. Distinct from
+// Shown when the current folder has no project graph yet. Distinct from
 // EmptyHero (which is for a linked-but-empty graph): this initializes the root.
-function InitHero(props: { onInit: () => void; onChat: () => void; busy: boolean }): JSX.Element {
+function InitHero(props: { onInit: () => void; busy: boolean }): JSX.Element {
   return (
     <div
       style={{
@@ -1624,8 +1617,8 @@ function InitHero(props: { onInit: () => void; onChat: () => void; busy: boolean
           "line-height": 1.55,
         }}
       >
-        This folder isn't linked to a Gateway research graph yet. Initialize one to start tracking hypotheses,
-        experiments, and decisions here.
+        This folder isn't linked to a Synthetic Sciences research graph yet. Initialize one to start tracking
+        hypotheses, experiments, and decisions here.
       </div>
       <button
         onClick={() => !props.busy && props.onInit()}
@@ -1647,21 +1640,6 @@ function InitHero(props: { onInit: () => void; onChat: () => void; busy: boolean
         }}
       >
         {props.busy ? "initializing…" : "initialize this project's graph"}
-      </button>
-      <button
-        onClick={() => !props.busy && props.onChat()}
-        disabled={props.busy}
-        style={{
-          all: "unset",
-          cursor: props.busy ? "default" : "pointer",
-          opacity: props.busy ? 0.5 : 0.8,
-          "font-family": FONT_MONO,
-          "font-size": "10px",
-          color: "var(--color-text-faint)",
-        }}
-        title="Drop a prompt in the chat and let the agent run `openscience project init`"
-      >
-        or set it up from chat →
       </button>
     </div>
   )

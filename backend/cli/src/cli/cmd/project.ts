@@ -1,17 +1,16 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
-import { mkdirSync, writeFileSync } from "fs"
-import { basename, join } from "path"
+import { basename } from "path"
 import { UI } from "../ui"
 import { OpenScience, API_BASE } from "../../openscience"
-import { computeDedupeKey, initProjectDetailed } from "../../server/routes/atlas-bridge"
+import { computeDedupeKey, initProjectDetailed, mergeProjectRootsAndPin } from "../../server/routes/atlas-bridge"
 import type { InitProjectFailure } from "../../server/routes/atlas-bridge"
 import { GitOutput } from "../../util/git-output"
 
 /**
- * `openscience project` — manage the Atlas project root for a folder.
+ * `openscience project` — manage the Synthetic Sciences project root for a folder.
  *
- * `init` (find-or-create) links this repo to an Atlas research graph — the same
+ * `init` (find-or-create) links this repo to a private research graph — the same
  * dedupe-safe path the web "Initialize" button uses. Agent-runnable, so a skill
  * can set the graph up from chat.
  *
@@ -22,14 +21,14 @@ import { GitOutput } from "../../util/git-output"
  */
 export const ProjectCommand = cmd({
   command: "project",
-  describe: "manage the Gateway project for this folder",
+  describe: "manage the Synthetic Sciences research graph for this folder",
   builder: (yargs) => yargs.command(ProjectInitCommand).command(ProjectMergeCommand).demandCommand(),
   async handler() {},
 })
 
 const ProjectInitCommand = cmd({
   command: "init",
-  describe: "create or link this repo's Gateway research graph (dedupe-safe)",
+  describe: "create or link this repo's Synthetic Sciences research graph (dedupe-safe)",
   builder: (yargs) =>
     yargs
       .option("dir", { type: "string", describe: "folder to resolve (defaults to the current directory)" })
@@ -45,7 +44,7 @@ const ProjectInitCommand = cmd({
         return
       }
       UI.empty()
-      prompts.log.error("Not connected to Gateway. Run `openscience login` first.")
+      prompts.log.error("Not connected to Synthetic Sciences. Run `openscience login` first.")
       return
     }
     const opened = (args.dir as string | undefined) || process.cwd()
@@ -65,7 +64,7 @@ const ProjectInitCommand = cmd({
     }
     UI.empty()
     if (result.projectId) {
-      prompts.log.success(`Gateway research graph ready — project ${result.projectId}`)
+      prompts.log.success(`Research graph ready — project ${result.projectId}`)
       prompts.log.info("Pinned to .openscience/project.json; the canvas will show it on next open.")
       return
     }
@@ -74,7 +73,7 @@ const ProjectInitCommand = cmd({
 })
 
 /** One honest, actionable line per failure class — never the old blanket
- *  "check login and plan" for what is actually a DNS error or a 500. */
+ *  "check login" for what is actually a DNS error or a 500. */
 function reportInitFailure(failure: InitProjectFailure | undefined) {
   const f = failure ?? { kind: "backend" as const, host: API_BASE }
   const detail = f.message ? ` — ${f.message}` : ""
@@ -83,27 +82,26 @@ function reportInitFailure(failure: InitProjectFailure | undefined) {
       prompts.log.error(
         f.status
           ? `${f.host} rejected your saved session (HTTP ${f.status})${detail}. Run \`openscience login\` to re-authenticate.`
-          : "Not connected to Gateway. Run `openscience login` first.",
+          : "Not connected to Synthetic Sciences. Run `openscience login` first.",
       )
       break
     case "unreachable":
       prompts.log.error(
-        `Could not reach the Gateway backend at ${f.host}${f.status ? ` (HTTP ${f.status})` : ""}${detail}.`,
+        `Could not reach Synthetic Sciences at ${f.host}${f.status ? ` (HTTP ${f.status})` : ""}${detail}.`,
       )
       prompts.log.info(
         "You are logged in — this is a network/service issue, not an auth issue. Check connectivity (and any OPENSCIENCE_API_BASE/SYNSC_API_BASE override), then retry.",
       )
       break
-    case "plan":
-      prompts.log.error(`Authenticated against ${f.host}, but your account has no active Gateway plan${detail}.`)
-      prompts.log.info("Manage your plan at https://app.syntheticsciences.ai/billing.")
+    case "access":
+      prompts.log.error(`Authenticated against ${f.host}, but your account cannot create a research graph${detail}.`)
+      prompts.log.info("Check account access at https://app.syntheticsciences.ai.")
       break
     default:
       prompts.log.error(
-        `Gateway could not initialize the graph${f.status ? ` (HTTP ${f.status} from ${f.host})` : ""}${detail}.`,
+        `Synthetic Sciences could not initialize the graph${f.status ? ` (HTTP ${f.status} from ${f.host})` : ""}${detail}.`,
       )
   }
-  if (Bun.which("atlas")) prompts.log.info("Gateway CLI detected — `atlas doctor --format=json` can help diagnose.")
 }
 
 async function git(args: string[], cwd: string): Promise<string> {
@@ -132,7 +130,7 @@ function rootRef(n: any): string | null {
 
 const ProjectMergeCommand = cmd({
   command: ["merge", "pick"],
-  describe: "pick one canonical Gateway root for this folder and collapse duplicates",
+  describe: "pick one canonical research-graph root for this folder and collapse duplicates",
   builder: (yargs) =>
     yargs.option("dir", {
       type: "string",
@@ -165,7 +163,7 @@ const ProjectMergeCommand = cmd({
       headers: { Authorization: `Bearer ${session.api_key}`, Accept: "application/json" },
     }).catch(() => null)
     if (!res || !res.ok) {
-      prompts.log.error(`Could not list Gateway roots${res ? ` (HTTP ${res.status})` : ""}.`)
+      prompts.log.error(`Could not list research-graph roots${res ? ` (HTTP ${res.status})` : ""}.`)
       prompts.outro("Aborted")
       return
     }
@@ -174,25 +172,23 @@ const ProjectMergeCommand = cmd({
       .map((n: any) => ({ node_id: rootId(n) ?? "", title: String(n?.title ?? "untitled"), ref: rootRef(n) }))
       .filter((r: Root) => r.node_id)
 
-    // Candidates: roots whose ref already carries this key, or whose title
-    // matches the folder name (the "Project: <name>" roots created eagerly).
+    // Prefer the authoritative dedupe marker. Only use the historical title
+    // heuristic when no keyed root exists; mixing the two pools could absorb an
+    // unrelated old root that happens to share a repository name.
     const refKey = `atlas-project-dedupe:${key}`
     const lname = name.toLowerCase()
-    const candidates = allRoots.filter((r) => r.ref === refKey || r.title.toLowerCase().includes(lname))
-    const pool = candidates.length > 0 ? candidates : allRoots
+    const keyedCandidates = allRoots.filter((r) => r.ref === refKey)
+    const titleCandidates = allRoots.filter((r) => r.title.toLowerCase().includes(lname))
+    const pool = keyedCandidates.length > 0 ? keyedCandidates : titleCandidates
     if (pool.length === 0) {
-      prompts.log.warn("No Gateway project roots found for your account.")
+      prompts.log.warn("No research-graph roots match this folder; refusing to merge unrelated account roots.")
       prompts.outro("Nothing to merge")
       return
     }
-    if (candidates.length <= 1) {
-      prompts.log.info(
-        candidates.length === 1
-          ? "Only one matching root — nothing to collapse, but you can still pin it."
-          : "No title/key match for this folder; showing all roots so you can pin one.",
-      )
+    if (pool.length <= 1) {
+      prompts.log.info("Only one matching root — the server will verify it before the local project pin is written.")
     } else {
-      prompts.log.warn(`Found ${candidates.length} duplicate roots for "${name}".`)
+      prompts.log.warn(`Found ${pool.length} duplicate roots for "${name}".`)
     }
 
     const chosen = await prompts.select({
@@ -208,38 +204,55 @@ const ProjectMergeCommand = cmd({
       return
     }
 
-    // Pin locally: PR-B's find-or-create reads this marker first, so every
-    // future sync from this folder collapses onto the chosen root.
-    try {
-      mkdirSync(join(directory, ".openscience"), { recursive: true })
-      writeFileSync(
-        join(directory, ".openscience", "project.json"),
-        JSON.stringify({ project_id: chosen, dedupe_key: key, resolved_at: new Date().toISOString() }, null, 2) + "\n",
-      )
-    } catch (e) {
-      prompts.log.error(`Could not write .openscience/project.json: ${e instanceof Error ? e.message : String(e)}`)
-      prompts.outro("Aborted")
-      return
-    }
-
-    prompts.log.success(`Pinned ${chosen} for this folder (.openscience/project.json).`)
-    const others = pool.filter((r) => r.node_id !== chosen)
+    const canonicalId = String(chosen)
+    const others = pool.filter((r) => r.node_id !== canonicalId)
     if (others.length > 0) {
       prompts.note(
         [
-          "Future syncs from this folder now reuse the chosen root.",
+          `Keep: ${pool.find((r) => r.node_id === canonicalId)?.title ?? canonicalId} (${canonicalId})`,
           "",
-          "The other roots are left untouched (no silent merge). To fully",
-          "collapse them server-side (cross-machine) or re-parent their",
-          "children, do it from the Gateway web UI — the CLI contract has no",
-          "node-update/re-parent endpoint yet.",
-          "",
-          "Other roots:",
+          "Re-parent children and delete these duplicate roots:",
           ...others.map((r) => `  • ${r.title} (${r.node_id})`),
         ].join("\n"),
-        "Next steps",
+        "Server merge",
       )
+      const confirmed = await prompts.confirm({
+        message: `Merge ${others.length} duplicate root${others.length === 1 ? "" : "s"} into the selected project?`,
+      })
+      if (prompts.isCancel(confirmed) || !confirmed) {
+        prompts.cancel("Cancelled — no roots or local pins changed.")
+        return
+      }
     }
+
+    // The server owns the destructive merge transaction. Only a confirmed
+    // success may create the local pin; a 404/405 safely tries the historical
+    // `/api/agent/projects/merge` contract, while every real v1 failure stops.
+    let outcome: Awaited<ReturnType<typeof mergeProjectRootsAndPin>>
+    try {
+      outcome = await mergeProjectRootsAndPin(
+        directory,
+        key,
+        canonicalId,
+        others.map((r) => r.node_id),
+      )
+    } catch (e) {
+      prompts.log.error(`Could not merge project roots: ${e instanceof Error ? e.message : String(e)}`)
+      prompts.outro("No local project pin was written")
+      return
+    }
+
+    prompts.log.success(
+      `Merged ${outcome.merge.deleted_nodes ?? others.length} duplicate root${others.length === 1 ? "" : "s"} into ${canonicalId}.`,
+    )
+    if (!outcome.pinned) {
+      prompts.log.warn(
+        "The server merge succeeded, but this checkout is read-only and .openscience/project.json could not be written.",
+      )
+      prompts.outro("Server merge complete")
+      return
+    }
+    prompts.log.success(`Pinned ${canonicalId} for this folder (.openscience/project.json).`)
     prompts.outro("Done")
   },
 })

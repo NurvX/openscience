@@ -67,19 +67,23 @@ describe("research entitlement rollout compatibility", () => {
       expect(reads).toBe(1)
 
       now += 30_001
-      // Stale state is used immediately while the Gateway refreshes in the
-      // background; the next call observes the refreshed Free entitlement.
+      // Routing remains account-based while the compatibility payload refreshes.
+      // The server, not a retired local plan label, decides whether the Wallet
+      // can fund enhanced search.
       expect(await OpenScience.resolveManagedSearchEntitlement()).toBe(true)
-      for (let attempt = 0; attempt < 20 && reads < 2; attempt++) await Bun.sleep(1)
+      // A fetch invocation only proves that the request started. Authenticated
+      // control-plane responses may still be finishing account reconciliation,
+      // so await the coalesced public status read before observing the cache.
+      expect((await OpenScience.getResearchEntitlements())?.managed_search?.enabled).toBe(false)
       expect(reads).toBe(2)
-      expect(await OpenScience.resolveManagedSearchEntitlement()).toBe(false)
+      expect(await OpenScience.resolveManagedSearchEntitlement()).toBe(true)
     } finally {
       fetcher.mockRestore()
       clock.mockRestore()
     }
   })
 
-  test("falls back immediately and coalesces refresh while the Gateway is stalled", async () => {
+  test("does not block account-based routing on a stalled compatibility entitlement read", async () => {
     await Bun.write(session, JSON.stringify({ api_key: "thk_stalled", user_id: "user_stalled" }))
     let release!: (value: Response) => void
     let reads = 0
@@ -97,12 +101,17 @@ describe("research entitlement rollout compatibility", () => {
           OpenScience.resolveManagedSearchEntitlement(),
           Bun.sleep(100).then(() => "timed-out" as const),
         ]),
-      ).toBe(false)
-      expect(await OpenScience.resolveManagedSearchEntitlement()).toBe(false)
+      ).toBe(true)
+      expect(await OpenScience.resolveManagedSearchEntitlement()).toBe(true)
+      expect(reads).toBe(0)
+
+      const first = OpenScience.getResearchEntitlements()
+      const second = OpenScience.getResearchEntitlements()
+      for (let attempt = 0; reads === 0 && attempt < 50; attempt++) await Bun.sleep(1)
       expect(reads).toBe(1)
       release(Response.json({ plan: "free", managed_search: { enabled: false, limit: 0 } }))
-      await Bun.sleep(10)
-      expect(await OpenScience.resolveManagedSearchEntitlement()).toBe(false)
+      expect(await first).toEqual(await second)
+      expect(await OpenScience.resolveManagedSearchEntitlement()).toBe(true)
     } finally {
       release(Response.json({ plan: "free", managed_search: { enabled: false, limit: 0 } }))
       fetcher.mockRestore()

@@ -272,7 +272,12 @@ export namespace SessionResearch {
     readiness: z.number().int().min(0).max(100),
     gates: z.array(Gate),
     missing: z.array(z.string()),
-    openFindings: z.number().int().nonnegative(),
+    openFindings: z
+      .number()
+      .int()
+      .nonnegative()
+      .default(0)
+      .describe("@deprecated Always zero; reviewer-gated research completion is retired."),
     failedCandidates: z.number().int().nonnegative(),
     strategy: Strategy,
   })
@@ -996,7 +1001,7 @@ export namespace SessionResearch {
         "Treat the fused candidate as a new branch and verify that its gain survives a clean rerun.",
       ],
       verify: [
-        "Stop opening new branches. Run the declared checks, independent review, clean reproduction, and artifact inspection.",
+        "Stop opening new branches. Run the declared checks, independent verification, clean reproduction, and artifact inspection.",
         "If a check fails, reopen the responsible stage and record the failed verification as a new attempt.",
       ],
     }[mode]
@@ -1023,8 +1028,6 @@ export namespace SessionResearch {
     }>
     jobs: Array<{ status: string }>
     kernels: Array<{ status: string }>
-    findings: Array<{ target?: string; verdict?: string; status?: string; severity?: string }>
-    reviewed: boolean
     busy: boolean
   }
 
@@ -1044,7 +1047,6 @@ export namespace SessionResearch {
         readiness: 0,
         gates: [],
         missing: [],
-        openFindings: 0,
         failedCandidates: 0,
         strategy: strategy(),
       })
@@ -1053,18 +1055,12 @@ export namespace SessionResearch {
     const paths = evidence.artifacts.flatMap((item) => (item.path ? [item.path] : []))
     const missing = required.filter((item) => !paths.some((value) => match(item.path, value)))
     const stages = contract.stages.filter((stage) => stage.status === "completed").length
-    const open = evidence.findings.filter(
-      (finding) =>
-        finding.verdict === "refutes" &&
-        finding.status !== "confirmed" &&
-        (finding.severity === "blocking" || finding.severity === "major"),
-    ).length
     const matched = required.flatMap((item) =>
       evidence.artifacts.filter((artifact) => artifact.path && match(item.path, artifact.path)),
     )
-    // A Result path may be saved repeatedly while review findings are being
-    // corrected. Completion applies to the current immutable version, not every
-    // superseded version that remains in the audit trail.
+    // A Result path may be saved repeatedly while its contents are corrected.
+    // Completion applies to the current immutable version, not every superseded
+    // version that remains in the audit trail.
     const current = new Map<string, (typeof matched)[number]>()
     for (const artifact of matched) {
       const key = artifact.path ?? artifact.artifactID ?? artifact.versionID ?? "unknown"
@@ -1075,20 +1071,6 @@ export namespace SessionResearch {
     const requiredArtifacts = [...current.values()]
     const unlinked =
       contract.template === "empirical" ? requiredArtifacts.filter((artifact) => !artifact.provenanceID) : []
-    const targets = [
-      ...new Set(
-        requiredArtifacts.map((artifact) =>
-          artifact.versionID && artifact.sha256
-            ? `artifact-version:${artifact.versionID}:${artifact.sha256.slice(0, 16)}`
-            : `unversioned:${artifact.path ?? "unknown"}`,
-        ),
-      ),
-    ]
-    const reviewedTargets = new Set(
-      evidence.findings.flatMap((finding) => (finding.verdict && finding.target ? [finding.target] : [])),
-    )
-    const unreviewed = targets.filter((target) => !reviewedTargets.has(target))
-    const reviewed = targets.length ? unreviewed.length === 0 : evidence.reviewed
     const preregistration = contract.preregistration
     const frozen = preregistration
       ? evidence.artifacts.some(
@@ -1128,9 +1110,7 @@ export namespace SessionResearch {
       stages === contract.stages.length &&
       missing.length === 0 &&
       checks === checkTotal &&
-      failed === 0 &&
-      reviewed &&
-      open === 0
+      failed === 0
     const gates: Gate[] = [
       {
         id: "stages",
@@ -1167,20 +1147,6 @@ export namespace SessionResearch {
             : `${checks}/${checkTotal} checks passed`,
       },
       {
-        id: "review",
-        label: "Independent review",
-        status: open ? "failed" : reviewed ? "passed" : "pending",
-        complete: open || !reviewed ? 0 : 1,
-        total: 1,
-        detail: open
-          ? `${open} blocking or major ${open === 1 ? "finding" : "findings"} remain open`
-          : reviewed
-            ? "Independent review recorded a disposition for every required Result"
-            : unreviewed.length
-              ? `${unreviewed.length} current required ${unreviewed.length === 1 ? "Result version has" : "Result versions have"} no structured review disposition: ${unreviewed.join(", ")}`
-              : "Independent review has not recorded a structured disposition",
-      },
-      {
         id: "runtime",
         label: "Runtime health",
         status: active || evidence.busy ? "pending" : runtimeFailures && !recovered ? "failed" : "passed",
@@ -1191,13 +1157,15 @@ export namespace SessionResearch {
           : evidence.busy
             ? "Session is still running"
             : recovered
-              ? `${runtimeFailures} failed runtime ${runtimeFailures === 1 ? "attempt is" : "attempts are"} retained; final checks and review passed`
+              ? `${runtimeFailures} failed runtime ${runtimeFailures === 1 ? "attempt is" : "attempts are"} retained; final checks passed`
               : runtimeFailures
                 ? `${runtimeFailures} kernel or compute ${runtimeFailures === 1 ? "failure needs" : "failures need"} attention`
                 : "Kernels and compute settled cleanly",
       },
     ]
-    const weights = { stages: 25, deliverables: 25, checks: 20, review: 15, runtime: 15 }
+    // `review` stays in the public enum for 2.x SDK compatibility but is never
+    // emitted as a gate and therefore carries no readiness weight.
+    const weights = { stages: 25, deliverables: 30, checks: 30, review: 0, runtime: 15 }
     const readiness = Math.round(
       gates.reduce((total, gate) => total + ratio(gate.complete, gate.total) * weights[gate.id], 0),
     )
@@ -1210,7 +1178,6 @@ export namespace SessionResearch {
       readiness,
       gates,
       missing: missing.map((item) => item.path),
-      openFindings: open,
       failedCandidates: contract.failures.length,
       strategy: strategy(contract),
     })
@@ -1589,8 +1556,8 @@ export namespace SessionResearch {
         ? [
             "",
             contract.budget.runtimeFinalizing
-              ? `The research runtime budget is at its finalization boundary (${contract.budget.runtimeReason ?? "configured limit reached"}). Do not start new analysis or optional review work.`
-              : "The managed-credit reserve is active. Do not start new analysis or optional review work.",
+              ? `The research runtime budget is at its finalization boundary (${contract.budget.runtimeReason ?? "configured limit reached"}). Do not start new analysis or optional verification work.`
+              : "The managed-credit reserve is active. Do not start new analysis or optional verification work.",
             "Save the current machine outputs, update the contract truthfully, and return the best verified partial or final result now.",
           ]
         : []

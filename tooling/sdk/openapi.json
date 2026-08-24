@@ -424,7 +424,7 @@
       "get": {
         "operationId": "account.session",
         "summary": "Get local session status",
-        "description": "Check whether this OpenScience server has a local Gateway session without contacting Gateway.",
+        "description": "Check whether this OpenScience server has a local Synthetic Sciences session without a network request.",
         "responses": {
           "200": {
             "description": "Local session status",
@@ -471,7 +471,14 @@
                     },
                     "user": {},
                     "balance_usd": {
-                      "type": "number"
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "billing_mode": {
                       "anyOf": [
@@ -539,7 +546,14 @@
                   "type": "object",
                   "properties": {
                     "balance_usd": {
-                      "type": "number"
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -793,7 +807,7 @@
     "/account/login-key": {
       "post": {
         "operationId": "account.loginKey",
-        "summary": "Sign in with a Gateway API key",
+        "summary": "Sign in with a Synthetic Sciences API key",
         "responses": {
           "200": {
             "description": "Login result",
@@ -6228,6 +6242,7 @@
                             "type": "object",
                             "properties": {
                               "atlas_compute_id": {
+                                "description": "@deprecated Compatibility field. Managed compute is retired and this value is always unavailable.",
                                 "anyOf": [
                                   {
                                     "type": "object",
@@ -8636,6 +8651,7 @@
                           "type": "object",
                           "properties": {
                             "atlas_compute_id": {
+                              "description": "@deprecated Compatibility field. Managed compute is retired and this value is always unavailable.",
                               "anyOf": [
                                 {
                                   "type": "object",
@@ -11977,6 +11993,7 @@
                           "type": "object",
                           "properties": {
                             "atlas_compute_id": {
+                              "description": "@deprecated Compatibility field. Managed compute is retired and this value is always unavailable.",
                               "anyOf": [
                                 {
                                   "type": "object",
@@ -14414,6 +14431,7 @@
                           "type": "object",
                           "properties": {
                             "atlas_compute_id": {
+                              "description": "@deprecated Compatibility field. Managed compute is retired and this value is always unavailable.",
                               "anyOf": [
                                 {
                                   "type": "object",
@@ -16851,6 +16869,7 @@
                           "type": "object",
                           "properties": {
                             "atlas_compute_id": {
+                              "description": "@deprecated Compatibility field. Managed compute is retired and this value is always unavailable.",
                               "anyOf": [
                                 {
                                   "type": "object",
@@ -17562,154 +17581,6 @@
         ]
       }
     },
-    "/settings/review": {
-      "get": {
-        "operationId": "settings.review.get",
-        "summary": "Get reviewer preferences",
-        "responses": {
-          "200": {
-            "description": "Reviewer preferences",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "auto": {
-                      "type": "boolean"
-                    },
-                    "model": {
-                      "default": null,
-                      "anyOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "providerID": {
-                              "type": "string"
-                            },
-                            "modelID": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "providerID",
-                            "modelID"
-                          ]
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "auto"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.review.get({\n  ...\n})"
-          }
-        ]
-      },
-      "put": {
-        "operationId": "settings.review.set",
-        "summary": "Update reviewer preferences",
-        "responses": {
-          "200": {
-            "description": "Updated preferences",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "auto": {
-                      "type": "boolean"
-                    },
-                    "model": {
-                      "default": null,
-                      "anyOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "providerID": {
-                              "type": "string"
-                            },
-                            "modelID": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "providerID",
-                            "modelID"
-                          ]
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "auto"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "auto": {
-                    "type": "boolean"
-                  },
-                  "model": {
-                    "default": null,
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "providerID": {
-                            "type": "string"
-                          },
-                          "modelID": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "providerID",
-                          "modelID"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "auto"
-                ]
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.settings.review.set({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/settings/preferences": {
       "get": {
         "operationId": "settings.preferences.get",
@@ -17741,6 +17612,7 @@
                       ]
                     },
                     "extra_budget_usd": {
+                      "description": "@deprecated No billing effect. OpenScience compute is user-owned.",
                       "default": 0,
                       "type": "number",
                       "minimum": 0
@@ -17815,6 +17687,7 @@
                       ]
                     },
                     "extra_budget_usd": {
+                      "description": "@deprecated No billing effect. OpenScience compute is user-owned.",
                       "default": 0,
                       "type": "number",
                       "minimum": 0
@@ -17877,6 +17750,7 @@
                     ]
                   },
                   "extra_budget_usd": {
+                    "description": "@deprecated No billing effect. OpenScience compute is user-owned.",
                     "default": 0,
                     "type": "number",
                     "minimum": 0
@@ -18213,7 +18087,7 @@
     "/settings/billing": {
       "get": {
         "operationId": "settings.billing.get",
-        "summary": "Get billing spend toggles + wallet status",
+        "summary": "Get LLM billing mode and wallet status",
         "responses": {
           "200": {
             "description": "Billing state",
@@ -18237,6 +18111,7 @@
                       ]
                     },
                     "compute": {
+                      "description": "@deprecated Compatibility field. Compute always uses user-owned infrastructure.",
                       "type": "string",
                       "enum": [
                         "managed",
@@ -18247,7 +18122,7 @@
                       "type": "object",
                       "properties": {
                         "signedIn": {
-                          "description": "Whether a Gateway session (thk_ key) is available",
+                          "description": "Whether a Synthetic Sciences session is available",
                           "type": "boolean"
                         },
                         "balanceUsd": {
@@ -18287,7 +18162,7 @@
       },
       "put": {
         "operationId": "settings.billing.update",
-        "summary": "Update billing spend toggles (managed vs BYOK)",
+        "summary": "Update the LLM billing mode (managed vs BYOK)",
         "responses": {
           "200": {
             "description": "Updated billing state",
@@ -18311,6 +18186,7 @@
                       ]
                     },
                     "compute": {
+                      "description": "@deprecated Compatibility field. Compute always uses user-owned infrastructure.",
                       "type": "string",
                       "enum": [
                         "managed",
@@ -18321,7 +18197,7 @@
                       "type": "object",
                       "properties": {
                         "signedIn": {
-                          "description": "Whether a Gateway session (thk_ key) is available",
+                          "description": "Whether a Synthetic Sciences session is available",
                           "type": "boolean"
                         },
                         "balanceUsd": {
@@ -18373,6 +18249,7 @@
                     ]
                   },
                   "compute": {
+                    "description": "@deprecated Accepted for 2.x clients and ignored. Compute always uses user-owned infrastructure.",
                     "type": "string",
                     "enum": [
                       "managed",
@@ -18395,7 +18272,7 @@
     "/settings/wallet": {
       "get": {
         "operationId": "settings.wallet.get",
-        "summary": "Get credit balance, plan mode, and recent transactions",
+        "summary": "Get wallet balance, routing mode, and recent transactions",
         "responses": {
           "200": {
             "description": "Wallet state",
@@ -18436,7 +18313,14 @@
                       "type": "boolean"
                     },
                     "lifetimeSpentUsd": {
-                      "type": "number"
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "transactions": {
                       "type": "array",
@@ -18546,7 +18430,7 @@
     "/settings/research-tools": {
       "get": {
         "operationId": "settings.researchTools.get",
-        "summary": "Get plan, research-search, and data-sharing status",
+        "summary": "Get credit-backed search and data-sharing status",
         "responses": {
           "200": {
             "description": "Research tools status",
@@ -18559,6 +18443,7 @@
                       "type": "boolean"
                     },
                     "plan": {
+                      "description": "@deprecated Compatibility summary. Billing is wallet-based and has no search quota.",
                       "type": "object",
                       "properties": {
                         "id": {
@@ -18590,6 +18475,7 @@
                         "route": {
                           "type": "string",
                           "enum": [
+                            "credits",
                             "managed",
                             "community"
                           ]
@@ -18598,17 +18484,29 @@
                           "type": "string",
                           "enum": [
                             "available",
+                            "basic",
+                            "conditional",
                             "near_limit",
                             "critical",
                             "exhausted",
-                            "conditional",
                             "unavailable"
                           ]
                         },
                         "enabled": {
                           "type": "boolean"
                         },
+                        "balanceUsd": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "limit": {
+                          "description": "@deprecated Always null; enhanced search draws from the shared wallet.",
                           "anyOf": [
                             {
                               "type": "integer",
@@ -18621,6 +18519,7 @@
                           ]
                         },
                         "used": {
+                          "description": "@deprecated Always null; enhanced search draws from the shared wallet.",
                           "anyOf": [
                             {
                               "type": "integer",
@@ -18633,6 +18532,7 @@
                           ]
                         },
                         "remaining": {
+                          "description": "@deprecated Always null; use balanceUsd.",
                           "anyOf": [
                             {
                               "type": "integer",
@@ -18645,6 +18545,7 @@
                           ]
                         },
                         "resetAt": {
+                          "description": "@deprecated Always null; wallet credits do not reset.",
                           "anyOf": [
                             {
                               "type": "string"
@@ -18662,6 +18563,7 @@
                         "route",
                         "state",
                         "enabled",
+                        "balanceUsd",
                         "limit",
                         "used",
                         "remaining",
@@ -18676,8 +18578,7 @@
                           "type": "boolean"
                         },
                         "researchContentEnabled": {
-                          "type": "boolean",
-                          "const": false
+                          "type": "boolean"
                         },
                         "source": {
                           "type": "string",
@@ -18737,7 +18638,7 @@
     "/settings/research-tools/telemetry": {
       "put": {
         "operationId": "settings.researchTools.telemetry.update",
-        "summary": "Update structural usage sharing consent",
+        "summary": "Update OpenScience data-use consent",
         "responses": {
           "200": {
             "description": "Updated research tools status",
@@ -18750,6 +18651,7 @@
                       "type": "boolean"
                     },
                     "plan": {
+                      "description": "@deprecated Compatibility summary. Billing is wallet-based and has no search quota.",
                       "type": "object",
                       "properties": {
                         "id": {
@@ -18781,6 +18683,7 @@
                         "route": {
                           "type": "string",
                           "enum": [
+                            "credits",
                             "managed",
                             "community"
                           ]
@@ -18789,17 +18692,29 @@
                           "type": "string",
                           "enum": [
                             "available",
+                            "basic",
+                            "conditional",
                             "near_limit",
                             "critical",
                             "exhausted",
-                            "conditional",
                             "unavailable"
                           ]
                         },
                         "enabled": {
                           "type": "boolean"
                         },
+                        "balanceUsd": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "limit": {
+                          "description": "@deprecated Always null; enhanced search draws from the shared wallet.",
                           "anyOf": [
                             {
                               "type": "integer",
@@ -18812,6 +18727,7 @@
                           ]
                         },
                         "used": {
+                          "description": "@deprecated Always null; enhanced search draws from the shared wallet.",
                           "anyOf": [
                             {
                               "type": "integer",
@@ -18824,6 +18740,7 @@
                           ]
                         },
                         "remaining": {
+                          "description": "@deprecated Always null; use balanceUsd.",
                           "anyOf": [
                             {
                               "type": "integer",
@@ -18836,6 +18753,7 @@
                           ]
                         },
                         "resetAt": {
+                          "description": "@deprecated Always null; wallet credits do not reset.",
                           "anyOf": [
                             {
                               "type": "string"
@@ -18853,6 +18771,7 @@
                         "route",
                         "state",
                         "enabled",
+                        "balanceUsd",
                         "limit",
                         "used",
                         "remaining",
@@ -18867,8 +18786,7 @@
                           "type": "boolean"
                         },
                         "researchContentEnabled": {
-                          "type": "boolean",
-                          "const": false
+                          "type": "boolean"
                         },
                         "source": {
                           "type": "string",
@@ -18945,7 +18863,7 @@
     "/settings/research-tools/telemetry/account-data": {
       "delete": {
         "operationId": "settings.researchTools.telemetry.delete",
-        "summary": "Delete account-linked usage analytics",
+        "summary": "Delete account-linked OpenScience trace data",
         "responses": {
           "200": {
             "description": "Deletion status",
@@ -21167,7 +21085,7 @@
         "tags": [
           "Session"
         ],
-        "description": "Build one local, Gateway-independent trace with effective harness manifests, composition transitions, attribution invariants, deterministic trajectory fingerprints, inference, tools, child agents, compute, artifacts, failures, costs, and timing. Hidden reasoning, prompt content, and copied tool outputs are excluded.",
+        "description": "Build one local, account-independent trace with effective harness manifests, composition transitions, attribution invariants, deterministic trajectory fingerprints, inference, tools, child agents, compute, artifacts, failures, costs, and timing. Hidden reasoning, prompt content, and copied tool outputs are excluded.",
         "responses": {
           "200": {
             "description": "Local observable session trace",
@@ -22070,6 +21988,12 @@
                           "sha256": {
                             "type": "string"
                           },
+                          "provenanceID": {
+                            "type": "string"
+                          },
+                          "producedAt": {
+                            "type": "number"
+                          },
                           "durable": {
                             "type": "boolean"
                           },
@@ -22533,6 +22457,8 @@
                           }
                         },
                         "openFindings": {
+                          "description": "@deprecated Always zero; reviewer-gated research completion is retired.",
+                          "default": 0,
                           "type": "integer",
                           "minimum": 0,
                           "maximum": 9007199254740991
@@ -22842,6 +22768,68 @@
                                   "updatedAt"
                                 ]
                               }
+                            },
+                            "preregistration": {
+                              "type": "object",
+                              "properties": {
+                                "artifact": {
+                                  "type": "object",
+                                  "properties": {
+                                    "ref": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 1000
+                                    },
+                                    "note": {
+                                      "type": "string",
+                                      "maxLength": 1000
+                                    },
+                                    "verifiedAt": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "kind": {
+                                      "type": "string",
+                                      "const": "artifact"
+                                    },
+                                    "artifactID": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "versionID": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "path": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "sha256": {
+                                      "type": "string",
+                                      "pattern": "^[a-f0-9]{64}$"
+                                    }
+                                  },
+                                  "required": [
+                                    "ref",
+                                    "verifiedAt",
+                                    "kind",
+                                    "artifactID",
+                                    "versionID",
+                                    "path",
+                                    "sha256"
+                                  ]
+                                },
+                                "frozenAt": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "artifact",
+                                "frozenAt"
+                              ]
                             },
                             "failures": {
                               "type": "array",
@@ -23304,7 +23292,6 @@
                         "readiness",
                         "gates",
                         "missing",
-                        "openFindings",
                         "failedCandidates",
                         "strategy"
                       ]
@@ -24004,215 +23991,6 @@
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.todo({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/session/{sessionID}/review": {
-      "post": {
-        "operationId": "session.review",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "directory",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sessionID",
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "description": "Session ID"
-          }
-        ],
-        "summary": "Run an independent reviewer pass",
-        "description": "Launches the reviewer directly on this session: session-level permission rules restore its provenance tools and it receives a structured context message. Returns immediately; the review streams into the session like any other turn.",
-        "responses": {
-          "200": {
-            "description": "Review started",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "started": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "started"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.review({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/session/{sessionID}/review/artifact": {
-      "post": {
-        "operationId": "session.reviewArtifact",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "directory",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "sessionID",
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "description": "Session ID"
-          }
-        ],
-        "summary": "Review one immutable artifact version",
-        "description": "Launches a read-only reviewer against one exact artifact-store version. The returned target binds the version id, byte count, MIME type, and SHA-256 used by every recorded finding.",
-        "responses": {
-          "200": {
-            "description": "Exact-version review started",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "started": {
-                      "type": "boolean"
-                    },
-                    "target": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string"
-                        },
-                        "artifactID": {
-                          "type": "string"
-                        },
-                        "versionID": {
-                          "type": "string"
-                        },
-                        "version": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "filename": {
-                          "type": "string"
-                        },
-                        "mimeType": {
-                          "type": "string"
-                        },
-                        "size": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "sha256": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "artifactID",
-                        "versionID",
-                        "version",
-                        "filename",
-                        "mimeType",
-                        "size",
-                        "sha256"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "started",
-                    "target"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "artifactID": {
-                    "type": "string",
-                    "pattern": "^art_.*"
-                  },
-                  "versionID": {
-                    "type": "string",
-                    "pattern": "^ver_.*"
-                  }
-                },
-                "required": [
-                  "artifactID",
-                  "versionID"
-                ]
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.session.reviewArtifact({\n  ...\n})"
           }
         ]
       }
@@ -44261,7 +44039,7 @@
           }
         ],
         "summary": "List the project provenance graph",
-        "description": "Returns project-scoped artifacts, runs, sources, claims, reviewer findings, and typed edges.",
+        "description": "Returns project-scoped artifacts, runs, sources, claims, historical review records, and typed edges.",
         "responses": {
           "200": {
             "description": "Project provenance graph"
@@ -44385,86 +44163,6 @@
       }
     },
     "/provenance/reviews": {
-      "post": {
-        "operationId": "provenance.review",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "directory",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "summary": "Record a reviewer finding",
-        "responses": {
-          "200": {
-            "description": "Recorded finding"
-          },
-          "400": {
-            "description": "Invalid target"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "target": {
-                    "type": "string"
-                  },
-                  "claim": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 10000
-                  },
-                  "issue": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 10000
-                  },
-                  "severity": {
-                    "type": "string",
-                    "enum": [
-                      "blocking",
-                      "major",
-                      "minor",
-                      "info"
-                    ]
-                  },
-                  "evidence": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 20000
-                  },
-                  "verdict": {
-                    "default": "refutes",
-                    "type": "string",
-                    "enum": [
-                      "refutes",
-                      "supports"
-                    ]
-                  }
-                },
-                "required": [
-                  "target",
-                  "claim",
-                  "issue",
-                  "severity",
-                  "evidence"
-                ]
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.review({\n  ...\n})"
-          }
-        ]
-      },
       "get": {
         "operationId": "provenance.reviews.list",
         "parameters": [
@@ -44476,80 +44174,17 @@
             }
           }
         ],
-        "summary": "List reviewer findings with lifecycle status",
-        "description": "Every reviewer finding in the project. Refuting findings carry a derived status: open, addressed (a fix was recorded), or confirmed (a later reviewer pass verified the target).",
+        "summary": "List historical review findings with lifecycle status",
+        "description": "Read-only compatibility view of findings recorded by earlier OpenScience versions. Refuting findings carry their derived historical lifecycle status.",
         "responses": {
           "200": {
-            "description": "Reviewer findings"
+            "description": "Historical review findings"
           }
         },
         "x-codeSamples": [
           {
             "lang": "js",
             "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.reviews.list({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/provenance/reviews/{id}/resolve": {
-      "post": {
-        "operationId": "provenance.reviews.resolve",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "directory",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "id",
-            "schema": {
-              "type": "string"
-            },
-            "required": true
-          }
-        ],
-        "summary": "Mark a reviewer finding as addressed",
-        "description": "Records an append-only resolution against a refuting finding. The finding is only confirmed closed once a later reviewer pass records a supports finding on the same target.",
-        "responses": {
-          "200": {
-            "description": "Resolution node"
-          },
-          "400": {
-            "description": "Not a refuting finding"
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "actor": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 240
-                  },
-                  "reason": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 10000
-                  }
-                },
-                "required": [
-                  "actor",
-                  "reason"
-                ]
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createOpenScienceClient } from \"@synsci/sdk\"\n\nconst client = createOpenScienceClient()\nawait client.provenance.reviews.resolve({\n  ...\n})"
           }
         ]
       }
@@ -51556,7 +51191,7 @@
             "type": "string"
           },
           "billing": {
-            "description": "Managed Credits vs bring-your-own-key spend, toggled independently for LLM inference and compute.",
+            "description": "How LLM inference is paid for when using Ace or user-owned credentials. Legacy compute is ignored.",
             "type": "object",
             "properties": {
               "llm": {
@@ -51575,7 +51210,7 @@
                 ]
               },
               "compute": {
-                "description": "How GPU/compute is paid for. 'managed' runs on Gateway-provisioned compute billed to your wallet (via the bundled gateway CLI); 'byok' uses your own connected GPU providers (Modal, Tinker, TensorPool, …). Unset = byok.",
+                "description": "@deprecated Retained only so existing 2.x config files keep parsing. Managed compute is retired; all compute uses user-owned routes regardless of this value.",
                 "type": "string",
                 "enum": [
                   "managed",

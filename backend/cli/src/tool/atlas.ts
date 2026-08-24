@@ -9,7 +9,6 @@ const Operation = z.enum([
   "node",
   "tree",
   "search",
-  "ask",
   "usage",
   "library_list",
   "library_summary",
@@ -26,9 +25,9 @@ const mutations = new Set(["library_subscribe", "library_add", "library_add_loca
 
 export const AtlasTool = Tool.define("atlas", {
   description: [
-    "Read and index Gateway library sources through the OpenScience host broker.",
-    "Use this instead of shelling out to the bundled graph CLI when execution is sandboxed or network egress is denied.",
-    "The host keeps Gateway credentials private and returns only the requested JSON.",
+    "Read and index Synthetic Sciences library sources through the OpenScience host broker.",
+    "Use this instead of sending authenticated backend requests directly from a sandboxed process.",
+    "The host keeps Synthetic Sciences credentials private and returns only the requested JSON.",
     "Local add/sync accepts only an existing session-authorized folder, filters secrets and symlinks, enforces upload caps, and always keeps the source private.",
     "For search, put public/remote ids in source_ids and private local-folder ids in local_source_ids.",
   ].join("\n"),
@@ -36,16 +35,16 @@ export const AtlasTool = Tool.define("atlas", {
     operation: Operation,
     project: z.string().trim().min(1).optional().describe("Project node id or slug for brief."),
     node: z.string().trim().min(1).optional().describe("Node id or slug for node or tree."),
-    query: z.string().trim().min(1).max(20_000).optional().describe("Question for search or ask."),
+    query: z.string().trim().min(1).max(20_000).optional().describe("Query for search."),
     full: z.boolean().optional().describe("Load the expanded project brief."),
-    mode: z.enum(["universal", "targeted", "web", "deep"]).optional().describe("Gateway library search mode."),
-    top_k: z.number().int().min(1).max(50).optional().describe("Maximum search or answer result count."),
-    source_ids: z.array(z.string().trim().min(1)).max(100).optional().describe("Indexed Gateway source ids."),
+    mode: z.enum(["universal", "targeted", "web", "deep"]).optional().describe("Library search mode."),
+    top_k: z.number().int().min(1).max(50).optional().describe("Maximum search result count."),
+    source_ids: z.array(z.string().trim().min(1)).max(100).optional().describe("Indexed source ids."),
     local_source_ids: z
       .array(z.string().trim().min(1))
       .max(100)
       .optional()
-      .describe("Private local-folder source ids for search or ask."),
+      .describe("Private local-folder source ids for search."),
     source_id: z.string().trim().min(1).optional().describe("Source id for show, tree, read, grep, or sync."),
     source_type: z
       .enum(["repository", "documentation", "research_paper", "huggingface_dataset"])
@@ -131,11 +130,11 @@ export const AtlasTool = Tool.define("atlas", {
     )
     const output = OpenScience.redactSecrets(JSON.stringify(result, null, 2))
     ctx.metadata({
-      title: `Gateway ${params.operation}`,
+      title: `Synthetic Sciences ${params.operation}`,
       metadata: { operation: params.operation, broker: "host", credentials: "host_only", mutation },
     })
     return {
-      title: `Gateway ${params.operation}`,
+      title: `Synthetic Sciences ${params.operation}`,
       output,
       metadata: { operation: params.operation, broker: "host", credentials: "host_only", mutation },
     }

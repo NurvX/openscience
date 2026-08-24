@@ -1,53 +1,36 @@
-// General — account, workspace navigation, and appearance
-// controls. Everything here is wired to a real endpoint:
+// General — account and appearance controls. Everything here is wired to a
+// real endpoint:
 //   • Account   → client.account.get / client.account.logout, billing link.
-//   • Licensing  → /settings/preferences (real JSON store, persisted to ~/.openscience).
 //   • Appearance → the extracted AppearanceSections (display mode, sounds, updates, …).
 import { Component, Show, createSignal, onMount, type JSX } from "solid-js"
 import { Button } from "@synsci/ui/button"
 import { Icon, type IconProps } from "@synsci/ui/icon"
 import { useDialog } from "@synsci/ui/context/dialog"
-import { Switch } from "@synsci/ui/switch"
 import { showToast } from "@synsci/ui/toast"
 import { confirmDialog } from "@/atlas/dialogs"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { usePlatform } from "@/context/platform"
-import { useServer } from "@/context/server"
 import { URLS } from "@/config/urls"
 import { AppearanceSections } from "../settings-general"
-import { settingsApi } from "./api"
-import { commitPreference } from "./preference-write"
-import { productPreferences } from "@/context/product-preferences"
 import { PanelBody, PanelHeader, PanelScroll, Section } from "./_shared"
+import { walletBalanceLabel } from "./credit-balance"
 import "./preference-panels.css"
 
 type Account = {
   session?: boolean
-  user?: Record<string, unknown> & { email?: string; subscription_plan?: string }
-  balance_usd?: number
+  user?: Record<string, unknown> & { email?: string }
+  balance_usd?: number | null
   billing_mode?: { mode: "byok" | "managed" } | null
-}
-
-type Preferences = {
-  extra_budget_usd: number
-  show_trace: boolean
-  atlas_enabled: boolean
 }
 
 export default function General() {
   const sdk = useGlobalSDK()
   const platform = usePlatform()
-  const server = useServer()
   const dialog = useDialog()
 
-  const fetchFn = () => platform.fetch ?? fetch
-  const base = () => server.url
-
   const [account, setAccount] = createSignal<Account | undefined>()
-  const [prefs, setPrefs] = createSignal<Preferences | undefined>()
   const [error, setError] = createSignal<string>()
   const [busy, setBusy] = createSignal(false)
-  const [preferenceBusy, setPreferenceBusy] = createSignal(false)
   const [showAdvanced, setShowAdvanced] = createSignal(false)
 
   const loadAccount = async () => {
@@ -58,38 +41,9 @@ export default function General() {
       setError(e instanceof Error ? e.message : String(e))
     }
   }
-  const loadPrefs = async () => {
-    try {
-      const next = await settingsApi<Preferences>(base(), fetchFn(), "/settings/preferences")
-      setPrefs(next)
-      productPreferences.sync(next)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
   onMount(() => {
     void loadAccount()
-    void loadPrefs()
   })
-
-  const savePref = async (patch: Partial<Preferences>) => {
-    if (preferenceBusy()) return
-    setPreferenceBusy(true)
-    setError(undefined)
-    const result = await commitPreference(
-      () =>
-        settingsApi<Preferences>(base(), fetchFn(), "/settings/preferences", {
-          method: "PATCH",
-          body: JSON.stringify(patch),
-        }),
-      (next) => {
-        setPrefs(next)
-        productPreferences.sync(next)
-      },
-    )
-    if (!result.ok) setError(result.error)
-    setPreferenceBusy(false)
-  }
 
   const signOut = async () => {
     const confirmed = await confirmDialog(dialog, {
@@ -106,6 +60,7 @@ export default function General() {
       if (res.error)
         throw new Error(typeof res.error === "string" ? res.error : "The server could not clear the session")
       setAccount({ session: false })
+      window.dispatchEvent(new Event("openscience:account-changed"))
     } catch (err) {
       showToast({ variant: "error", title: "Sign out failed", description: message(err) })
     } finally {
@@ -113,10 +68,19 @@ export default function General() {
     }
   }
 
-  const plan = () => {
-    const value = account()?.user?.subscription_plan as string | undefined
-    if (!value) return "Not available"
-    return `${value.charAt(0).toLocaleUpperCase()}${value.slice(1)}`
+  const wallet = () => {
+    const current = account()
+    if (!current) return "Checking…"
+    return walletBalanceLabel({
+      signedIn: current?.session === true,
+      balanceUsd: current?.balance_usd ?? null,
+    })
+  }
+  const accountDescription = () => {
+    const current = account()
+    if (!current) return "Checking the account connected to this device."
+    if (!current.session) return "No Synthetic Sciences account is connected to this device."
+    return "Connected to Synthetic Sciences on this device."
   }
   const org = () => {
     const u = account()?.user ?? {}
@@ -135,7 +99,7 @@ export default function General() {
           </Show>
 
           {/* Account */}
-          <Section title="Account" description="Your Synthetic Sciences identity and subscription.">
+          <Section title="Account" description={accountDescription()}>
             <div class="settings-card settings-preferences-card">
               <Row icon="providers" title="Email">
                 <span class="settings-account-value">
@@ -143,8 +107,8 @@ export default function General() {
                     (account()?.session === false ? "Not connected" : "Not available")}
                 </span>
               </Row>
-              <Row icon="star" title="Plan">
-                <span class="settings-account-value">{plan()}</span>
+              <Row icon="star" title="Wallet">
+                <span class="settings-account-value">{wallet()}</span>
               </Row>
               <Show when={org()}>
                 <Row icon="home" title="Organization">
@@ -153,11 +117,11 @@ export default function General() {
               </Show>
               <Row
                 icon="bolt"
-                title="Billing"
-                description="Manage your Synthetic Sciences subscription, credits, and invoices."
+                title="Wallet and billing"
+                description="Add credits, manage auto-reload, payment methods, and receipts."
               >
                 <Button size="small" variant="secondary" onClick={() => platform.openLink(URLS.dashboardBilling)}>
-                  Manage
+                  Open billing
                 </Button>
               </Row>
               <Row
@@ -177,44 +141,11 @@ export default function General() {
               <Show when={account()?.session === false}>
                 <div class="px-4 py-3">
                   <p class="text-12-regular text-text-weak">
-                    Signed out. Run <code class="font-mono text-11-regular">openscience connect login</code> in a
-                    terminal to reconnect this machine.
+                    Signed out. Run <code class="font-mono text-11-regular">openscience login</code> in a terminal to
+                    reconnect this machine.
                   </p>
                 </div>
               </Show>
-            </div>
-          </Section>
-
-          <Section title="Navigation" description="Choose which optional research surfaces appear in each project.">
-            <div class="settings-card settings-preferences-card">
-              <Row
-                icon="branch"
-                title="Gateway"
-                description="Show the Gateway research map in project navigation. Your map data is never changed."
-              >
-                <Switch
-                  hideLabel
-                  checked={prefs()?.atlas_enabled ?? false}
-                  disabled={!prefs() || preferenceBusy()}
-                  onChange={(atlas_enabled) => void savePref({ atlas_enabled })}
-                >
-                  Show Gateway
-                </Switch>
-              </Row>
-              <Row
-                icon="activity"
-                title="Trace"
-                description="Show the local time, cost, and activity trace in session navigation."
-              >
-                <Switch
-                  hideLabel
-                  checked={prefs()?.show_trace ?? false}
-                  disabled={!prefs() || preferenceBusy()}
-                  onChange={(show_trace) => void savePref({ show_trace })}
-                >
-                  Show Trace
-                </Switch>
-              </Row>
             </div>
           </Section>
 

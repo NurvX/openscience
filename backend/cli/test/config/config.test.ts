@@ -36,6 +36,12 @@ test("loads config with defaults when no files exist", async () => {
   })
 })
 
+test("legacy compute billing config keeps parsing without controlling compute", () => {
+  const config = Config.Info.parse({ billing: { llm: "byok", compute: "managed" } })
+
+  expect(config.billing).toEqual({ llm: "byok", compute: "managed" })
+})
+
 test("trusted sandbox defaults to containment while preserving explicit and managed policy", async () => {
   expect(await Config.trustedSandbox()).toMatchObject({ enabled: true, requireProjectTrust: false })
 

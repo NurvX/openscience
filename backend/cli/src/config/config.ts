@@ -1192,11 +1192,11 @@ export namespace Config {
             .enum(["managed", "byok"])
             .optional()
             .describe(
-              "How GPU/compute is paid for. 'managed' runs on Gateway-provisioned compute billed to your wallet (via the bundled gateway CLI); 'byok' uses your own connected GPU providers (Modal, Tinker, TensorPool, …). Unset = byok.",
+              "@deprecated Retained only so existing 2.x config files keep parsing. Managed compute is retired; all compute uses user-owned routes regardless of this value.",
             ),
         })
         .optional()
-        .describe("Managed Credits vs bring-your-own-key spend, toggled independently for LLM inference and compute."),
+        .describe("How LLM inference is paid for when using Ace or user-owned credentials. Legacy compute is ignored."),
       username: z
         .string()
         .optional()
