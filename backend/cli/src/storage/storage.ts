@@ -14,6 +14,8 @@ import { LockCoordination } from "@/util/lock-coordination"
 
 export namespace Storage {
   const log = Log.create({ service: "storage" })
+  const timeout = 10_000
+  const grace = 5_000
 
   type Migration = (dir: string) => Promise<void>
 
@@ -231,7 +233,7 @@ export namespace Storage {
     })()
     const stale = await fs
       .stat(lockfile)
-      .then((stat) => Date.now() - stat.mtimeMs > 30_000)
+      .then((stat) => Date.now() - stat.mtimeMs > grace)
       .catch(() => false)
     return dead === true || (dead === undefined && stale)
   }
@@ -253,7 +255,7 @@ export namespace Storage {
 
   async function interprocess(target: string) {
     const lockfile = `${target}.lock`
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + timeout
     await fs.mkdir(path.dirname(target), { recursive: true })
     for (;;) {
       const attempt = await (async () => {
