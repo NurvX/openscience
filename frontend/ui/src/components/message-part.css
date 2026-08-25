@@ -225,15 +225,6 @@
     margin-top: 0;
     font-style: normal;
     color: var(--text-weak);
-
-    p:has(strong) {
-      margin-top: 16px;
-      margin-bottom: 0;
-
-      &:first-child {
-        margin-top: 0;
-      }
-    }
   }
 }
 

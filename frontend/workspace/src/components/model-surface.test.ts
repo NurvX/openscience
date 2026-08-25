@@ -115,6 +115,9 @@ describe("model control surface", () => {
     expect(styles).toContain(
       '[data-model-option-group="effort"] [role="radiogroup"] {\n  display: flex;\n  flex-direction: column;',
     )
+    expect(styles).toMatch(
+      /\[data-model-settings-popover\]\[data-model-popover-kind="effort"\][\s\S]*\[data-model-option="effort"\]\.model-settings-row:hover,[\s\S]*background: var\(--model-control-hover\);/,
+    )
     expect(styles).toContain("min-height: 58px")
     expect(styles).toContain("font-size: 14px")
     expect(styles).toContain("color: var(--text-interactive-base)")

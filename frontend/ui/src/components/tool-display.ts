@@ -27,6 +27,31 @@ export function stripRedactedReasoning(text: string): string {
   return visible.trim() ? visible : ""
 }
 
+const providerReasoningPhase = /\*\*([^*\n]+)\*\*\r?\n\r?\n/g
+
+/**
+ * OpenRouter's Responses bridge streams provider summaries as a single signed
+ * reasoning part. Each summary phase starts with a bold label, but adjacent
+ * phases are not guaranteed to include a separator (`...done.**Next**`). Keep
+ * the signed bytes untouched in storage and normalize only the readable UI.
+ */
+export function reasoningDisplayText(text: string): string {
+  const visible = stripRedactedReasoning(text)
+  if (!visible) return ""
+  return visible
+    .replace(providerReasoningPhase, "\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+/** The most recent provider phase is useful as one compact live status. */
+export function reasoningTopic(text: string): string | undefined {
+  const visible = stripRedactedReasoning(text)
+  let topic: string | undefined
+  for (const match of visible.matchAll(providerReasoningPhase)) topic = match[1]?.trim() || topic
+  return topic
+}
+
 export function toolErrorDisplay(tool: string, value: string) {
   const cleaned = value.replace(/^Error:\s*/, "")
   const malformed = /(?:tool was called with invalid arguments|received invalid arguments or incomplete input)/i.test(

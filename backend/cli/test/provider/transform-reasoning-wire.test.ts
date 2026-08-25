@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createXai } from "@ai-sdk/xai"
+import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { generateText } from "ai"
 import { mergeDeep } from "remeda"
 import { ProviderTransform } from "../../src/provider/transform"
@@ -130,6 +131,25 @@ describe("reasoning options serialize onto provider request bodies", () => {
 
     expect(wire.bodies[0].service_tier).toBe("priority")
     expect(wire.bodies[1].reasoning).toMatchObject({ mode: "pro" })
+  })
+
+  test("Managed Sol fast mode reaches OpenRouter's priority service tier", async () => {
+    const target = model({
+      id: "openai/gpt-5.6-sol",
+      providerID: "openrouter",
+      api: { id: "openai/gpt-5.6-sol", url: "https://openrouter.ai/api/v1", npm: "@openrouter/ai-sdk-provider" },
+      modes: { fast: { provider: { body: { service_tier: "priority" } } } },
+    })
+    const wire = recorder()
+    const sdk = createOpenRouter({ apiKey: "test", baseURL: "https://openrouter.test/v1", fetch: wire.fetch })
+    const options = mergeDeep(
+      ProviderTransform.options({ model: target, sessionID, providerOptions: {} }),
+      ProviderTransform.tier(target, "fast").options,
+    )
+
+    await send(sdk.chat(target.api.id), ProviderTransform.providerOptions(target, options))
+
+    expect(wire.bodies[0].service_tier).toBe("priority")
   })
 
   test("Anthropic fast mode reaches the speed field", async () => {

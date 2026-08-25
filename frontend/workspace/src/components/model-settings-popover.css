@@ -566,6 +566,12 @@
   background: transparent;
 }
 
+[data-model-settings-popover][data-model-popover-kind="effort"] [data-model-option="effort"].model-settings-row:hover,
+[data-model-settings-popover][data-model-popover-kind="effort"]
+  [data-model-option="effort"].model-settings-row:focus-visible {
+  background: var(--model-control-hover);
+}
+
 [data-model-popover-kind="effort"] [data-model-option="effort"][aria-checked="true"] {
   border-color: var(--model-control-border);
   background: var(--model-control-selected);

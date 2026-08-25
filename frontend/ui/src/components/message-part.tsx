@@ -52,11 +52,11 @@ import { IconButton } from "./icon-button"
 import { createAutoScroll } from "../hooks"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import {
+  reasoningDisplayText,
   savedArtifact,
   scienceTaskLabel,
   sentenceCaseLabel,
   skillName,
-  stripRedactedReasoning,
   toolErrorDisplay,
 } from "./tool-display"
 import { ToolRegistry, type ToolProps } from "./tool-registry"
@@ -926,14 +926,14 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
   )
 }
 
-// Render the provider-visible reasoning exactly as it arrives. OpenRouter can
-// stream either reasoning.text, reasoning.summary, or an encrypted placeholder;
-// only the meaningless placeholder is removed. Encrypted reasoning remains in
-// providerMetadata for continuation and is never presented as readable text.
+// Keep the provider-visible reasoning bytes untouched in the stored message so
+// signed continuation still works. Normalize only its presentation: OpenRouter
+// can concatenate provider summary headings directly onto adjacent prose.
+// Encrypted reasoning remains in providerMetadata and is never rendered.
 
 PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
   const part = props.part as ReasoningPart
-  const text = () => stripRedactedReasoning(part.text)
+  const text = () => reasoningDisplayText(part.text)
 
   return (
     <Show when={text()}>

@@ -1394,6 +1394,21 @@ export namespace Provider {
 
   function modelModes(provider: ModelsDev.Provider, model: ModelsDev.Model): Model["modes"] | undefined {
     const direct = directModes(provider.id, model.id, model.experimental) ?? {}
+    // OpenRouter exposes OpenAI's priority service tier for select models.
+    // Sol is the managed flagship currently surfaced in the composer, so its
+    // Fast toggle should request that real upstream tier instead of vanishing
+    // merely because the selected route is managed rather than Codex OAuth.
+    const priority: NonNullable<Model["modes"]> =
+      provider.id === "openrouter" && /^openai\/gpt-5[.-]6-sol(?:-\d+)?$/.test(model.id.toLowerCase())
+        ? {
+            fast: {
+              provider: {
+                body: { service_tier: "priority" },
+                headers: {},
+              },
+            },
+          }
+        : {}
     const sibling =
       provider.id === "openrouter" && !/-fast$/.test(model.id)
         ? Object.fromEntries(
@@ -1418,7 +1433,7 @@ export namespace Provider {
               ]),
           )
         : {}
-    const result = { ...direct, ...sibling }
+    const result = { ...priority, ...direct, ...sibling }
     if (Object.keys(result).length === 0) return undefined
     return result
   }

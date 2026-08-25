@@ -4,6 +4,8 @@ import {
   artifactActions,
   generatedArtifacts,
   humanizeToolName,
+  reasoningDisplayText,
+  reasoningTopic,
   sentenceCaseLabel,
   savedArtifact,
   scienceTaskLabel,
@@ -155,6 +157,28 @@ describe("stripRedactedReasoning", () => {
   test("preserves provider-visible reasoning byte-for-byte", () => {
     expect(stripRedactedReasoning("  raw provider reasoning\n")).toBe("  raw provider reasoning\n")
     expect(stripRedactedReasoning("  readable summary[REDACTED]\n")).toBe("  readable summary\n")
+  })
+})
+
+describe("provider reasoning presentation", () => {
+  const titanic =
+    "**Evaluating Titanic dataset analysis**\n\nThe user asks for an analysis. Let's get started!**Choosing a reputable Titanic dataset**\n\nI need a reputable source.**Simplifying analysis steps**\n\nI can keep the work focused.[REDACTED]"
+
+  test("keeps the full readable trajectory without provider phase titles", () => {
+    expect(reasoningDisplayText(titanic)).toBe(
+      "The user asks for an analysis. Let's get started!\n\nI need a reputable source.\n\nI can keep the work focused.",
+    )
+  })
+
+  test("uses the latest phase as the single live status topic", () => {
+    expect(reasoningTopic(titanic)).toBe("Simplifying analysis steps")
+  })
+
+  test("leaves ordinary readable reasoning unchanged", () => {
+    expect(reasoningDisplayText("Checking the source, then comparing the results.")).toBe(
+      "Checking the source, then comparing the results.",
+    )
+    expect(reasoningTopic("Checking the source, then comparing the results.")).toBeUndefined()
   })
 })
 

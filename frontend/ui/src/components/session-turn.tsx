@@ -23,6 +23,7 @@ import {
   artifactTypeLabel,
   artifactActions,
   generatedArtifacts,
+  reasoningTopic,
   sessionErrorText,
   stripRedactedReasoning,
   writtenFiles,
@@ -88,9 +89,8 @@ function computeStatusFromPart(part: PartType | undefined, t: Translator): strin
     }
   }
   if (part.type === "reasoning") {
-    const text = part.text ?? ""
-    const match = text.trimStart().match(/^\*\*(.+?)\*\*/)
-    if (match) return t("ui.sessionTurn.status.thinkingWithTopic", { topic: match[1].trim() })
+    const topic = reasoningTopic(part.text ?? "")
+    if (topic) return t("ui.sessionTurn.status.thinkingWithTopic", { topic })
     return t("ui.sessionTurn.status.thinking")
   }
   if (part.type === "text") {

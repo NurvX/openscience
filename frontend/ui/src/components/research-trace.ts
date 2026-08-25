@@ -70,10 +70,11 @@ function lifecycle(part: Part) {
 }
 
 /**
- * Keep provider-visible reasoning, intermediate text, and every tool operation
- * byte-for-byte in chronological order. Do not replace live activity with
- * semantic summaries: those groups changed identity as each tool completed,
- * remounted the trace, and made both the transcript and scroll position jump.
+ * Keep every provider-visible reasoning part, intermediate text, and tool
+ * operation in chronological order. Display-only reasoning cleanup happens in
+ * the part renderer; the stored bytes and stable part identity remain intact.
+ * Do not replace live activity with semantic groups: those changed identity as
+ * each tool completed, remounted the trace, and moved the scroll position.
  */
 export function groupResearchTrace(entries: ResearchTraceEntry[]): ResearchTraceItem[] {
   return entries.flatMap((entry) => (entry.hidden || lifecycle(entry.part) ? [] : [{ kind: "part", entry }]))
