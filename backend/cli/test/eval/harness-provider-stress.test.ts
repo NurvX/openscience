@@ -80,11 +80,7 @@ const CAMPAIGN_IDS = [
   "provider_failures.model-missing",
 ] as const
 
-const RETRY_IDS = new Set([
-  "retries.rate-limit",
-  "retries.server-overload",
-  "retries.stream-disconnect",
-])
+const RETRY_IDS = new Set(["retries.rate-limit", "retries.server-overload", "retries.stream-disconnect"])
 
 const TERMINAL_IDS = new Set([
   "retries.deterministic-400",
