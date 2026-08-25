@@ -57,7 +57,7 @@ const CAMPAIGN_IDS = [
   "retries.rate-limit",
   "retries.server-overload",
   "retries.deterministic-400",
-  "retries.openrouter-502",
+  "compaction.openrouter-502",
   "retries.stream-disconnect",
   "compaction.proactive",
   "compaction.reactive-overflow",
@@ -476,7 +476,7 @@ describe("provider-driven harness stress campaign", () => {
           )
 
           for (const id of [
-            "retries.openrouter-502",
+            "compaction.openrouter-502",
             "compaction.proactive",
             "compaction.reactive-overflow",
             "compaction.handoff-objective",

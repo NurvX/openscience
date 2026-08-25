@@ -405,7 +405,7 @@ export const STRESS_MATRIX: readonly StressScenario[] = [
     expect: { terminal: "failed", tools: 0, retries: 0, artifacts: "none" },
   }),
   clean({
-    id: "retries.openrouter-502",
+    id: "compaction.openrouter-502",
     category: "compaction",
     title: "OpenRouter-wrapped context overflow compacts",
     prompt: "Exercise the provider-unavailable context wording fixture.",
