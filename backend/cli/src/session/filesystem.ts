@@ -14,6 +14,7 @@ import z from "zod"
 import { SessionWorkspace } from "./workspace"
 import { AuthoritySignal } from "@/project/authority-signal"
 import { ToolOutputPath } from "@/tool/tool-output-path"
+import { FileWatcher } from "@/file/watcher"
 
 /**
  * Durable, directional filesystem authority for a session and its project.
@@ -933,6 +934,25 @@ export namespace SessionFilesystem {
     }
   }
 
+  /** Start native watchers only when a Files-pane client materializes this
+   * snapshot. Harness and process-authority callers also need the policy
+   * packet, but must not allocate one long-lived watcher per agent session. */
+  export async function watch(sessionID: string, current?: Snapshot) {
+    const value = current ?? (await snapshot(sessionID))
+    return FileWatcher.watchSession(sessionID, [
+      value.workspace.scratchRoot,
+      ...value.grants
+        .filter(
+          (grant) =>
+            !grant.time.consumed &&
+            !grant.time.revoked &&
+            grant.scope !== "once" &&
+            (grant.source === "permission" || grant.source === "api"),
+        )
+        .map((grant) => grant.path),
+    ])
+  }
+
   /** Persistent explicit read roots for newly launched processes. One-shot
    * grants are bound to the single brokered invocation that consumes them. */
   export async function processReadRoots(sessionID: string) {
@@ -1013,6 +1033,7 @@ export namespace SessionFilesystem {
         await SessionWorkspace.trash(sessionID)
       }
       await Storage.remove(key(sessionID))
+      await FileWatcher.unwatchSession(sessionID).catch(() => {})
       return AuthoritySignal.publish({
         kind: "filesystem",
         projectID: Instance.project.id,
