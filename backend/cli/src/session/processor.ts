@@ -27,6 +27,7 @@ import type { CredentialSource } from "./billing-gate"
 import { SearchDedupe } from "./search-dedupe"
 import { SessionLoopState } from "./loop-state"
 import { InvalidCall } from "@/tool/invalid-call"
+import { ToolSelection } from "./tool-selection"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -338,7 +339,17 @@ export namespace SessionProcessor {
           },
         }
         toolcalls[callID] = updated
-        await input.updatePart(updated)
+        // Keep streamed arguments in memory until the provider closes or
+        // materializes the call. Persisting the full, ever-growing `raw` value
+        // for every tiny delta creates quadratic disk/event traffic (a 95 KB
+        // malformed call previously generated ~75 MB of duplicate events and
+        // starved the local server). Pending input is not actionable in the UI;
+        // one durable write at the boundary preserves the complete audit bytes.
+      },
+      async flush(callID: string) {
+        const match = toolcalls[callID]
+        if (!match || match.state.status !== "pending") return
+        await input.updatePart(match)
       },
       async running(part: MessageV2.ToolPart) {
         toolcalls[part.callID] = part
@@ -540,7 +551,14 @@ export namespace SessionProcessor {
               }
             }
 
-            runtimeDecision = await SessionResearch.runtimePreflight(input.sessionID)
+            // The conversation-first Research agent does not create or require
+            // legacy research contracts, so an old persisted contract must not
+            // silently reintroduce bounded-run finalization or block a turn.
+            // Keep the gate for specialist/legacy agents that still opt into
+            // that contract explicitly. Ace balance safety above is separate.
+            runtimeDecision = ToolSelection.minimalResearchAgent(streamInput.agent.name)
+              ? { decision: "allow" }
+              : await SessionResearch.runtimePreflight(input.sessionID)
             if (runtimeDecision.decision === "block") {
               throw new Error(SessionResearch.exhaustionMessage(runtimeDecision))
             }
@@ -657,6 +675,7 @@ export namespace SessionProcessor {
                   break
 
                 case "tool-input-end":
+                  await toolOutcomes.flush(value.id)
                   break
 
                 case "tool-call": {
