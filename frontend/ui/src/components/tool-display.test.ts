@@ -4,8 +4,6 @@ import {
   artifactActions,
   generatedArtifacts,
   humanizeToolName,
-  liveReasoningDisplayText,
-  latestVisibleReasoningPartID,
   reasoningDisplayText,
   reasoningTopic,
   sentenceCaseLabel,
@@ -121,8 +119,18 @@ describe("writtenFiles", () => {
     ).toEqual(["a.py", "new.py"])
   })
 
-  test("never guesses paths for the notebook tool, whose input is only code", () => {
+  test("never guesses paths for the notebook tool when execution metadata has none", () => {
     expect(writtenFiles([completed("notebook", { code: "open('x.csv','w').write('1')" })])).toEqual([])
+  })
+
+  test("collects files observed by Python, R, and image execution metadata", () => {
+    expect(
+      writtenFiles([
+        completed("notebook", { code: "..." }, { files: ["results.csv", "figure.png"] }),
+        completed("r", { code: "..." }, { files: ["model.rds"] }),
+        completed("generate_image", {}, { filepath: "diagram.png" }),
+      ]),
+    ).toEqual(["results.csv", "figure.png", "model.rds", "diagram.png"])
   })
 })
 
@@ -174,26 +182,6 @@ describe("provider reasoning presentation", () => {
 
   test("uses the latest phase as the single live status topic", () => {
     expect(reasoningTopic(titanic)).toBe("Simplifying analysis steps")
-  })
-
-  test("shows only a bounded current thought while reasoning is streaming", () => {
-    expect(liveReasoningDisplayText(titanic)).toBe("I can keep the work focused.")
-    expect(liveReasoningDisplayText(`**Working**\n${"long explanation ".repeat(80)}`)).toEndWith("…")
-    expect(liveReasoningDisplayText(`**Working**\n${"long explanation ".repeat(80)}`).length).toBeLessThanOrEqual(261)
-  })
-
-  test("keeps the latest readable thought through newer redacted or status-only parts", () => {
-    const visible = liveReasoningDisplayText("**Inspecting data**\nThe download contains 891 rows.")
-    const redacted = liveReasoningDisplayText("[REDACTED]")
-    const headingOnly = liveReasoningDisplayText("Planning the next analysis step")
-    expect(
-      latestVisibleReasoningPartID([
-        { id: "readable", type: "reasoning", text: visible },
-        { id: "hidden", type: "reasoning", text: redacted },
-        { id: "heading", type: "reasoning", text: headingOnly },
-      ]),
-    ).toBe("readable")
-    expect(latestVisibleReasoningPartID([{ id: "hidden", type: "reasoning", text: redacted }])).toBeUndefined()
   })
 
   test("leaves ordinary readable reasoning unchanged", () => {

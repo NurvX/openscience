@@ -699,11 +699,24 @@ export namespace SessionPrompt {
         .toLowerCase()
         .replace(/\s+/g, " ")
         .trim()
+    const readMessages = async () => {
+      let messages = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+      // Atomic message writes can briefly overlap a directory scan on busy or
+      // shared filesystems. An empty scan is never a valid state once execute()
+      // has loaded the durable user turn above, so retry the read rather than
+      // dropping the transcript and failing a healthy provider continuation.
+      for (const delay of [5, 20]) {
+        if (messages.length) break
+        await Bun.sleep(delay)
+        messages = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+      }
+      return messages
+    }
     while (true) {
       SessionStatus.set(sessionID, { type: "busy" })
       log.info("loop", { step, sessionID })
       if (abort.aborted) break
-      let msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+      let msgs = await readMessages()
 
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
@@ -1225,7 +1238,7 @@ export namespace SessionPrompt {
           // time.compacted on the cleared parts, but the `msgs` fetched at the loop top (and
           // the sessionMessages clone below) still hold the pre-prune bodies — without this
           // the "deferring compaction" turn would ship the full un-pruned context anyway.
-          msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+          msgs = await readMessages()
           // `before` is the last finished turn's real token usage (the reason we tripped
           // the threshold); prune's return value is the estimated reclaim.
           const before = lastFinished!.tokens.input + lastFinished!.tokens.cache.read + lastFinished!.tokens.output
@@ -1691,6 +1704,24 @@ export namespace SessionPrompt {
       },
     })
 
+    const selectionRequest = input.messages
+      .filter((message) => message.info.role === "user")
+      .slice(-4)
+      .flatMap((message) =>
+        message.parts.flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : [])),
+      )
+      .join("\n")
+      .slice(-8_000)
+    const loadedCapabilities = new Set<string>()
+    for (const message of input.messages) {
+      if (message.info.role !== "assistant") continue
+      for (const part of message.parts) {
+        if (part.type !== "tool" || part.tool !== "skill" || part.state.status !== "completed") continue
+        const capability = (part.state.metadata as { capability?: unknown } | undefined)?.capability
+        if (typeof capability === "string") loadedCapabilities.add(capability)
+      }
+    }
+
     const native = await ToolRegistry.tools(
       { modelID: input.model.api.id, providerID: input.model.providerID },
       input.agent,
@@ -1699,9 +1730,10 @@ export namespace SessionPrompt {
         ToolSelection.enabled(id, { permission, tools: input.tools }) &&
         ToolSelection.relevant(id, {
           agent: input.agent.name,
-          message: input.request,
+          message: selectionRequest || input.request,
           tools: input.tools,
           direct: input.direct,
+          capabilities: loadedCapabilities,
         }),
       input.request,
     )
@@ -1762,9 +1794,10 @@ export namespace SessionPrompt {
       if (
         !ToolSelection.relevant(key, {
           agent: input.agent.name,
-          message: input.request,
+          message: selectionRequest || input.request,
           tools: input.tools,
           direct: input.direct,
+          capabilities: loadedCapabilities,
         })
       )
         continue
@@ -1906,12 +1939,18 @@ export namespace SessionPrompt {
       effort === "ultra"
         ? "Investigate additional independent branches when they can materially change the result."
         : "Stay focused; delegate only when one or two independent branches will materially help."
+    const interaction =
+      settings.autonomy === "interactive"
+        ? "Ask one concise clarification when a meaningful ambiguity could change the scope or deliverable; do not ask about routine details."
+        : settings.autonomy === "autonomous"
+          ? "Complete the task within current permissions, state important assumptions, and ask only when blocked or missing authority or required input."
+          : "Proceed with safe, reversible assumptions and ask only before consequential or materially scope-changing choices."
     return [
       `Research effort: ${effort.toUpperCase()}. ${posture}`,
       limit
-        ? `Delegation is optional and shallow (${settings.level}): at most ${limit} Task calls total this user turn, including continuations.`
+        ? `Delegation is optional (${settings.level}): at most ${limit} Task calls total this user turn, including continuations. Use parallel workers only for genuinely independent work and integrate their findings in the lead response.`
         : `Automatic delegation is off for this turn. Work in the lead conversation unless the user explicitly attached an agent; even then, at most ${MessageV2.childAgentLimit(effort)} Task calls total this user turn, including continuations.`,
-      `Interaction: ${settings.autonomy}. Branch diversity: ${settings.diversity}. These guide collaboration and never override the permission mode.`,
+      `Independence: ${settings.autonomy}. ${interaction} This never overrides the permission mode.`,
     ].join("\n")
   }
 
