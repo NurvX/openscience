@@ -10,7 +10,6 @@ import { SessionPrompt } from "../session/prompt"
 import { defer } from "@/util/defer"
 import { Config } from "../config/config"
 import { PermissionNext } from "@/permission/next"
-import { Lock } from "@/util/lock"
 import { observableToolStatus } from "@/session/tool-outcome"
 import { Truncate } from "./truncation"
 import { SessionFilesystem } from "@/session/filesystem"
@@ -21,6 +20,7 @@ import path from "path"
 import { TaskAttempt, TaskCapacity } from "./task-attempt"
 import { Storage } from "@/storage/storage"
 import { ToolSelection } from "@/session/tool-selection"
+import { availableParallelism } from "node:os"
 
 export const DELEGATION_PROFILES = ["explore", "execute"] as const
 export const DELEGATION_SPECIALISTS = ["biology", "physics", "ml"] as const
@@ -33,17 +33,16 @@ export function taskContinuationID(value: string | undefined, parentSessionID: s
   if (/^ses_(?:new|none|placeholder|current|parent)$/i.test(value)) return undefined
   return value
 }
-export const NORMAL_CHILD_AGENTS = MessageV2.ResearchEffortLimits.normal
-export const MAX_CHILD_AGENTS = MessageV2.ResearchEffortLimits.ultra
-export const TASK_WALL_CLOCK_MS = {
-  normal: 10 * 60_000,
-  ultra: 20 * 60_000,
-} as const satisfies Record<MessageV2.ResearchEffort, number>
-export const TASK_HANDOFF_CHARS = 12_000
-export const TASK_MEMORY_CHARS = 8_000
+const configuredChildCap = Number(process.env.OPENSCIENCE_MAX_CHILD_AGENTS)
+export const MAX_CHILD_AGENTS =
+  Number.isFinite(configuredChildCap) && configuredChildCap >= 1
+    ? Math.floor(configuredChildCap)
+    : Math.max(2, availableParallelism())
 const configuredComputeCap = Number(process.env.OPENSCIENCE_MAX_COMPUTE_SUBAGENTS)
 const MAX_COMPUTE_SUBAGENTS =
-  Number.isFinite(configuredComputeCap) && configuredComputeCap >= 1 ? Math.floor(configuredComputeCap) : 2
+  Number.isFinite(configuredComputeCap) && configuredComputeCap >= 1
+    ? Math.floor(configuredComputeCap)
+    : MAX_CHILD_AGENTS
 
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
@@ -68,7 +67,6 @@ export function childPermissionRules(primaryTools: string[] = []): PermissionNex
     ...primaryTools.map((permission) => ({ permission, pattern: "*", action: "allow" as const })),
     { permission: "todowrite", pattern: "*", action: "deny" },
     { permission: "todoread", pattern: "*", action: "deny" },
-    { permission: "task", pattern: "*", action: "deny" },
   ]
 }
 
@@ -200,19 +198,19 @@ export function taskText(messages: MessageV2.WithParts[], previous: Set<string>)
 }
 
 export type TaskOutcome = {
-  outcome: "completed" | "partial" | "timed_out" | "error"
-  stopReason: "completed" | "max_steps" | "tool_failures" | "wall_clock" | "provider_error"
+  outcome: "completed" | "partial" | "error"
+  stopReason: "completed" | "max_steps" | "tool_failures" | "provider_error"
 }
 
 /**
  * The child transcript remains available through its session id. The parent
- * should receive a compact handoff instead of importing another agent's whole
- * context. Preserve both the opening findings and the closing conclusion when
- * a child ignores the requested response bound.
+ * should receive the child's final handoff instead of importing its tool
+ * transcript. An explicit caller-supplied limit remains available for legacy
+ * defensive uses, but normal delegation does not truncate the result.
  */
-export function taskHandoff(text: string, limit = TASK_HANDOFF_CHARS) {
+export function taskHandoff(text: string, limit?: number) {
   const body = text.replace(/\s*<task_metadata>[\s\S]*?<\/task_metadata>\s*$/u, "").trim()
-  if (body.length <= limit) return { text: body, truncated: false }
+  if (limit === undefined || body.length <= limit) return { text: body, truncated: false }
   const marker = "\n\n[… middle omitted from the parent handoff; the full result remains in the child session …]\n\n"
   if (limit <= marker.length) return { text: body.slice(0, Math.max(0, limit)), truncated: true }
   const budget = Math.max(0, limit - marker.length)
@@ -225,91 +223,18 @@ export function taskHandoff(text: string, limit = TASK_HANDOFF_CHARS) {
 }
 
 export function classifyTaskOutcome(input: {
-  timedOut: boolean
   finish?: string
   error?: unknown
   hasText?: boolean
   toolCalls?: number
   failedToolCalls?: number
 }): TaskOutcome {
-  if (input.timedOut) return { outcome: "timed_out", stopReason: "wall_clock" }
   if (input.error) return { outcome: input.hasText ? "partial" : "error", stopReason: "provider_error" }
   if (input.finish === "max-steps") return { outcome: "partial", stopReason: "max_steps" }
   if (input.toolCalls && input.failedToolCalls === input.toolCalls) {
     return { outcome: "partial", stopReason: "tool_failures" }
   }
   return { outcome: "completed", stopReason: "completed" }
-}
-
-export function taskDispatchBudget(
-  messages: MessageV2.WithParts[],
-  parentID: string,
-  callID: string | undefined,
-  effort: MessageV2.ResearchEffort,
-  settings?: MessageV2.DelegationSettings,
-) {
-  const delegation = MessageV2.resolveDelegationSettings(settings, { effort })
-  const limit = MessageV2.delegationLimit(delegation)
-  const roots = new Map<string, string>()
-  const ordered = messages.toSorted(
-    (a, b) => a.info.time.created - b.info.time.created || a.info.id.localeCompare(b.info.id),
-  )
-  const cursor = { root: undefined as string | undefined }
-  for (const message of ordered) {
-    if (message.info.role !== "user") continue
-    const substantive = message.parts.some(
-      (part) => part.type !== "compaction" && !(part.type === "text" && part.synthetic),
-    )
-    if (substantive || !cursor.root) cursor.root = message.info.id
-    roots.set(message.info.id, cursor.root)
-  }
-  const root = roots.get(parentID) ?? parentID
-  const calls = ordered
-    .filter((message): message is MessageV2.WithParts & { info: MessageV2.Assistant } => {
-      return message.info.role === "assistant" && (roots.get(message.info.parentID) ?? message.info.parentID) === root
-    })
-    .flatMap((message) =>
-      message.parts
-        .filter(
-          (part): part is MessageV2.ToolPart =>
-            part.type === "tool" && part.tool === "task" && part.state.status !== "error",
-        )
-        .map((part) => ({ created: message.info.time.created, part })),
-    )
-    .sort((a, b) => a.created - b.created || a.part.id.localeCompare(b.part.id))
-  const found = calls.findIndex((call) => call.part.callID === callID)
-  const dispatch = found === -1 ? calls.length + 1 : found + 1
-  if (dispatch <= limit) return { dispatch, limit }
-  const label = delegation.level[0].toUpperCase() + delegation.level.slice(1)
-  throw new Error(
-    `Delegation ${label} permits ${limit} Task calls total per user turn; continuations count. Task call ${dispatch} must be completed by the lead agent or deferred to a new user turn.`,
-  )
-}
-
-export async function withTaskDeadline<T>(run: () => Promise<T>, cancel: () => void, timeoutMs: number) {
-  const execution = run().then(
-    (result) => ({ result, error: undefined, timedOut: false as const }),
-    (error: unknown) => ({ result: undefined, error, timedOut: false as const }),
-  )
-  const timeout = Promise.withResolvers<{
-    result: undefined
-    error: undefined
-    timedOut: true
-  }>()
-  const timer = setTimeout(() => {
-    cancel()
-    timeout.resolve({ result: undefined, error: undefined, timedOut: true })
-  }, timeoutMs)
-
-  // Cancellation should abort the provider stream, but the budget must remain
-  // hard even if a transport ignores its AbortSignal. `execution` handles its
-  // own eventual rejection, so returning at the deadline cannot create an
-  // unhandled promise while the session cancellation tears remaining work down.
-  try {
-    return await Promise.race([execution, timeout.promise])
-  } finally {
-    clearTimeout(timer)
-  }
 }
 
 export const TaskTool = Tool.define("task", async (ctx) => {
@@ -340,8 +265,6 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         configured.level === "off" && ctx.extra?.bypassAgentCheck
           ? { ...configured, level: "light" as const }
           : configured
-      const maxConcurrentChildren = MessageV2.delegationLimit(settings)
-      const budgetMs = TASK_WALL_CLOCK_MS[effort]
       // Some models eagerly fill every optional schema field with the current
       // session or a `ses_new` placeholder. Those values unambiguously mean a
       // new child; only a different, real direct-child id is a continuation.
@@ -385,11 +308,6 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
       const assistant = msg.info
       if (!ctx.callID) throw new Error("Task execution requires a durable tool call id")
-      const dispatch = await (async () => {
-        using _ = await Lock.write(`task-dispatch:${ctx.sessionID}:${assistant.parentID}`)
-        const messages = await Session.messages({ sessionID: ctx.sessionID })
-        return taskDispatchBudget(messages, assistant.parentID, ctx.callID, effort, settings)
-      })()
       const identity = {
         projectID: Instance.project.id,
         parentSessionID: ctx.sessionID,
@@ -405,7 +323,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       })
       const started = reserved.createdAt
 
-      await using attemptLease = await TaskAttempt.acquire(identity, budgetMs, ctx.abort)
+      await using attemptLease = await TaskAttempt.acquire(identity, Number.POSITIVE_INFINITY, ctx.abort)
       return attemptLease.during(async () => {
         const current = await TaskAttempt.read(identity)
         if (!current) throw new Error(`Durable Task attempt ${ctx.callID} disappeared after reservation`)
@@ -464,11 +382,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
             startedAt: started,
             effort,
             delegation: settings,
-            maxConcurrentChildren,
-            maxGlobalChildren: MAX_CHILD_AGENTS,
-            taskDispatch: dispatch.dispatch,
-            maxTaskDispatches: dispatch.limit,
-            budgetMs,
+            maxConcurrentChildren: MAX_CHILD_AGENTS,
             queuedMs: timing.queuedMs,
             activeStartedAt: timing.activeStartedAt,
           },
@@ -490,12 +404,9 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         const settled = await TaskAttempt.settle(identity, terminal?.info.time.completed)
         timing.activeMs = settled.activeMs ?? 0
 
-        const deadline = terminal
-          ? { result: terminal, error: undefined, timedOut: false as const }
+        const execution = terminal
+          ? { result: terminal, error: undefined }
           : await (async () => {
-              if (!TaskAttempt.remaining(settled, budgetMs)) {
-                return { result: undefined, error: undefined, timedOut: true as const }
-              }
               // Capacity queues and server downtime are not child execution.
               // Start the durable active clock only after both global slots
               // are held, immediately before resuming provider work.
@@ -508,12 +419,6 @@ export const TaskTool = Tool.define("task", async (ctx) => {
               const token = crypto.randomUUID()
               const active = await TaskAttempt.activate({ ...identity, token })
               timing.activeMs = active.activeMs ?? 0
-              const remaining = TaskAttempt.remaining(active, budgetMs)
-              if (!remaining) {
-                const ended = await TaskAttempt.deactivate({ ...identity, token })
-                timing.activeMs = ended.activeMs ?? timing.activeMs
-                return { result: undefined, error: undefined, timedOut: true as const }
-              }
               const execute = async () => {
                 await ctx.metadata({
                   title: params.description,
@@ -523,11 +428,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
                     startedAt: started,
                     effort,
                     delegation: settings,
-                    maxConcurrentChildren,
-                    maxGlobalChildren: MAX_CHILD_AGENTS,
-                    taskDispatch: dispatch.dispatch,
-                    maxTaskDispatches: dispatch.limit,
-                    budgetMs,
+                    maxConcurrentChildren: MAX_CHILD_AGENTS,
                     queuedMs: timing.queuedMs,
                     activeStartedAt: timing.activeStartedAt,
                     activeMs: timing.activeMs,
@@ -559,14 +460,10 @@ export const TaskTool = Tool.define("task", async (ctx) => {
                       model,
                       startedAt: started,
                       elapsedMs: Date.now() - started,
-                      activeMs: Math.min(budgetMs, timing.activeMs + Math.max(0, Date.now() - timing.activeStartedAt)),
+                      activeMs: timing.activeMs + Math.max(0, Date.now() - timing.activeStartedAt),
                       effort,
                       delegation: settings,
-                      maxConcurrentChildren,
-                      maxGlobalChildren: MAX_CHILD_AGENTS,
-                      taskDispatch: dispatch.dispatch,
-                      maxTaskDispatches: dispatch.limit,
-                      budgetMs,
+                      maxConcurrentChildren: MAX_CHILD_AGENTS,
                       queuedMs: timing.queuedMs,
                       activeStartedAt: timing.activeStartedAt,
                     },
@@ -584,9 +481,9 @@ export const TaskTool = Tool.define("task", async (ctx) => {
                 )
                 const childGuidance = [
                   `You own one ${params.subagent_type} phase${params.specialist ? ` with the ${params.specialist} specialist` : ""} for the lead Research agent. The assignment in the user message is authoritative.`,
-                  "Work independently on that phase. Delegation is unavailable; load a domain skill only when it materially improves the result.",
+                  "Work independently on that phase. Delegate genuinely independent work when it materially improves the result; runtime capacity may queue it. Load a domain skill only when useful.",
                   "Do not return a diary of searches, reads, or commands. Your final response is a decision-ready handoff to the lead, not a second user-facing report.",
-                  "Keep the final response under 1,200 words. Use only the Markdown sections that carry substance: Outcome; Findings; Evidence; Changes / outputs; Limitations; Next action.",
+                  "Use only the Markdown sections that carry substance: Outcome; Findings; Evidence; Changes / outputs; Limitations; Next action.",
                   "Preserve exact paths, identifiers, numeric results, commands, and error strings when they matter. Distinguish observed evidence from inference. If blocked or partial, say exactly what remains.",
                   "Do not wrap the response in XML or JSON and do not restate these instructions.",
                   settings.autonomy === "interactive"
@@ -594,11 +491,6 @@ export const TaskTool = Tool.define("task", async (ctx) => {
                     : settings.autonomy === "autonomous"
                       ? "Resolve ordinary ambiguities independently within the current permission boundary; surface only decisions that materially affect the result."
                       : "Resolve routine ambiguities independently and flag consequential assumptions in the handoff.",
-                  settings.diversity === "exploratory"
-                    ? "Prefer a genuinely distinct approach from the lead when one is available."
-                    : settings.diversity === "focused"
-                      ? "Stay on the lead's strongest stated approach unless evidence falsifies it."
-                      : "Balance confirmation with one materially different approach when useful.",
                 ].join("\n")
                 const run = async () => {
                   if (exists) return SessionPrompt.loop(session.id)
@@ -613,23 +505,26 @@ export const TaskTool = Tool.define("task", async (ctx) => {
                     model,
                     agent: agent.name,
                     effort,
-                    delegation: false,
+                    delegation: true,
+                    delegationSettings: settings,
                     system: childGuidance,
                     tools: {
                       todowrite: false,
                       todoread: false,
-                      task: false,
+                      task: true,
                       ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((tool) => [tool, false])),
                     },
                     parts: await SessionPrompt.resolvePromptParts(transfer.prompt),
                   })
                 }
-                return withTaskDeadline(run, () => SessionPrompt.cancel(session.id), remaining)
+                return run().then(
+                  (result) => ({ result, error: undefined }),
+                  (error: unknown) => ({ result: undefined, error }),
+                )
               }
-              const interval = Math.min(5_000, Math.max(250, Math.floor(budgetMs / 20)))
               const pulse = setInterval(() => {
                 void TaskAttempt.pulse({ ...identity, token }).catch(() => undefined)
-              }, interval)
+              }, 5_000)
               try {
                 return await execute()
               } finally {
@@ -639,45 +534,36 @@ export const TaskTool = Tool.define("task", async (ctx) => {
               }
             })()
 
-        if (deadline.error && !deadline.timedOut) throw deadline.error
         await Session.flushPendingParts(session.id)
         const complete = await Session.messages({ sessionID: session.id })
         const { summary, usage } = summarizeTurn(complete, previous)
         const text = taskText(complete, previous)
-        const child = deadline.result?.info.role === "assistant" ? deadline.result.info : terminal?.info
+        const child = execution.result?.info.role === "assistant" ? execution.result.info : terminal?.info
         const failedToolCalls = summary.filter((part) => part.state.status === "error").length
         const taskOutcome = classifyTaskOutcome({
-          timedOut: deadline.timedOut,
           finish: child?.finish,
-          error: deadline.error ?? child?.error,
+          error: execution.error ?? child?.error,
           hasText: text.trim().length > 0,
           toolCalls: summary.length,
           failedToolCalls,
         })
         const raw =
           text ||
-          (deadline.timedOut
-            ? `No textual findings were emitted before the cutoff. The child completed ${summary.length} tool calls in this turn.`
-            : taskOutcome.outcome === "error"
-              ? `The child failed before emitting textual findings after ${summary.length} tool calls in this turn.`
-              : taskOutcome.outcome === "completed"
-                ? "The child completed without emitting textual findings."
-                : `The child stopped before emitting textual findings after ${summary.length} tool calls in this turn.`)
+          (taskOutcome.outcome === "error"
+            ? `The child failed before emitting textual findings after ${summary.length} tool calls in this turn.`
+            : taskOutcome.outcome === "completed"
+              ? "The child completed without emitting textual findings."
+              : `The child stopped before emitting textual findings after ${summary.length} tool calls in this turn.`)
         const handoff = taskHandoff(raw)
-        const memory = taskHandoff(handoff.text, TASK_MEMORY_CHARS)
         const activeMs = timing.activeMs
         const output = [
-          ...(taskOutcome.stopReason === "wall_clock"
-            ? [
-                `[Child stopped at the ${Math.round(budgetMs / 60_000)}-minute wall-clock budget; partial result follows.]`,
-              ]
-            : taskOutcome.stopReason === "max_steps"
-              ? ["[Child reached its bounded step limit; partial result follows.]"]
-              : taskOutcome.stopReason === "tool_failures"
-                ? ["[Every child tool call failed; treat the following as a partial, blocked result.]"]
-                : taskOutcome.stopReason === "provider_error"
-                  ? ["[Child stopped on a provider error; its usable partial result follows.]"]
-                  : []),
+          ...(taskOutcome.stopReason === "max_steps"
+            ? ["[Child reached its bounded step limit; partial result follows.]"]
+            : taskOutcome.stopReason === "tool_failures"
+              ? ["[Every child tool call failed; treat the following as a partial, blocked result.]"]
+              : taskOutcome.stopReason === "provider_error"
+                ? ["[Child stopped on a provider error; its usable partial result follows.]"]
+                : []),
           handoff.text,
         ]
           .filter(Boolean)
@@ -697,18 +583,13 @@ export const TaskTool = Tool.define("task", async (ctx) => {
             delegation: settings,
             profile: params.subagent_type,
             ...(params.specialist && { specialist: params.specialist }),
-            maxConcurrentChildren,
-            maxGlobalChildren: MAX_CHILD_AGENTS,
-            taskDispatch: dispatch.dispatch,
-            maxTaskDispatches: dispatch.limit,
-            budgetMs,
-            timedOut: deadline.timedOut,
+            maxConcurrentChildren: MAX_CHILD_AGENTS,
             queuedMs: timing.queuedMs,
             activeMs,
             outcome: taskOutcome.outcome,
             stopReason: taskOutcome.stopReason,
-            handoff: memory.text,
-            handoffTruncated: handoff.truncated || memory.truncated,
+            handoff: handoff.text,
+            handoffTruncated: handoff.truncated,
             resultChars: raw.length,
           },
           output,
