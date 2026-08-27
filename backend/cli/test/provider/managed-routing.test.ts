@@ -760,6 +760,13 @@ describe("billing.llm gates OpenRouter's own-key vs managed-proxy route (1a/1b/1
 describe("billing PUT invalidates the provider cache — no restart needed", () => {
   test("switching managed -> byok through the real route drops the thk_-keyed OpenRouter provider from the very next Provider.list()", async () => {
     await using tmp = await tmpdir({ config: {} })
+    let disposed = 0
+    const runtimeState = Instance.state(
+      () => ({}),
+      async () => {
+        disposed++
+      },
+    )
     try {
       // Seed env once so the instance exists and OPENROUTER_* is in place -
       // mirrors a project a user already has open before touching Settings.
@@ -770,7 +777,9 @@ describe("billing PUT invalidates the provider cache — no restart needed", () 
           Env.set("OPENROUTER_API_KEY", "thk_openrouter")
           Env.set("OPENROUTER_BASE_URL", `${PROXY}/openrouter/v1`)
         },
-        fn: async () => {},
+        fn: async () => {
+          runtimeState()
+        },
       })
 
       // settings/billing.ts is mounted OUTSIDE the Instance.provide wrapper
@@ -815,6 +824,7 @@ describe("billing PUT invalidates the provider cache — no restart needed", () 
           expect(after["openrouter"]).toBeUndefined()
         },
       })
+      expect(disposed).toBe(0)
     } finally {
       // The route writes to the GLOBAL config (not the tmpdir project config
       // every other test in this file relies on) - remove all three

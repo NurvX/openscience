@@ -2400,7 +2400,10 @@ export namespace OpenScience {
     // before any network work so Accounts remains usable during an outage and
     // Credits never silently retains a stale own-key provider map.
     const { Config } = await import("../config/config")
-    await Config.updateGlobal({ billing: { llm: localMode } })
+    // A billing toggle changes provider selection, not the project runtime.
+    // Refresh config/provider caches without closing active turns or rejecting
+    // their pending approvals.
+    await Config.updateGlobal({ billing: { llm: localMode } }, { preserveInstances: true })
     const { Provider } = await import("../provider/provider")
     Provider.invalidate()
 

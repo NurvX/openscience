@@ -1095,7 +1095,11 @@ describe("outbound OpenScience trace contract", () => {
     })
     await scrubStarted.promise
     let drainSettled = false
-    const draining = OutboundTelemetry.drain({ timeoutMs: 1_000 }).finally(() => {
+    // Keep the runtime deadline contract, but leave enough wall-clock room for
+    // the loaded Linux CI runner to settle the deliberately paused capture and
+    // perform its bounded upload. The separate slow-upload test proves the
+    // deadline itself remains enforced.
+    const draining = OutboundTelemetry.drain({ timeoutMs: 5_000 }).finally(() => {
       drainSettled = true
     })
     await Bun.sleep(20)
