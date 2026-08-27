@@ -21,6 +21,12 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Changed
 
+- Reworked the Files workspace into clear Project, Session, and Results tabs,
+  with connected folders and recovery locations kept in a non-duplicating More
+  menu, and polished file-type identity, preview chrome, and compact controls.
+- Moved worker-model selection into Customize → Models and reduced delegation
+  controls to concise Off, Auto, and High postures plus a compact independence
+  slider.
 - Made the user-facing Research agent use the proven minimal collaborative
   prompt, lazy skills and MCP capabilities, and the same thin runtime for
   delegated specialists. Removed the mandatory research-contract and eager
@@ -28,7 +34,7 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
   permissions, evidence, compute, and durable Results.
 - Materialized a small request-local tool set on every Research turn, with
   loaded skills activating only their relevant scientific capabilities, and
-  simplified delegation to Off/Low/Normal/High posture, worker model, and agent
+  simplified delegation to Off/Auto/High posture, worker model, and agent
   independence without per-turn worker quotas or default child deadlines.
 - Stopped bundling or offering Atlas through the OpenScience npm distribution
   and `synsci` launcher, including both graph-initialization slash-command
@@ -53,6 +59,15 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Fixed
 
+- Made PDF.js use one dev- and production-safe worker URL, added responsive page
+  thumbnails and better use of available preview space, and prevented the
+  `Invalid workerSrc type` failure seen in local development.
+- Advertised Fast only on exact routes that can actually execute it, including
+  validated OpenRouter `-fast` siblings, while hiding no-op xAI and unsupported
+  ChatGPT/Codex offerings and preserving native and managed routes separately.
+- Prevented the launcher from attaching a browser to an API-only, stale, or
+  version-mismatched process, and added a stable secondary local port so layout
+  and workspace state remain persistent when the default port is occupied.
 - Activated a loaded skill's declared tools on the current Research turn while
   preserving normal execution permissions, restored plural image and figure
   routing, and made explicit slash skills authoritative instead of expanding
