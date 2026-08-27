@@ -17,10 +17,12 @@ import {
   promptRunID,
   resumeCheckpoint,
   safeValue,
+  snapshotSessionWorkspace,
   mergeFailures,
   trajectory,
   updateCampaignProgress,
   unsettledComputeJobs,
+  workspaceOutputCandidate,
 } from "../../../../evals/cadence-harness/run"
 import { aggregateCapturedSessionTree } from "../../../../evals/cadence-harness/tree-metrics"
 import { devPrompt } from "../../../../evals/cadence-harness/dev-prompts"
@@ -207,6 +209,30 @@ describe("cadence runner contracts", () => {
     ])
   })
 
+  test("freezes bounded session-owned recovery files without treating every input as output", async () => {
+    const source = path.join(root, "workspace-source")
+    const destination = path.join(root, "workspace-capture")
+    await mkdir(path.join(source, "derived"), { recursive: true })
+    await Bun.write(path.join(source, "analysis.py"), "print('ok')\n")
+    await Bun.write(path.join(source, "derived", "ranking.csv"), "id,score\na,1\n")
+    await Bun.write(path.join(source, "raw.bin"), new Uint8Array(64))
+    await Bun.write(path.join(source, "large.csv"), "x".repeat(128))
+
+    const captured = await snapshotSessionWorkspace({
+      scratchRoot: source,
+      destination,
+      maxFileBytes: 80,
+      maxBytes: 1_000,
+    })
+
+    expect(captured.files.map((item) => item.path)).toEqual(["analysis.py", "derived/ranking.csv", "raw.bin"])
+    expect(captured.outputCandidates).toBe(2)
+    expect(captured.omitted).toEqual([{ path: "large.csv", bytes: 128, reason: "capture_limit" }])
+    expect(await Bun.file(path.join(destination, "derived", "ranking.csv")).text()).toBe("id,score\na,1\n")
+    expect(workspaceOutputCandidate("download/source.csv")).toBe(false)
+    expect(workspaceOutputCandidate("report/main.tex")).toBe(true)
+  })
+
   test("classifies semantic outcomes separately from runtime lifecycle", () => {
     expect(campaignOutcome({ terminalType: "runtime.completed", finalText: "answer" })).toEqual({
       status: "completed",
@@ -230,6 +256,13 @@ describe("cadence runner contracts", () => {
       status: "failed",
       reason: "no_usable_output",
     })
+    expect(campaignOutcome({ terminalType: "runtime.completed", recoveryCount: 2 })).toEqual({
+      status: "partial",
+      reason: "workspace_output_without_final_response",
+    })
+    expect(
+      campaignOutcome({ terminalType: "runtime.failed", terminalError: "late failure", recoveryCount: 2 }),
+    ).toEqual({ status: "partial", reason: "error_after_usable_output" })
     expect(campaignOutcome({ finalText: "recovered output" })).toEqual({
       status: "partial",
       reason: "runtime_terminal_missing",

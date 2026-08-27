@@ -1,6 +1,6 @@
 import path from "node:path"
 import os from "node:os"
-import { appendFile, chmod, mkdir, readFile, rename } from "node:fs/promises"
+import { appendFile, chmod, copyFile, lstat, mkdir, readFile, readdir, rename } from "node:fs/promises"
 import { createOpenScienceClient, createOpenScienceRuntime } from "@synsci/sdk/v2"
 import { aggregateCapturedSessionTree, type CapturedSessionSource } from "./tree-metrics"
 import { devPrompt } from "./dev-prompts"
@@ -25,6 +25,9 @@ const DEFAULT_RESEARCH_EFFORT = "normal"
 const DEFAULT_TIMEOUT_MINUTES = 120
 const MAX_CAPTURE_OUTPUT = 100_000
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
+const MAX_WORKSPACE_FILE_BYTES = 25 * 1024 * 1024
+const MAX_WORKSPACE_BYTES = 100 * 1024 * 1024
+const MAX_WORKSPACE_FILES = 1_000
 
 function flags(tokens: string[]) {
   const output = new Map<string, string | true>()
@@ -139,9 +142,11 @@ export function campaignOutcome(input: {
   assistantError?: unknown
   finalText?: string
   artifactCount?: number
+  recoveryCount?: number
   safetyLimit?: string
 }): { status: CampaignOutcome; reason?: string } {
-  const usable = Boolean(input.finalText?.trim()) || Number(input.artifactCount ?? 0) > 0
+  const delivered = Boolean(input.finalText?.trim()) || Number(input.artifactCount ?? 0) > 0
+  const usable = delivered || Number(input.recoveryCount ?? 0) > 0
   const errors = [input.terminalError, input.assistantError].filter(
     (value) => value !== undefined && value !== null && value !== "",
   )
@@ -162,6 +167,7 @@ export function campaignOutcome(input: {
   }
   if (!input.terminalType) return { status: usable ? "partial" : "failed", reason: "runtime_terminal_missing" }
   if (!usable) return { status: "failed", reason: "no_usable_output" }
+  if (!delivered) return { status: "partial", reason: "workspace_output_without_final_response" }
   return { status: "completed" }
 }
 
@@ -551,7 +557,7 @@ export async function captureSessions(
   for (const child of children) {
     if (child?.id) descendants.push(...(await captureSessions(client, child.id, rawRoot, visited)))
   }
-  return [{ sessionID, session, trace, executions }, ...descendants]
+  return [{ sessionID, session, trace, executions, messages, filesystem }, ...descendants]
 }
 
 function finalText(message: Json | undefined) {
@@ -560,6 +566,19 @@ function finalText(message: Json | undefined) {
     .map((part: Json) => String(part.text ?? ""))
     .filter(Boolean)
     .join("\n\n")
+}
+
+function lastCompletedTool(messages: unknown) {
+  if (!Array.isArray(messages)) return
+  return messages
+    .flatMap((message: Json) => message.parts ?? [])
+    .filter((part: Json) => part.type === "tool" && part.state?.status === "completed")
+    .map((part: Json) => ({
+      tool: String(part.tool ?? "tool"),
+      title: String(part.state?.title ?? part.tool ?? "Completed operation"),
+      output: typeof part.state?.output === "string" ? scrub(part.state.output, 4_000) : undefined,
+    }))
+    .at(-1)
 }
 
 async function capturedEvents(file: string) {
@@ -793,6 +812,112 @@ async function copyArtifacts(
     output.push(item)
   }
   return output
+}
+
+const OUTPUT_DIRECTORIES = new Set([
+  "analysis",
+  "derived",
+  "figures",
+  "output",
+  "outputs",
+  "paper",
+  "report",
+  "reports",
+  "results",
+  "scripts",
+  "src",
+])
+const OUTPUT_EXTENSIONS = new Set([
+  ".csv",
+  ".html",
+  ".ipynb",
+  ".json",
+  ".md",
+  ".pdf",
+  ".png",
+  ".py",
+  ".r",
+  ".rmd",
+  ".svg",
+  ".tex",
+  ".tsv",
+])
+
+export function workspaceOutputCandidate(relative: string) {
+  const normalized = relative.replaceAll("\\", "/")
+  const segments = normalized.toLowerCase().split("/")
+  const extension = path.extname(normalized).toLowerCase()
+  if (!OUTPUT_EXTENSIONS.has(extension)) return false
+  return segments.length === 1 || segments.some((segment) => OUTPUT_DIRECTORIES.has(segment))
+}
+
+/** Freeze a bounded copy of the session-owned workspace separately from
+ * explicit Results. This is recovery evidence, not a claim that every copied
+ * file is a deliverable. It prevents a late provider failure from reducing a
+ * long run to path/size pointers while avoiding inherited read grants and
+ * unbounded raw datasets. */
+export async function snapshotSessionWorkspace(input: {
+  scratchRoot: string
+  destination: string
+  maxFileBytes?: number
+  maxBytes?: number
+  maxFiles?: number
+}) {
+  const sourceRoot = path.resolve(input.scratchRoot)
+  const destination = path.resolve(input.destination)
+  const maxFileBytes = input.maxFileBytes ?? MAX_WORKSPACE_FILE_BYTES
+  const maxBytes = input.maxBytes ?? MAX_WORKSPACE_BYTES
+  const maxFiles = input.maxFiles ?? MAX_WORKSPACE_FILES
+  const files: Json[] = []
+  const omitted: Json[] = []
+  let copiedBytes = 0
+
+  const visit = async (directory: string) => {
+    if (files.length >= maxFiles || copiedBytes >= maxBytes) return
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+      if (files.length >= maxFiles || copiedBytes >= maxBytes) break
+      if (entry.isSymbolicLink()) continue
+      if (entry.isDirectory()) {
+        if ([".git", "node_modules"].includes(entry.name)) continue
+        await visit(path.join(directory, entry.name))
+        continue
+      }
+      if (!entry.isFile()) continue
+      const source = path.join(directory, entry.name)
+      const relative = path.relative(sourceRoot, source).replaceAll(path.sep, "/")
+      if (!relative || relative.startsWith("../") || path.isAbsolute(relative)) continue
+      const info = await lstat(source).catch(() => undefined)
+      if (!info?.isFile()) continue
+      if (info.size > maxFileBytes || copiedBytes + info.size > maxBytes) {
+        omitted.push({ path: relative, bytes: info.size, reason: "capture_limit" })
+        continue
+      }
+      const target = path.join(destination, ...relative.split("/"))
+      await mkdir(path.dirname(target), { recursive: true })
+      await copyFile(source, target)
+      const bytes = new Uint8Array(await Bun.file(target).arrayBuffer())
+      copiedBytes += bytes.byteLength
+      files.push({
+        path: relative,
+        bytes: bytes.byteLength,
+        sha256: sha256(bytes),
+        outputCandidate: workspaceOutputCandidate(relative),
+      })
+    }
+  }
+
+  const root = await lstat(sourceRoot).catch(() => undefined)
+  if (root?.isDirectory()) await visit(sourceRoot)
+  return {
+    schemaVersion: 1,
+    source: "session_workspace",
+    files,
+    omitted,
+    copiedBytes,
+    outputCandidates: files.filter((file) => file.outputCandidate).length,
+    complete: omitted.length === 0,
+  }
 }
 
 async function runOne(input: {
@@ -1076,6 +1201,23 @@ async function runOne(input: {
     const sessionIDs = capturedSessions.map((item) => item.sessionID).filter((item): item is string => Boolean(item))
     const rootCapture = capturedSessions.find((item) => item.sessionID === sessionID)
     const executions = rootCapture?.executions ?? { error: "Root execution capture was unavailable" }
+    const scratchRoot = (rootCapture?.filesystem as Json | undefined)?.workspace?.scratchRoot
+    const workspaceSnapshot =
+      typeof scratchRoot === "string"
+        ? await snapshotSessionWorkspace({
+            scratchRoot,
+            destination: path.join(runRoot, "workspace-snapshot"),
+          })
+        : {
+            schemaVersion: 1,
+            source: "session_workspace",
+            files: [],
+            omitted: [],
+            copiedBytes: 0,
+            outputCandidates: 0,
+            complete: false,
+            error: "Root session workspace was unavailable",
+          }
     const treeMetrics = aggregateCapturedSessionTree(capturedSessions, sessionID)
     const usage = await unwrap<any>(client.settings.usage.get()).catch((error) => ({ error: String(error) }))
     const [artifacts, discovered, trustAfter] = await Promise.all([
@@ -1089,7 +1231,22 @@ async function runOne(input: {
       writeAtomic(path.join(runRoot, "executions.json"), safeValue(executions)),
       writeAtomic(path.join(runRoot, "usage.json"), safeValue(usage)),
       writeAtomic(path.join(runRoot, "artifacts.json"), { store: artifacts, discovered: safeValue(discovered) }),
+      writeAtomic(path.join(runRoot, "workspace-snapshot.json"), safeValue(workspaceSnapshot)),
     ])
+    if (!final && workspaceSnapshot.outputCandidates > 0) {
+      const lastTool = lastCompletedTool(rootCapture?.messages)
+      const paths = workspaceSnapshot.files
+        .filter((file: Json) => file.outputCandidate)
+        .map((file: Json) => `- workspace-snapshot/${file.path}`)
+        .join("\n")
+      const operation = lastTool
+        ? `\n\n## Last completed operation\n\n${lastTool.title} (${lastTool.tool})${lastTool.output ? `\n\n\`\`\`text\n${lastTool.output}\n\`\`\`` : ""}`
+        : ""
+      await writeAtomic(
+        path.join(runRoot, "recovery.md"),
+        `# Recoverable partial work\n\nThe provider failed before a final response was delivered. These bounded session-owned files were preserved for review; their presence does not establish scientific correctness.\n\n${paths}${operation}\n`,
+      )
+    }
     const completedAt = new Date().toISOString()
     const acceptedAt = Number(accepted?.acceptedAt ?? Date.parse(startedAt))
     const userAborted = isUserCancellation(terminal, initial.cancellation)
@@ -1101,6 +1258,7 @@ async function runOne(input: {
       assistantError: message?.info?.error,
       finalText: final,
       artifactCount: artifacts.length,
+      recoveryCount: workspaceSnapshot.outputCandidates,
       safetyLimit,
     })
     let mergedFailures = mergeFailures(failures, rootTrace.failures ?? [])
@@ -1161,13 +1319,31 @@ async function runOne(input: {
         tokens: usage.total?.tokens ?? rootTrace.summary?.tokens,
       },
       treeMetrics,
-      artifacts: artifacts.map((item) => ({
-        label: item.title ?? item.current?.filename ?? item.id,
-        path: item.path,
-        kind: item.current?.mimeType ?? item.kind,
-        bytes: item.bytes ?? item.current?.size,
-      })),
-      capture: { eventCount: events.length, capturedSessions: sessionIDs.length, trust: trustAfter },
+      artifacts: [
+        ...artifacts.map((item) => ({
+          label: item.title ?? item.current?.filename ?? item.id,
+          path: item.path,
+          kind: item.current?.mimeType ?? item.kind,
+          bytes: item.bytes ?? item.current?.size,
+        })),
+        ...workspaceSnapshot.files
+          .filter((file: Json) => file.outputCandidate)
+          .map((file: Json) => ({
+            label: file.path,
+            path: `workspace-snapshot/${file.path}`,
+            kind: "workspace_recovery",
+            bytes: file.bytes,
+          })),
+      ],
+      capture: {
+        eventCount: events.length,
+        capturedSessions: sessionIDs.length,
+        trust: trustAfter,
+        workspaceFiles: workspaceSnapshot.files.length,
+        workspaceOutputCandidates: workspaceSnapshot.outputCandidates,
+        workspaceBytes: workspaceSnapshot.copiedBytes,
+        workspaceComplete: workspaceSnapshot.complete,
+      },
       limits: input.limits,
       limitUsage: guard?.usage(),
     }
