@@ -514,6 +514,28 @@ test("ask - returns pending promise when action is ask", async () => {
   })
 })
 
+test("ask - rejects a pending request when its project runtime is genuinely disposed", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const pending = PermissionNext.ask({
+        id: "permission_disposed",
+        sessionID: "session_test",
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).catch((error) => error)
+
+      expect(await PermissionNext.list()).toHaveLength(1)
+      await Instance.dispose()
+      expect(await pending).toBeInstanceOf(PermissionNext.InstanceDisposedError)
+    },
+  })
+})
+
 // reply tests
 
 test("reply - once resolves the pending ask", async () => {

@@ -62,6 +62,17 @@ const parameters = z.object({
   command: z.string().describe("The command that triggered this task").optional(),
 })
 
+/** Canonicalize model-supplied continuation placeholders before a Task attempt
+ * is fingerprinted. Execution and restart recovery must use the same input or
+ * an interrupted, already-completed child can permanently poison its parent. */
+export function normalizeTaskAttemptInput(input: unknown, parentSessionID: string) {
+  const parsed = parameters.parse(input)
+  return {
+    ...parsed,
+    session_id: taskContinuationID(parsed.session_id, parentSessionID),
+  }
+}
+
 export function childPermissionRules(primaryTools: string[] = []): PermissionNext.Ruleset {
   return [
     ...primaryTools.map((permission) => ({ permission, pattern: "*", action: "allow" as const })),
@@ -280,7 +291,8 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       // Some models eagerly fill every optional schema field with the current
       // session or a `ses_new` placeholder. Those values unambiguously mean a
       // new child; only a different, real direct-child id is a continuation.
-      const continuationID = taskContinuationID(params.session_id, ctx.sessionID)
+      const attemptInput = normalizeTaskAttemptInput(params, ctx.sessionID)
+      const continuationID = attemptInput.session_id
       const continuation = continuationID
         ? assertTaskContinuation({
             session: await Session.get(continuationID),
@@ -329,8 +341,8 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       }
       const reserved = await TaskAttempt.reserve({
         ...identity,
-        fingerprint: TaskAttempt.fingerprint({ ...params, session_id: continuationID }),
-        legacyFingerprint: TaskAttempt.legacyFingerprint({ ...params, session_id: continuationID }),
+        fingerprint: TaskAttempt.fingerprint(attemptInput),
+        legacyFingerprint: TaskAttempt.legacyFingerprint(attemptInput),
         childSessionID: continuationID,
       })
       const started = reserved.createdAt

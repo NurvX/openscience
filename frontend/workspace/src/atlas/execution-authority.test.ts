@@ -149,6 +149,7 @@ describe("frontend execution authority", () => {
     expect(hook).toContain("value.capability === expected.capability")
     expect(hook).toContain("await api.trust(value)")
     expect(hook).toContain("await controls.refetch()")
+    expect(hook).toContain('sdk.event.on("project.access.changed"')
     expect(hook).toContain('sdk.event.on("server.instance.disposed", refresh)')
     expect(hook).toContain("onCleanup(instance)")
   })

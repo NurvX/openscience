@@ -324,8 +324,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (event.properties.status.projectID !== sdk.projectID) return
     refreshResearchAccess()
   })
+  const accessSubscription = sdk.event.on("project.access.changed", (event) => {
+    if (event.properties.status.projectID !== sdk.projectID) return
+    refreshResearchAccess()
+  })
   const instanceSubscription = sdk.event.on("server.instance.disposed", refreshResearchAccess)
   onCleanup(trustSubscription)
+  onCleanup(accessSubscription)
   onCleanup(instanceSubscription)
 
   const mirror = { input: false }

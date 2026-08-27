@@ -47,7 +47,7 @@ import { SessionSummary } from "./summary"
 import { NamedError } from "@synsci/util/error"
 import { fn } from "@/util/fn"
 import { SessionProcessor } from "./processor"
-import { DELEGATION_PROFILES, DELEGATION_SPECIALISTS, TaskTool } from "@/tool/task"
+import { DELEGATION_PROFILES, DELEGATION_SPECIALISTS, normalizeTaskAttemptInput, TaskTool } from "@/tool/task"
 import { Tool } from "@/tool/tool"
 import { PermissionNext } from "@/permission/next"
 import { SessionStatus } from "./status"
@@ -591,8 +591,9 @@ export namespace SessionPrompt {
         }
         const attempt = await TaskAttempt.read(identity)
         if (attempt?.status !== "completed" || !attempt.result) return false
-        const fingerprint = TaskAttempt.fingerprint(part.state.input)
-        const legacy = TaskAttempt.legacyFingerprint(part.state.input)
+        const attemptInput = normalizeTaskAttemptInput(part.state.input, session.id)
+        const fingerprint = TaskAttempt.fingerprint(attemptInput)
+        const legacy = TaskAttempt.legacyFingerprint(attemptInput)
         if (attempt.fingerprint !== fingerprint && attempt.fingerprint !== legacy) {
           throw new Error(`Task call ${part.callID} changed arguments before durable result recovery`)
         }

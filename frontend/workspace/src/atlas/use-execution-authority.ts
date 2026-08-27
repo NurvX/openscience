@@ -29,6 +29,10 @@ export function useExecutionAuthority(capability: ExecutionCapability | Accessor
     if (event.properties.status.projectID !== sdk.projectID) return
     refresh()
   })
+  const access = sdk.event.on("project.access.changed", (event) => {
+    if (event.properties.status.projectID !== sdk.projectID) return
+    refresh()
+  })
   const grant = sdk.event.on("session.filesystem.changed", (event) => {
     if (event.properties.sessionID !== params.id) return
     refresh()
@@ -38,6 +42,7 @@ export function useExecutionAuthority(capability: ExecutionCapability | Accessor
   // than leaving controls on the previous decision until a page reload.
   const instance = sdk.event.on("server.instance.disposed", refresh)
   onCleanup(trust)
+  onCleanup(access)
   onCleanup(grant)
   onCleanup(instance)
 

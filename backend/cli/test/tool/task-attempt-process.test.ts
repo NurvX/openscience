@@ -122,7 +122,7 @@ async function result(proc: ReturnType<typeof worker>) {
   return JSON.parse(line) as Result
 }
 
-async function seed(directory: string): Promise<Seed> {
+async function seed(directory: string, options?: { eagerParentPlaceholder?: boolean }): Promise<Seed> {
   return Instance.provide({
     directory,
     init: async () => {
@@ -169,6 +169,7 @@ async function seed(directory: string): Promise<Seed> {
             description: "Durable restart fixture",
             prompt: "Return the deterministic child result.",
             subagent_type: "execute",
+            ...(options?.eagerParentPlaceholder ? { session_id: parent.id } : {}),
           },
           time: { start: Date.now() },
         },
@@ -560,6 +561,72 @@ describe("durable Task attempts across Bun processes", () => {
       expect(task.state.output).toBe("DURABLE_ORDINARY_CHILD_RESULT")
       expect(JSON.stringify(local.requests)).toContain("DURABLE_ORDINARY_CHILD_RESULT")
       expect(JSON.stringify(local.requests)).not.toContain("Tool execution was interrupted")
+    } finally {
+      local.release.resolve()
+      for (const process of processes) process.kill()
+      await Promise.all([...processes].map((process) => process.exited.catch(() => undefined)))
+      local.server.stop(true)
+    }
+  }, 30_000)
+
+  test("restores a durable Task result when the model used its parent session as a continuation placeholder", async () => {
+    const local = provider()
+    const processes = new Set<ReturnType<typeof parent>>()
+    try {
+      await using tmp = await tmpdir({
+        git: true,
+        config: stressProviderConfig(`http://127.0.0.1:${local.server.port}/v1`),
+      })
+      const input = await seed(tmp.path, { eagerParentPlaceholder: true })
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const identity = {
+            projectID: Instance.project.id,
+            parentSessionID: input.parentID,
+            parentMessageID: input.messageID,
+            parentUserMessageID: input.userID,
+            callID: input.callID,
+          }
+          const normalized = {
+            description: "Durable restart fixture",
+            prompt: "Return the deterministic child result.",
+            subagent_type: "execute" as const,
+            session_id: undefined,
+          }
+          await TaskAttempt.reserve({ ...identity, fingerprint: TaskAttempt.fingerprint(normalized) })
+          await TaskAttempt.complete({
+            ...identity,
+            result: {
+              title: normalized.description,
+              metadata: { sessionId: "ses_completed_child" },
+              output: "DURABLE_PLACEHOLDER_CHILD_RESULT",
+            },
+          })
+        },
+      })
+      const ready = path.join(tmp.path, "placeholder-recovery.ready")
+      const start = path.join(tmp.path, "placeholder-recovery.start")
+      const process = parent(tmp.path, input.parentID, ready, start)
+      processes.add(process)
+      await wait(ready)
+      await fs.writeFile(start, "start")
+      await result(process)
+      const messages = await Instance.provide({
+        directory: tmp.path,
+        fn: () => Session.messages({ sessionID: input.parentID }),
+      })
+      const source = messages.find((message) => message.info.id === input.messageID)
+      const task = source?.parts.find(
+        (part): part is MessageV2.ToolPart => part.type === "tool" && part.callID === input.callID,
+      )
+
+      expect(source?.info.role === "assistant" ? source.info.finish : undefined).toBe("tool-calls")
+      expect(task?.state.status).toBe("completed")
+      if (task?.state.status !== "completed") throw new Error("Expected recovered Task result")
+      expect(task.state.output).toBe("DURABLE_PLACEHOLDER_CHILD_RESULT")
+      expect(JSON.stringify(local.requests)).toContain("DURABLE_PLACEHOLDER_CHILD_RESULT")
+      expect(JSON.stringify(local.requests)).not.toContain("changed arguments before durable result recovery")
     } finally {
       local.release.resolve()
       for (const process of processes) process.kill()

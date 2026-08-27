@@ -249,6 +249,7 @@ describe("composer control consolidation", () => {
     expect(source).toContain("sdk.client.project.trust.update({")
     expect(source).toContain('sdk.request("/settings/sandbox", init)')
     expect(source).toContain('sdk.event.on("project.trust.changed"')
+    expect(source).toContain('sdk.event.on("project.access.changed"')
     expect(source).toContain('sdk.event.on("server.instance.disposed"')
     expect(source).toContain('title: "Enable Full access?"')
     expect(source).toContain("Full access disables the execution sandbox")

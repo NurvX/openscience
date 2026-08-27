@@ -6,6 +6,14 @@ import { ProjectTrust } from "../../src/project/trust"
 import { Server } from "../../src/server/server"
 import { tmpdir } from "../fixture/fixture"
 
+let accessRouteProbeDisposals = 0
+const accessRouteProbe = Instance.state(
+  () => ({ token: crypto.randomUUID() }),
+  async () => {
+    accessRouteProbeDisposals++
+  },
+)
+
 test("action access is atomic and isolated to its owning project", async () => {
   const previous = await Config.trustedSandbox()
   try {
@@ -46,7 +54,7 @@ test("action access is atomic and isolated to its owning project", async () => {
   }
 })
 
-test("project access route updates one project without machine-wide sandbox writes", async () => {
+test("project access and trust routes update authority without disposing the active runtime", async () => {
   const previous = await Config.trustedSandbox()
   try {
     await Config.setSandbox({ enabled: true })
@@ -54,6 +62,8 @@ test("project access route updates one project without machine-wide sandbox writ
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        accessRouteProbeDisposals = 0
+        const activeRuntime = accessRouteProbe()
         const initial = await ProjectAccess.status(Instance.project)
         const response = await Server.internalFetch()(
           `http://openscience.internal/project/${Instance.project.id}/access`,
@@ -73,6 +83,20 @@ test("project access route updates one project without machine-wide sandbox writ
           sandbox: { enabled: false },
         })
         expect(await Config.trustedSandbox()).toMatchObject({ enabled: true })
+        expect(accessRouteProbe()).toBe(activeRuntime)
+        expect(accessRouteProbeDisposals).toBe(0)
+
+        const trust = await Server.internalFetch()(`http://openscience.internal/project/${Instance.project.id}/trust`, {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+            "x-openscience-project": Instance.project.id,
+          },
+          body: JSON.stringify({ trusted: false }),
+        })
+        expect(trust.status).toBe(200)
+        expect(accessRouteProbe()).toBe(activeRuntime)
+        expect(accessRouteProbeDisposals).toBe(0)
       },
     })
   } finally {
