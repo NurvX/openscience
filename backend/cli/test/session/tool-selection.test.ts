@@ -89,7 +89,7 @@ describe("tool selection", () => {
     ).toBe(true)
   })
 
-  test("keeps provenance recording out of ordinary analysis unless explicitly requested", () => {
+  test("keeps provenance recording out of the user-facing Research tool surface", () => {
     expect(
       ToolSelection.relevant("provenance_record", {
         agent: "research",
@@ -107,7 +107,7 @@ describe("tool selection", () => {
         agent: "research",
         message: "Record the provenance and lineage for these analysis outputs.",
       }),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   test("recognizes only fresh self-contained conceptual questions as direct answers", () => {

@@ -71,7 +71,6 @@ interface TransientState {
 // removed mode) falls back to the default rather than sending an invalid agent.
 const VALID_AGENTS = new Set(["research", "biology", "physics", "ml", "plan"])
 const TABS = new Set<RightPaneTab>(["files", "terminal", "canvas", "kernels", "trace"])
-const MODES = new Set<RightPaneMode>(["artifact", "tools"])
 const ARTIFACT_TABS = new Set<ArtifactPaneTab>([
   "details",
   "code",
@@ -200,8 +199,9 @@ function restoreWorkTab(value: unknown): WorkTab | undefined {
   if (!row || typeof row.kind !== "string") return
   if (row.kind === "view") {
     if (typeof row.context !== "string") return
-    if (row.context !== "artifact" && !TABS.has(row.context as RightPaneTab)) return
-    return viewTab(row.context as ContextTab)
+    if (row.context === "artifact") return viewTab("files")
+    if (!TABS.has(row.context as RightPaneTab)) return
+    return viewTab(row.context as RightPaneTab)
   }
   if (row.kind === "saved") {
     const artifact = normalizeStoredArtifact(row.artifact)
@@ -222,8 +222,8 @@ function restoreState(value: unknown): ContextState {
   const row = record(value)
   if (!row) return empty()
   const tab = typeof row.tab === "string" && TABS.has(row.tab as RightPaneTab) ? (row.tab as RightPaneTab) : "files"
-  const mode =
-    typeof row.mode === "string" && MODES.has(row.mode as RightPaneMode) ? (row.mode as RightPaneMode) : "tools"
+  // Artifact details was removed from the product surface. Migrate persisted
+  // inspector state back to the normal Files view without losing open files.
   const artifactPaneTab =
     typeof row.artifactPaneTab === "string" && ARTIFACT_TABS.has(row.artifactPaneTab as ArtifactPaneTab)
       ? (row.artifactPaneTab as ArtifactPaneTab)
@@ -241,19 +241,18 @@ function restoreState(value: unknown): ContextState {
     .filter((item): item is WorkTab => item !== undefined)
     .filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)
   const fallback = [
-    ...(row.open === true || file || files.length > 0 ? [viewTab(mode === "artifact" ? "artifact" : tab)] : []),
+    ...(row.open === true || file || files.length > 0 ? [viewTab(tab)] : []),
     ...files.map(fileTab),
   ]
   const requested = typeof row.activeWorkTab === "string" ? row.activeWorkTab : undefined
   const requestedTab = restoredTabs.find((item) => item.id === requested)
-  const owner =
+  const restoredOwner =
     requestedTab?.kind === "view"
       ? requestedTab.context
       : requestedTab
         ? "files"
-        : mode === "artifact"
-          ? "artifact"
-          : tab
+        : tab
+  const owner = restoredOwner === "artifact" ? "files" : restoredOwner
   // Keep every contextual surface mounted. Older sessions can be missing the
   // owning view tab, so add only that tab while preserving the restored strip.
   const workTabs =
@@ -267,15 +266,13 @@ function restoreState(value: unknown): ContextState {
     workTabs.find((item) => item.kind === "file" && file && fileKey(item.file) === fileKey(file))?.id ??
     workTabs[0]?.id
   const active = workTabs.find((item) => item.id === activeWorkTab)
-  const activeContext = active ? contextFor(active) : mode === "artifact" ? "artifact" : tab
-  // Details is a view of the selected file, not a replacement for it. Keep
-  // the owning file selected while the artifact view is active so restoring
-  // persisted Details state does not immediately clear artifact ownership.
-  const activeFile = active?.kind === "file" ? active.file : activeContext === "artifact" ? file : undefined
+  const restoredContext = active ? contextFor(active) : tab
+  const activeContext = restoredContext === "artifact" ? "files" : restoredContext
+  const activeFile = active?.kind === "file" ? active.file : undefined
   const saved = active?.kind === "saved" ? active.artifact : undefined
   return {
-    tab: activeContext === "artifact" ? tab : activeContext,
-    mode: activeContext === "artifact" ? "artifact" : "tools",
+    tab: activeContext,
+    mode: "tools",
     open: row.open === true,
     workTabs,
     activeWorkTab,
@@ -352,7 +349,7 @@ export function createContextState(options: { storage?: ContextStorage } = {}) {
     persist()
   }
   const updateTransient = (next: TransientState) => setStore("transient", store.transientScope, next)
-  const context = (): ContextTab => (current().mode === "artifact" ? "artifact" : current().tab)
+  const context = (): ContextTab => current().tab
   const closeContext = () => update({ ...current(), open: false })
   const select = (
     state: ContextState,
@@ -373,18 +370,16 @@ export function createContextState(options: { storage?: ContextStorage } = {}) {
         files,
       }
     }
-    const next = contextFor(active)
+    const restoredContext = contextFor(active)
+    const next = restoredContext === "artifact" ? "files" : restoredContext
     return {
       ...state,
-      tab: next === "artifact" ? state.tab : next,
-      mode: next === "artifact" ? "artifact" : "tools",
+      tab: next,
+      mode: "tools",
       open,
       workTabs: tabs,
       activeWorkTab: active.id,
-      // The artifact inspector is contextual to the active file. Clearing the
-      // file here unmounts FileView, which clears artifactContext and makes the
-      // Details button appear to flash before the pane closes.
-      file: active.kind === "file" ? active.file : next === "artifact" ? state.file : undefined,
+      file: active.kind === "file" ? active.file : undefined,
       saved: active.kind === "saved" ? active.artifact : undefined,
       files,
     }
@@ -416,15 +411,10 @@ export function createContextState(options: { storage?: ContextStorage } = {}) {
     update(select(state, nextTabs, next?.id, files))
   }
   const syncArtifact = (active: boolean) => {
-    if (active || !current().open || context() !== "artifact") return
-    const state = current()
-    const tabs = state.workTabs ?? []
-    const index = tabs.findIndex((item) => item.id === "view:artifact")
-    const nextTabs = tabs.filter((item) => item.id !== "view:artifact")
-    const next = nextTabs[index - 1] ?? nextTabs[index] ?? nextTabs[0]
-    update(select(state, nextTabs, next?.id, state.files ?? [], Boolean(next)))
+    void active
   }
   const openContext = (next: ContextTab) => {
+    if (next === "artifact") next = "files"
     const state = current()
     const tabs = own(state.workTabs ?? [], next)
     const id = `view:${next}`
@@ -534,7 +524,7 @@ export function createContextState(options: { storage?: ContextStorage } = {}) {
     },
     mode: () => current().mode,
     setMode(mode: RightPaneMode) {
-      update({ ...current(), mode })
+      update({ ...current(), mode: mode === "artifact" ? "tools" : mode })
     },
     setOpen(open: boolean) {
       update({ ...current(), open })

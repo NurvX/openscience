@@ -9,7 +9,7 @@
 /* Models follows Compute's flat hierarchy: one quiet surface per semantic
    group, compact rows inside it, and no nested borders or raised islands. */
 .settings-dialog .settings-models-panel .settings-card {
-  gap: 2px;
+  gap: 0;
   padding: var(--models-gap-1);
   border: 0;
   border-radius: var(--settings-radius-card);
@@ -26,6 +26,8 @@
 }
 
 .models-access-card,
+.models-connections-card,
+.models-preferences-card,
 .models-inference,
 .models-provider-keys,
 .models-connected-providers {
@@ -35,9 +37,29 @@
 }
 
 .models-access-card,
+.models-connections-card,
+.models-preferences-card,
 .models-inference,
 .models-provider-keys {
-  gap: 2px;
+  gap: 0;
+}
+
+.models-access-card {
+  width: 100%;
+  min-height: 0;
+  height: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+.models-connections-card,
+.models-preferences-card {
+  overflow: hidden;
+}
+
+.models-connections-card > * + *,
+.models-preferences-card > * + * {
+  border-top: 1px solid var(--border-weak-base);
 }
 
 .models-account-summary__identity,
@@ -114,15 +136,14 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0;
-  padding: var(--models-gap-2);
+  gap: var(--models-gap-3);
+  padding: var(--models-gap-3);
   border: 0;
   border-radius: var(--settings-radius-control);
   background: transparent;
   box-shadow: none;
 }
 
-.models-routing__header,
 .models-routing__details,
 .models-routing__account {
   display: flex;
@@ -130,22 +151,8 @@
   align-items: center;
 }
 
-.models-routing__header {
-  justify-content: space-between;
-  gap: var(--models-gap-4);
-  padding: var(--models-gap-1);
-}
-
-.models-routing__title {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .models-routing__options {
-  width: min(100%, 330px);
-  flex: 0 1 330px;
+  width: min(100%, 320px);
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2px;
@@ -210,14 +217,12 @@
 
 .models-routing__details {
   justify-content: space-between;
-  gap: var(--models-gap-4);
-  margin-top: var(--models-gap-1);
-  padding: var(--models-gap-2) var(--models-gap-1) var(--models-gap-1);
-  border-top: 1px solid var(--border-weak-base);
+  gap: var(--models-gap-3);
+  padding: 0 2px;
 }
 
 .models-routing__description {
-  flex: 1 1 260px;
+  flex: 1 1 auto;
 }
 
 .models-routing__account {
@@ -244,8 +249,27 @@
 }
 
 .models-connection-row,
+.models-provider-key-heading,
+.models-preference-row,
 .models-provider-row {
   justify-content: space-between;
+}
+
+.models-provider-key-heading__icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--settings-radius-control);
+  background: var(--settings-surface-muted);
+  color: var(--text-weak);
+}
+
+.models-provider-keys > .models-provider-empty {
+  padding: 2px var(--models-gap-3) 12px 56px;
+  text-align: left;
 }
 
 .models-connection-actions {
@@ -268,13 +292,14 @@
 /* Provider credentials are one group: the add form and connected rows share
    an outer surface, while the controls retain their own quiet input fill. */
 .models-provider-key-form {
-  display: grid !important;
+  display: grid;
   grid-template-columns: minmax(170px, 0.65fr) minmax(220px, 1fr) auto;
   align-items: end;
-  gap: var(--models-gap-2) !important;
-  padding: 10px var(--models-gap-3) !important;
+  gap: var(--models-gap-2);
+  padding: 10px var(--models-gap-3);
   border: 0;
-  background: transparent;
+  border-top: 1px solid var(--border-weak-base);
+  background: color-mix(in srgb, var(--settings-surface-muted) 55%, transparent);
 }
 
 .models-key-field {
@@ -392,16 +417,18 @@
   border-radius: calc(var(--settings-radius-control) - 2px);
 }
 
-.models-default-controls {
-  display: grid;
-  width: min(440px, 100%);
-  min-width: 0;
-  grid-template-columns: minmax(190px, 1fr) minmax(120px, 0.58fr);
-  gap: var(--models-gap-1);
+.models-preference-row {
+  min-height: 60px;
+  gap: var(--models-gap-4);
+  padding: 10px var(--models-gap-3);
+  border: 0;
+  border-radius: var(--settings-radius-control);
 }
 
-.models-default-controls > [data-component="select"]:only-child {
-  grid-column: 1 / -1;
+.models-worker-control {
+  width: min(340px, 52%);
+  min-width: 220px;
+  margin-left: auto;
 }
 
 .settings-dialog .settings-models-panel .settings-defaults-card [data-slot="select-select-trigger"] {
@@ -411,7 +438,7 @@
   height: var(--models-control-height);
   border: 0;
   border-radius: var(--settings-radius-control);
-  background: transparent;
+  background: var(--settings-surface-muted);
   box-shadow: none;
 }
 
@@ -431,48 +458,12 @@
   gap: var(--models-gap-2);
 }
 
-.models-default-option__provider {
-  margin-left: auto;
-  overflow: hidden;
-  color: var(--text-weak);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.models-default-route-select[data-component="select-content"] {
-  min-width: 220px;
-}
-
 /* Catalog controls share one line when space allows, cutting visual height
    without shrinking any hit target. */
-.models-catalog-summary,
-.models-catalog-toolbar,
-.models-filter-group {
+.models-catalog-toolbar {
   display: flex;
   min-width: 0;
   align-items: center;
-}
-
-.models-catalog-summary {
-  justify-content: space-between;
-  gap: var(--models-gap-3);
-  min-height: 44px;
-  padding: 6px var(--models-gap-3);
-  border-radius: var(--settings-radius-control);
-  background: var(--settings-surface);
-}
-
-.models-catalog-summary__copy {
-  min-width: 0;
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.models-catalog-summary__copy > span {
-  font-variant-numeric: tabular-nums;
 }
 
 .models-catalog-disclosure {
@@ -490,8 +481,13 @@
 }
 
 .models-catalog-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   flex-wrap: wrap;
   gap: var(--models-gap-2);
+  padding: var(--models-gap-1) 0;
+  background: var(--settings-canvas);
 }
 
 .settings-dialog .settings-models-panel .models-catalog-toolbar .settings-control--search {
@@ -501,27 +497,8 @@
   background: var(--settings-surface-muted);
 }
 
-.models-filter-group {
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--settings-radius-control);
-  background: var(--settings-surface-muted);
-}
-
-.settings-dialog .settings-models-panel .settings-filter-pill {
-  min-height: 28px;
-  height: 28px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: calc(var(--settings-radius-control) - 2px);
-  background: transparent;
-}
-
-.settings-dialog .settings-models-panel .settings-filter-pill:hover,
-.settings-dialog .settings-models-panel .settings-filter-pill[aria-pressed="true"] {
-  background: var(--settings-surface-hover);
+.settings-dialog .settings-models-panel .models-catalog-toolbar .settings-control--menu {
+  flex: 0 0 auto;
 }
 
 .settings-dialog .settings-models-panel .settings-list-header {
@@ -586,17 +563,20 @@
 }
 
 .models-catalog-progress {
-  min-height: 36px;
+  min-height: 44px;
   margin: 0;
-  padding: 9px var(--models-gap-3);
+  padding: 6px var(--models-gap-3);
   color: var(--text-weaker);
   font-size: 11px;
   line-height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--models-gap-2);
   text-align: center;
 }
 
 @container settings-main (max-width: 700px) {
-  .models-routing__header,
   .models-routing__details {
     align-items: stretch;
     flex-direction: column;
@@ -628,15 +608,17 @@
   }
 
   .models-connection-row,
+  .models-provider-key-heading,
   .models-provider-row,
-  .settings-defaults-card > .settings-row {
+  .models-preference-row {
     align-items: flex-start;
+    flex-direction: column;
   }
 
   .models-connection-actions,
   .models-row-action,
   .models-provider-note,
-  .settings-defaults-card > .settings-row > :last-child {
+  .models-preference-row > :last-child {
     width: 100%;
     margin-left: 0;
     padding-left: 0;
@@ -657,9 +639,9 @@
     min-width: 0;
   }
 
-  .models-default-controls {
+  .models-worker-control {
     width: 100%;
-    grid-template-columns: 1fr;
+    min-width: 0;
   }
 
   .models-catalog-toolbar {
@@ -672,12 +654,9 @@
     flex-basis: auto;
   }
 
-  .models-filter-group {
+  .settings-dialog .settings-models-panel .models-catalog-toolbar .settings-control--menu {
     width: 100%;
-  }
-
-  .settings-dialog .settings-models-panel .settings-filter-pill {
-    flex: 1 1 auto;
+    justify-content: space-between;
   }
 }
 

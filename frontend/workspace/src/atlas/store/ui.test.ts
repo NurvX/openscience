@@ -220,10 +220,10 @@ describe("context pane state", () => {
     state.closeContext()
 
     expect(state.open()).toBe(false)
-    expect(state.context()).toBe("artifact")
+    expect(state.context()).toBe("files")
   })
 
-  test("keeps the active file selected while its Details view is open and after restore", () => {
+  test("redirects legacy Details requests to Files and preserves open files", () => {
     const storage = memoryStorage()
     const state = createContextState({ storage })
     state.activateScope("project-a", "session-a")
@@ -231,15 +231,13 @@ describe("context pane state", () => {
 
     state.openContext("artifact")
 
-    expect(state.context()).toBe("artifact")
-    expect(state.file()?.path).toBe("results/curve.csv")
-    expect(state.activeWorkTab()).toBe("view:artifact")
+    expect(state.context()).toBe("files")
+    expect(state.activeWorkTab()).toBe("view:files")
 
     const restored = createContextState({ storage })
     restored.activateScope("project-a", "session-a")
-    expect(restored.context()).toBe("artifact")
-    expect(restored.file()?.path).toBe("results/curve.csv")
-    expect(restored.activeWorkTab()).toBe("view:artifact")
+    expect(restored.context()).toBe("files")
+    expect(restored.activeWorkTab()).toBe("view:files")
   })
 
   test("opens project files in the contextual Files pane", () => {
@@ -312,7 +310,7 @@ describe("context pane state", () => {
     })
   })
 
-  test("closes artifact context when its active artifact disappears", () => {
+  test("ignores legacy artifact ownership changes", () => {
     const state = createContextState({ storage: memoryStorage() })
 
     state.openContext("artifact")
@@ -323,8 +321,8 @@ describe("context pane state", () => {
 
     state.syncArtifact(false)
 
-    expect(state.context()).toBe("artifact")
-    expect(state.open()).toBe(false)
+    expect(state.context()).toBe("files")
+    expect(state.open()).toBe(true)
   })
 
   test("returns to an existing tool tab when artifact ownership disappears", () => {

@@ -20,10 +20,8 @@ import { FilesPane } from "@/atlas/FilesPane"
 import { FileView } from "@/atlas/FilePreview"
 import { TerminalSurface } from "@/atlas/TerminalSurface"
 import { SessionTraceSurface } from "@/atlas/SessionTraceSurface"
-import { artifactContext } from "@/artifacts/context"
 import { useDialog } from "@synsci/ui/context/dialog"
 import { FileIcon } from "@synsci/ui/file-icon"
-import { ArtifactInspector } from "@/artifacts/ArtifactInspector"
 import { StoredArtifactView } from "@/artifacts/StoredArtifactView"
 import { confirmDialog } from "@/atlas/dialogs"
 import { discardFileDraft } from "@/atlas/file-drafts"
@@ -59,7 +57,7 @@ import "./right-pane-tabs.css"
 
 const RESIZE_STEP = 16
 const labels: Record<ContextTab, string> = {
-  artifact: "Artifact details",
+  artifact: "Files",
   files: "Files",
   terminal: "Terminal",
   canvas: "Synthetic Sciences",
@@ -68,7 +66,6 @@ const labels: Record<ContextTab, string> = {
 }
 
 export function RightPaneGate(props: { children: JSX.Element }): JSX.Element {
-  createEffect(() => uiStore.syncArtifact(Boolean(artifactContext.active())))
   const [terminal, setTerminal] = createSignal(uiStore.rightPaneOpen() && uiStore.context() === "terminal")
   createEffect(() => {
     if (!uiStore.rightPaneOpen() || uiStore.context() !== "terminal") return
@@ -230,7 +227,6 @@ export function RightPane(
   } = {},
 ): JSX.Element {
   const context = uiStore.context
-  const artifact = artifactContext.active
   const project = () => props.project ?? props.route ?? window.location.pathname
   const session = () => props.session ?? "new"
   const key = createMemo(() => paneWidthKey(project()))
@@ -576,9 +572,6 @@ export function RightPane(
               </div>
             </Show>
             <Switch>
-              <Match when={context() === "artifact" && artifact()}>
-                {(current) => <ArtifactInspector context={current()} />}
-              </Match>
               <Match when={context() === "files" && uiStore.saved()}>
                 {(current) => <StoredArtifactView artifact={current()} />}
               </Match>

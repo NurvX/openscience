@@ -59,7 +59,6 @@ import {
 import { StatusDot } from "@/atlas/shared/StatusDot"
 import { IconTrash } from "@/atlas/shared/Icon"
 import { toast } from "@/atlas/Toast"
-import { artifactContext } from "@/artifacts/context"
 import { createSessionTabs } from "@/atlas/store/sessionTabs"
 import { terminalEndpointAvailable } from "@/atlas/terminal-endpoint"
 import { productPreferences, type ProductPreferences } from "@/context/product-preferences"
@@ -161,7 +160,10 @@ export default function Page(): JSX.Element {
   const hydrateSession = (id: string) => {
     const pending = hydration.get(id)
     if (pending) return pending
-    const request = sync.session.sync(id).finally(() => hydration.delete(id))
+    // The global event stream cannot replay parts emitted while this route was
+    // inactive. Reconcile the active transcript once on every route entry;
+    // ordinary/background sync calls retain their cache fast path.
+    const request = sync.session.sync(id, { refresh: true }).finally(() => hydration.delete(id))
     hydration.set(id, request)
     return request
   }
@@ -644,17 +646,6 @@ export default function Page(): JSX.Element {
         category: "Project",
         onSelect: () => openContext("kernels"),
       },
-      ...(artifactContext.active()
-        ? [
-            {
-              id: "file.details",
-              title: "Open file details",
-              description: "Inspect the active file and its provenance",
-              category: "Project",
-              onSelect: () => openContext("artifact"),
-            } satisfies CommandOption,
-          ]
-        : []),
       {
         id: "settings.open",
         title: "Open settings",
@@ -1003,7 +994,6 @@ export default function Page(): JSX.Element {
           }}
           context={uiStore.context()}
           contextOpen={uiStore.open()}
-          artifact={Boolean(artifactContext.active())}
           onSelect={(id) => {
             setMobileSessionsOpen(false)
             sessionTabs.open(id)
@@ -1490,7 +1480,6 @@ function SessionsSidebar(props: {
   onContext: (context: SessionContext) => void
   context: SessionContext
   contextOpen: boolean
-  artifact: boolean
   onSelect: (id: string) => void
   onWarm: (id: string) => void
   onDelete: (id: string) => void
@@ -1643,7 +1632,6 @@ function SessionsSidebar(props: {
         <SessionSidebarActions
           context={props.context}
           contextOpen={props.contextOpen}
-          artifact={props.artifact}
           onContext={props.onContext}
         />
       </nav>

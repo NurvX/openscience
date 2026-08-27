@@ -52,4 +52,18 @@ describe("exact model access route resolution", () => {
     expect(resolveModelAccessRoute({ routes, billing: "managed", current: chatgpt })).toBe(chatgpt)
     expect(resolveModelAccessRoute({ routes, billing: null, current: managed })).toBe(managed)
   })
+
+  test("worker choices retain the saved exact route while new choices follow the active billing mode", () => {
+    const savedWorker = resolveModelAccessRoute({
+      routes: [managed, byok, chatgpt],
+      billing: "managed",
+      current: chatgpt,
+    })
+    const newManagedChoice = resolveModelAccessRoute({ routes: [managed, byok, chatgpt], billing: "managed" })
+    const newByokChoice = resolveModelAccessRoute({ routes: [managed, byok, chatgpt], billing: "byok" })
+
+    expect(savedWorker).toBe(chatgpt)
+    expect(newManagedChoice).toBe(managed)
+    expect(newByokChoice).toBe(byok)
+  })
 })

@@ -42,12 +42,12 @@ test("lives in a project-owned sibling frame instead of the session route", () =
   expect(styles).not.toContain(".project-workspace-frame")
 })
 
-test("artifact context keeps the pane header as its only close or back action", () => {
+test("keeps artifact details and provenance out of the right pane", () => {
   const source = read("./RightPane.tsx")
 
   expect(source).toContain('aria-label={narrow() ? "Back to conversation" : "Close context"}')
-  expect(source).toContain("<ArtifactInspector context={current()} />")
-  expect(source).not.toContain("<ArtifactInspector context={current()} onClose=")
+  expect(source).not.toContain("ArtifactInspector")
+  expect(source).not.toContain("Artifact details")
   expect(source).not.toContain("onDirtyChange={(dirty) => markDirty(tab.id, dirty)}\n                      onClose=")
 })
 
@@ -69,9 +69,8 @@ test("gives contextual work tabs recognizable icons without collapsing the horiz
 
   expect(source).toContain("function workTabIcon(tab: WorkTab)")
   expect(source).toContain('class="inspector-tab__icon"')
-  expect(source).toContain("<IconBookOpen")
-  expect(source).toContain("<IconTable")
-  expect(source).toContain("<IconBraces")
+  expect(source).toContain("<FileIcon")
+  expect(source).toContain("<IconArchive")
   expect(source).toContain("<IconCpu")
   expect(source).toContain('canvas: "Synthetic Sciences"')
   expect(styles).toContain(".inspector-tab__icon")

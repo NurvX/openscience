@@ -12,9 +12,11 @@ import { Flag } from "@/flag/flag"
 import { OpenScience } from "@/openscience"
 import { ProjectTrust } from "@/project/trust"
 import { CredentialProcessLedger } from "@/credentials/process-ledger"
+import { withTimeout } from "@/util/timeout"
 
 export namespace LSP {
   const log = Log.create({ service: "lsp" })
+  const TOUCH_STARTUP_TIMEOUT_MS = 5_000
 
   async function completeProcess(id: string) {
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -411,9 +413,23 @@ export namespace LSP {
     return false
   }
 
-  export async function touchFile(input: string, waitForDiagnostics?: boolean) {
+  export async function touchFile(
+    input: string,
+    waitForDiagnostics?: boolean,
+    options?: { startupTimeoutMs?: number },
+  ) {
     log.info("touching file", { file: input })
-    const clients = await getClients(input)
+    // File reads and writes are the primary operation; installing or starting
+    // an optional language server is not. In particular, a stalled release
+    // download must never leave an already-committed edit permanently
+    // "running". The spawn continues in the shared LSP state and later calls
+    // can use it, while this notification settles promptly without diagnostics.
+    const clients = await withTimeout(getClients(input), options?.startupTimeoutMs ?? TOUCH_STARTUP_TIMEOUT_MS).catch(
+      (err) => {
+        log.warn("language server was not ready before file notification timeout", { err, file: input })
+        return [] as LSPClient.Info[]
+      },
+    )
     await Promise.all(
       clients.map(async (client) => {
         const wait = waitForDiagnostics ? client.waitForDiagnostics({ path: input }) : Promise.resolve()

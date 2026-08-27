@@ -101,8 +101,7 @@ export function RemoteJobCard(props: { job: Job }): JSX.Element {
           <small role="status">{billing(props.job)}</small>
         </Show>
       </div>
-      <div class="compute-row__request" aria-label="Requested resources">
-        <small>Requested</small>
+      <div class="compute-row__telemetry compute-row__telemetry--request" aria-label="Requested resources">
         <span>{resources(props.job)}</span>
       </div>
     </article>

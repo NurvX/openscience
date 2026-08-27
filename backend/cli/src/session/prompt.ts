@@ -64,6 +64,7 @@ import { assertExternalDirectory } from "@/tool/external-directory"
 import { CommandRuntime } from "@/science/command/registry"
 import { ExecutionAuthority } from "@/project/execution"
 import { AuthoritySignal } from "@/project/authority-signal"
+import { ProjectAccess } from "@/project/access"
 import { Sandbox } from "@/sandbox/sandbox"
 import { BashTool } from "@/tool/bash"
 import { SessionResearch } from "./research"
@@ -625,6 +626,50 @@ export namespace SessionPrompt {
     return changed.some(Boolean)
   }
 
+  /**
+   * A backend exit can leave an ordinary tool part durably pending/running
+   * even though no executor still owns it. Close that wrapper before the next
+   * provider turn so the transcript, session status, and model context agree.
+   * Task calls are excluded because their separate durable-attempt recovery
+   * can still produce an authoritative child handoff after a parent restart.
+   */
+  async function recoverInterruptedTools(messages: MessageV2.WithParts[]) {
+    let changed = false
+    for (const message of messages) {
+      if (message.info.role !== "assistant") continue
+      let repaired = false
+      for (const part of message.parts) {
+        if (part.type !== "tool" || part.tool === TaskTool.id) continue
+        if (part.state.status !== "pending" && part.state.status !== "running") continue
+        const now = Date.now()
+        const start = part.state.status === "running" ? part.state.time.start : now
+        await Session.updatePart({
+          ...part,
+          state: {
+            status: "error",
+            input: part.state.input,
+            raw: part.state.raw,
+            metadata: part.state.status === "running" ? part.state.metadata : undefined,
+            error:
+              "Tool execution was interrupted before completion. Its side effects may have completed; inspect the current state before retrying.",
+            time: { start, end: Math.max(start, now) },
+          },
+        } satisfies MessageV2.ToolPart)
+        repaired = true
+        changed = true
+      }
+      if (repaired && !message.info.finish) {
+        const now = Date.now()
+        await Session.updateMessage({
+          ...message.info,
+          finish: "tool-calls",
+          time: { ...message.info.time, completed: Math.max(message.info.time.created, now) },
+        })
+      }
+    }
+    return changed
+  }
+
   function pendingTaskContinuation(messages: MessageV2.WithParts[]) {
     for (let index = messages.length - 1; index >= 0; index--) {
       const wrapper = messages[index]
@@ -678,7 +723,9 @@ export namespace SessionPrompt {
     )
     const repaired = incomplete.length ? await Session.messages({ sessionID }) : initial
     const task = await recoverTaskAttempts(session, repaired)
-    const reconciled = task ? await Session.messages({ sessionID }) : repaired
+    const taskReconciled = task ? await Session.messages({ sessionID }) : repaired
+    const interruptedTools = await recoverInterruptedTools(taskReconciled)
+    const reconciled = interruptedTools ? await Session.messages({ sessionID }) : taskReconciled
     const continued = await recoverTaskContinuation(reconciled)
     const durable = continued ? await Session.messages({ sessionID }) : reconciled
     const recovered = SessionLoopState.restore(durable)
@@ -1685,6 +1732,33 @@ export namespace SessionPrompt {
     }
   }
 
+  export async function permissionAtExecution(input: {
+    agent: Agent.Info
+    session: Session.Info
+    authority: Pick<ProjectAccess.Status, "revision" | "trustRevision">
+    permission: PermissionNext.Ruleset
+  }) {
+    const current = await ProjectAccess.status(Instance.project)
+    if (
+      current.revision === input.authority.revision &&
+      current.trustRevision === input.authority.trustRevision
+    ) {
+      return { authority: current, permission: input.permission }
+    }
+    // Access/trust changes invalidate the memoized agent definitions. Re-read
+    // both policies at the execution boundary so a tool advertised under Full
+    // access cannot retain that stale allow after the user narrows the project.
+    Agent.invalidate()
+    const [agent, session] = await Promise.all([
+      Agent.get(input.agent.name),
+      Session.get(input.session.id).catch(() => input.session),
+    ])
+    return {
+      authority: current,
+      permission: PermissionNext.merge(agent?.permission ?? input.agent.permission, session.permission ?? []),
+    }
+  }
+
   async function resolveTools(input: {
     agent: Agent.Info
     model: Provider.Model
@@ -1703,7 +1777,20 @@ export namespace SessionPrompt {
     using _ = log.time("resolveTools")
     const tools: Record<string, AITool> = {}
     if (input.direct) return tools
-    const permission = PermissionNext.merge(input.agent.permission, input.session.permission ?? [])
+    let accessAuthority = await ProjectAccess.status(Instance.project)
+    let permission = PermissionNext.merge(input.agent.permission, input.session.permission ?? [])
+
+    async function currentPermission() {
+      const refreshed = await permissionAtExecution({
+        agent: input.agent,
+        session: input.session,
+        authority: accessAuthority,
+        permission,
+      })
+      permission = refreshed.permission
+      accessAuthority = refreshed.authority
+      return permission
+    }
 
     const context = (args: any, options: ToolCallOptions): Tool.Context => ({
       sessionID: input.session.id,
@@ -1726,7 +1813,7 @@ export namespace SessionPrompt {
           ...req,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
+          ruleset: await currentPermission(),
         })
       },
     })

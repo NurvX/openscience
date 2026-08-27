@@ -165,6 +165,10 @@ const authoritySync = Instance.state(
           }
           if (event.kind === "access") {
             if (event.projectID !== projectID) return false
+            if (event.narrowing === false) {
+              await Promise.all([invalidateProjectExecutionCaches(), invalidateProjectTokenCache(projectID)])
+              return true
+            }
             const jobs = import("../compute/jobs").then((module) => module.ComputeJobs.cancelProject(projectID))
             const biology = BiologyKernelLifecycle.releaseProject(projectID)
             await Promise.all([
@@ -299,7 +303,14 @@ export async function InstanceBootstrap() {
     ])
   })
 
-  Bus.subscribe(ProjectAccess.Event.Changed, async () => {
+  Bus.subscribe(ProjectAccess.Event.Changed, async (payload) => {
+    if (!payload.properties.narrowing) {
+      await Promise.all([
+        invalidateProjectExecutionCaches(),
+        invalidateProjectTokenCache(Instance.project.id),
+      ])
+      return
+    }
     const jobs = import("../compute/jobs").then((module) => module.ComputeJobs.cancelProject(Instance.project.id))
     const biology = BiologyKernelLifecycle.releaseProject(Instance.project.id)
     await Promise.all([

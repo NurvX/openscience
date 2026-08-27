@@ -163,13 +163,10 @@ export namespace ToolSelection {
     // capability. Keep it available for explicit Atlas work without letting
     // unrelated scientific prompts wander into a retired service path.
     if (tool === "atlas" || tool === "atlas_record") return Boolean(message && /\batlas\b/i.test(message))
-    if (tool.startsWith("provenance_"))
-      return Boolean(
-        message &&
-          /\b(?:(?:record|query|save|track)\s+(?:(?:the|this|source)\s+)?(?:lineage|provenance)|(?:lineage|provenance)\s+(?:record|query|tracking))\b/i.test(
-            message,
-          ),
-      )
+    // Provenance remains an internal integrity primitive. It is deliberately
+    // absent from the user-facing Research tool surface; Results and ordinary
+    // files are the product-facing record.
+    if (tool.startsWith("provenance_")) return false
     if (core.has(tool)) return true
 
     const text = message ?? ""

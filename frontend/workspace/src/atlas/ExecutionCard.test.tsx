@@ -69,7 +69,7 @@ const mount = (view: () => JSX.Element) => {
 }
 
 describe("execution activity card", () => {
-  test("leads with the readable result and keeps code, logs, files, and provenance collapsed", () => {
+  test("leads with the readable result and keeps technical details collapsed", () => {
     const host = mount(() => subject.ExecutionCard({ run }))
     const card = host.querySelector<HTMLElement>(".execution-card")!
     const disclosures = Array.from(card.querySelectorAll<HTMLDetailsElement>("details"))
@@ -84,6 +84,7 @@ describe("execution activity card", () => {
       "Run details",
     ])
     expect(disclosures.every((item) => item.open === false)).toBe(true)
-    expect(card.querySelector('[data-mono="true"]')?.textContent).toContain("provenance-private")
+    expect(card.textContent).not.toContain("provenance-private")
+    expect(card.textContent).not.toContain("Provenance")
   })
 })

@@ -68,7 +68,7 @@ describe("kernel tracker row", () => {
     )
     expect(host.querySelector('[data-metric="memory"]')?.textContent).toContain("412 MB RSS")
     expect(host.querySelector('[data-metric="cpu"]')?.textContent).toContain("1.8 cores")
-    expect(host.querySelectorAll("svg")).toHaveLength(3)
+    expect(host.querySelectorAll("svg")).toHaveLength(1)
     expect(host.querySelector("button, details, summary, pre, code")).toBeNull()
   })
 
