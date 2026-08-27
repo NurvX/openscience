@@ -1735,6 +1735,22 @@ export namespace Config {
     })
   }
 
+  /**
+   * Config.updateGlobal is also the narrow write path for model selection and
+   * billing-route changes. Those values are consumed through Config.state (and
+   * Provider's separately invalidated memo), so the revision above is enough
+   * to make them visible immediately. Tearing down every project for these
+   * patches would interrupt active turns and reject unrelated approvals.
+   *
+   * Keep the allow-list deliberately small: MCP, provider definitions,
+   * plugins, permissions, sandboxing, formatters, LSP, and other runtime
+   * configuration still require the normal full instance rebuild.
+   */
+  function canPreserveInstances(config: Info) {
+    const refreshOnly = new Set<keyof Info>(["billing", "model", "small_model"])
+    return Object.keys(config).every((key) => refreshOnly.has(key as keyof Info))
+  }
+
   async function patchConfigPath(scope: Scope, target: string[], value: unknown) {
     const filepath = scope === "global" ? globalConfigFile() : projectConfigFile()
     const before = await Bun.file(filepath)
@@ -1917,7 +1933,9 @@ export namespace Config {
     })()
 
     global.reset()
-    await disposeGlobalInstances(options)
+    await disposeGlobalInstances({
+      preserveInstances: options.preserveInstances ?? canPreserveInstances(config),
+    })
 
     return next
   }

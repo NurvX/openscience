@@ -932,11 +932,11 @@ async function executePython(params: PythonInput, ctx: Tool.Context, compatibili
 
 const PythonDefinition: Awaited<ReturnType<Tool.Info<typeof PythonParameters>["init"]>> = {
   description: [
-    "Run Python in one long-lived managed process per conversation and environment. State persists across calls but is isolated from child conversations and other environments.",
+    "Run Python in one long-lived managed process per conversation and selected environment. State persists across calls; child conversations and other environments are isolated.",
     "Treat state as working memory, not reproducibility. Save code, inputs, parameters, and outputs for material results; clean-rerun when practical.",
     "`environment` defaults to the shared Python starter. Approved package changes can create named machine-wide environments reusable across projects.",
     "Set a concise `title`; set `source` for script-backed work. `action: stop` clears that environment.",
-    "Prefer this over `bash python`. Submit pip changes separately with sys.executable + subprocess; approval is required and success restarts the environment.",
+    "Prefer this over `bash python`. Submit pip changes separately with sys.executable + subprocess; approval is required and will automatically restart this environment after success.",
     "Execution starts in Session scratch, so relative outputs stay there. Approved Project paths support durable edits; other external paths remain sandboxed.",
     "np, pd, scipy, and plt load lazily; final expressions return and matplotlib figures become inline PNGs.",
   ].join("\n"),

@@ -31,6 +31,7 @@ import { Config } from "../../src/config/config"
 import { BillingSettingsRoutes } from "../../src/server/routes/settings/billing"
 import { Global } from "../../src/global"
 import { GlobalBus } from "../../src/bus/global"
+import { PermissionNext } from "../../src/permission/next"
 import path from "path"
 import fs from "fs/promises"
 
@@ -846,6 +847,13 @@ describe("billing PUT invalidates the provider cache — no restart needed", () 
 describe("global config writes invalidate the provider cache before announcing", () => {
   test("a listener that refetches on global.disposed sees the map rebuilt under the new config", async () => {
     await using tmp = await tmpdir({ config: {} })
+    let disposed = 0
+    const runtimeState = Instance.state(
+      () => ({}),
+      async () => {
+        disposed++
+      },
+    )
     try {
       await Instance.provide({
         directory: tmp.path,
@@ -857,9 +865,20 @@ describe("global config writes invalidate the provider cache before announcing",
           Provider.invalidate()
         },
         fn: async () => {
+          const activeRuntime = runtimeState()
           // Prime the module-level memo the way a long-running server has it
           // primed before the user ever opens Settings.
           expect((await Provider.list())["anthropic"]).toBeDefined()
+
+          const pending = PermissionNext.ask({
+            id: "permission_config_refresh",
+            sessionID: "session_config_refresh",
+            permission: "bash",
+            patterns: ["ls"],
+            metadata: {},
+            always: [],
+            ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+          }).catch((error) => error)
 
           // Stand in for the SPA's `global.disposed` handler, which fires
           // GET /provider the moment the event arrives. GlobalBus.emit
@@ -878,6 +897,10 @@ describe("global config writes invalidate the provider cache before announcing",
             GlobalBus.off("event", listener)
           }
 
+          const request = (await PermissionNext.list()).find((item) => item.id === "permission_config_refresh")
+          if (request) await PermissionNext.reply({ requestID: request.id, reply: "reject" })
+          const pendingResult = await pending
+
           expect(observed).toBeDefined()
           // The map is rebuilt before announcement: direct Anthropic stays
           // direct while the managed credit-spending route is OpenRouter.
@@ -886,6 +909,10 @@ describe("global config writes invalidate the provider cache before announcing",
           expect(refetched["anthropic"].source).toBe("env")
           expect(refetched["openrouter"]).toBeDefined()
           expect(refetched["openrouter"].source).toBe("managed")
+          expect(runtimeState()).toBe(activeRuntime)
+          expect(disposed).toBe(0)
+          expect(request).toBeDefined()
+          expect(pendingResult).toBeInstanceOf(PermissionNext.RejectedError)
         },
       })
     } finally {
@@ -928,6 +955,33 @@ describe("global config writes invalidate the provider cache before announcing",
           expect(after["anthropic"].source).toBe("env")
           expect(after["openrouter"]).toBeDefined()
           expect(after["openrouter"].source).toBe("managed")
+        },
+      })
+    } finally {
+      for (const name of ["openscience.json", "openscience.jsonc", "config.json"]) {
+        await fs.rm(path.join(Global.Path.config, name), { force: true }).catch(() => {})
+      }
+      Config.global.reset()
+      Provider.invalidate()
+    }
+  })
+
+  test("runtime-affecting global patches still rebuild project instances", async () => {
+    await using tmp = await tmpdir({ config: {} })
+    let disposed = 0
+    const runtimeState = Instance.state(
+      () => ({}),
+      async () => {
+        disposed++
+      },
+    )
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          runtimeState()
+          await Config.updateGlobal({ plugin: [] })
+          expect(disposed).toBe(1)
         },
       })
     } finally {

@@ -507,9 +507,13 @@ test("ask - returns pending promise when action is ask", async () => {
         always: [],
         ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
       })
+      const settled = promise.catch((error) => error)
       // Promise should be pending, not resolved
       expect(promise).toBeInstanceOf(Promise)
-      // Don't await - just verify it returns a promise
+      const request = (await PermissionNext.list()).find((item) => item.sessionID === "session_test")
+      expect(request).toBeDefined()
+      await PermissionNext.reply({ requestID: request!.id, reply: "reject" })
+      expect(await settled).toBeInstanceOf(PermissionNext.RejectedError)
     },
   })
 })
