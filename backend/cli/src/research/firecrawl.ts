@@ -82,9 +82,7 @@ export namespace FirecrawlSearch {
             excludeDomains: input.exclude_domains,
             timeout: timeoutMs,
             ignoreInvalidURLs: true,
-            ...(input.content === "top"
-              ? { scrapeOptions: { formats: ["markdown"], onlyMainContent: true } }
-              : {}),
+            ...(input.content === "top" ? { scrapeOptions: { formats: ["markdown"], onlyMainContent: true } } : {}),
           }),
           signal: AbortSignal.any([options.signal, timeoutController.signal]),
         }),

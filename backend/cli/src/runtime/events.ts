@@ -501,8 +501,12 @@ export namespace RuntimeEvents {
 
     const identity = await ProcessIdentity.capture(process.pid)
     if (!identity) throw new Error("Could not capture the runtime server process identity")
-    const local = active === runID && current.activeOwner?.pid === process.pid && current.activeOwner.identity === identity
-    if (!local && (!current.activeOwner || !(await ProcessIdentity.owns(current.activeOwner.pid, current.activeOwner.identity)))) {
+    const local =
+      active === runID && current.activeOwner?.pid === process.pid && current.activeOwner.identity === identity
+    if (
+      !local &&
+      (!current.activeOwner || !(await ProcessIdentity.owns(current.activeOwner.pid, current.activeOwner.identity)))
+    ) {
       return cancel(input)
     }
 

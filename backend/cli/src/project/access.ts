@@ -167,8 +167,7 @@ export namespace ProjectAccess {
             projectID: project.id,
             mode: parsed.mode,
             narrowing,
-          })) ??
-          (await AuthoritySignal.pending({ kind: "access", projectID: project.id, mode: parsed.mode }))
+          })) ?? (await AuthoritySignal.pending({ kind: "access", projectID: project.id, mode: parsed.mode }))
         if (!pending) return next
         await Bus.publish(Event.Changed, { status: next, narrowing })
         await AuthoritySignal.settle(pending)

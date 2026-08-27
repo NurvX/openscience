@@ -159,9 +159,7 @@ describe("SessionSidebarActions", () => {
     expect(button(selected, "Open project terminal")).not.toBeNull()
     expect(button(selected, "Open Evidence")).toBeNull()
 
-    const files = mount(() => (
-      <subject.SessionSidebarActions context="files" contextOpen={true} onContext={() => {}} />
-    ))
+    const files = mount(() => <subject.SessionSidebarActions context="files" contextOpen={true} onContext={() => {}} />)
     expect(button(files, "Open project files")?.getAttribute("aria-pressed")).toBe("true")
     expect(button(files, "Open Gateway")).toBeNull()
   })

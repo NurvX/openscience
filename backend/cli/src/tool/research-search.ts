@@ -289,10 +289,7 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
           return fallback(
             input,
             ctx,
-            fallbackWarnings(
-              response.body,
-              "Ace managed search was unavailable. Community search was used.",
-            ).join(" "),
+            fallbackWarnings(response.body, "Ace managed search was unavailable. Community search was used.").join(" "),
           )
         }
         // A mixed-version service may still report the retired paid-search
@@ -303,10 +300,7 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
           return fallback(
             input,
             ctx,
-            fallbackWarnings(
-              response.body,
-              "Ace managed search was unavailable. Community search was used.",
-            ).join(" "),
+            fallbackWarnings(response.body, "Ace managed search was unavailable. Community search was used.").join(" "),
           )
         }
         if (response.status >= 500 || code === "operation_in_progress") {
@@ -328,10 +322,7 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
           }
         }
         if (response.status === 429) {
-          const reason =
-            typeof failure?.message === "string"
-              ? failure.message
-              : "Enhanced search is rate limited."
+          const reason = typeof failure?.message === "string" ? failure.message : "Enhanced search is rate limited."
           return community(input, ctx, fallbackWarnings(response.body, `${reason} Community search was used.`))
         }
         if (response.status >= 400) {

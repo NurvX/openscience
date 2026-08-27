@@ -305,10 +305,7 @@ export async function InstanceBootstrap() {
 
   Bus.subscribe(ProjectAccess.Event.Changed, async (payload) => {
     if (!payload.properties.narrowing) {
-      await Promise.all([
-        invalidateProjectExecutionCaches(),
-        invalidateProjectTokenCache(Instance.project.id),
-      ])
+      await Promise.all([invalidateProjectExecutionCaches(), invalidateProjectTokenCache(Instance.project.id)])
       return
     }
     const jobs = import("../compute/jobs").then((module) => module.ComputeJobs.cancelProject(Instance.project.id))

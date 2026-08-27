@@ -37,4 +37,3 @@ Evidence bundle:
 - Runtime cancellation tests: 25 passed.
 - Tool-selection and cadence-runner tests: 36 passed.
 - Backend TypeScript check and `git diff --check` passed.
-

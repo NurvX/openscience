@@ -26,7 +26,8 @@ const source: Record<DevPromptID, { title: string; text: string }> = {
 export function devPrompt(id: string) {
   const normalized = id.toUpperCase() as DevPromptID
   const prompt = source[normalized]
-  if (!prompt) throw new Error(`Unknown prompt ${id}. Use ${DEV_PROMPT_IDS.join(", ").replace(/, ([^,]+)$/, ", or $1")}.`)
+  if (!prompt)
+    throw new Error(`Unknown prompt ${id}. Use ${DEV_PROMPT_IDS.join(", ").replace(/, ([^,]+)$/, ", or $1")}.`)
   const ordinal = Number(normalized.slice(1))
   const sha256 = new Bun.CryptoHasher("sha256").update(prompt.text).digest("hex")
   return {

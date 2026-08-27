@@ -1629,11 +1629,7 @@ function SessionsSidebar(props: {
           <ProjectTrustControl />
         </div>
 
-        <SessionSidebarActions
-          context={props.context}
-          contextOpen={props.contextOpen}
-          onContext={props.onContext}
-        />
+        <SessionSidebarActions context={props.context} contextOpen={props.contextOpen} onContext={props.onContext} />
       </nav>
 
       <Show when={!props.collapsed && !compact()}>

@@ -13,7 +13,7 @@ describe("Modal permission card", () => {
     expect(component).toContain('i18n.t("ui.permission.required")')
     expect(component).toContain('i18n.t("ui.permission.chooseScope")')
     expect(component).toContain('typeof query === "string" && query.trim()')
-    expect(component).toContain('title={value()}')
+    expect(component).toContain("title={value()}")
     expect(component).toContain('role="group"')
     expect(component).toContain('aria-expanded="false"')
     expect(css).toContain("min-height: 44px")

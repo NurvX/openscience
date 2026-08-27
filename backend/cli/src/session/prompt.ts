@@ -1739,10 +1739,7 @@ export namespace SessionPrompt {
     permission: PermissionNext.Ruleset
   }) {
     const current = await ProjectAccess.status(Instance.project)
-    if (
-      current.revision === input.authority.revision &&
-      current.trustRevision === input.authority.trustRevision
-    ) {
+    if (current.revision === input.authority.revision && current.trustRevision === input.authority.trustRevision) {
       return { authority: current, permission: input.permission }
     }
     // Access/trust changes invalidate the memoized agent definitions. Re-read

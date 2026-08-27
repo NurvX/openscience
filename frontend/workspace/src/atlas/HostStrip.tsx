@@ -31,7 +31,9 @@ export function HostStrip(props: HostStripProps = {}): JSX.Element {
   const memoryTotal = createMemo(() =>
     reading().memory === "memory unavailable"
       ? reading().memory
-      : reading().memory.replace(/^of /, "/ ").replace(/ memory$/, ""),
+      : reading()
+          .memory.replace(/^of /, "/ ")
+          .replace(/ memory$/, ""),
   )
   const refresh = () => {
     if (document.hidden || data.loading) return

@@ -240,18 +240,10 @@ function restoreState(value: unknown): ContextState {
     .map(restoreWorkTab)
     .filter((item): item is WorkTab => item !== undefined)
     .filter((item, index, all) => all.findIndex((other) => other.id === item.id) === index)
-  const fallback = [
-    ...(row.open === true || file || files.length > 0 ? [viewTab(tab)] : []),
-    ...files.map(fileTab),
-  ]
+  const fallback = [...(row.open === true || file || files.length > 0 ? [viewTab(tab)] : []), ...files.map(fileTab)]
   const requested = typeof row.activeWorkTab === "string" ? row.activeWorkTab : undefined
   const requestedTab = restoredTabs.find((item) => item.id === requested)
-  const restoredOwner =
-    requestedTab?.kind === "view"
-      ? requestedTab.context
-      : requestedTab
-        ? "files"
-        : tab
+  const restoredOwner = requestedTab?.kind === "view" ? requestedTab.context : requestedTab ? "files" : tab
   const owner = restoredOwner === "artifact" ? "files" : restoredOwner
   // Keep every contextual surface mounted. Older sessions can be missing the
   // owning view tab, so add only that tab while preserving the restored strip.

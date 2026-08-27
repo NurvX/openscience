@@ -357,7 +357,9 @@ export default function Models() {
                             </Show>
                             <span class="min-w-0 truncate">{entry().label}</span>
                             <Show when={entry().provider}>
-                              {(provider) => <span class="shrink-0 text-10-regular text-text-weaker">· {provider()}</span>}
+                              {(provider) => (
+                                <span class="shrink-0 text-10-regular text-text-weaker">· {provider()}</span>
+                              )}
                             </Show>
                           </span>
                         )}

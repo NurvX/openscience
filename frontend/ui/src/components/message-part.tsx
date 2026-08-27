@@ -192,12 +192,7 @@ function PermissionActions(props: { respond: (response: PermissionReply) => void
                   <Button variant="ghost" size="small" onClick={() => props.respond("reject")}>
                     {i18n.t("ui.permission.deny")}
                   </Button>
-                  <Button
-                    variant="secondary"
-                    size="small"
-                    aria-expanded="false"
-                    onClick={() => setScopes(true)}
-                  >
+                  <Button variant="secondary" size="small" aria-expanded="false" onClick={() => setScopes(true)}>
                     {i18n.t("ui.permission.allow")}
                   </Button>
                   <Button variant="primary" size="small" onClick={() => props.respond("once")}>

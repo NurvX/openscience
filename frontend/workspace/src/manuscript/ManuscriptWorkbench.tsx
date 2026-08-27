@@ -211,11 +211,7 @@ export function ManuscriptWorkbench(props: {
     }
     openReview()
   }
-  const mutatePreflight = async (
-    action: "run" | "finalize",
-    route: string,
-    body: Record<string, unknown>,
-  ) => {
+  const mutatePreflight = async (action: "run" | "finalize", route: string, body: Record<string, unknown>) => {
     if (preflightAction()) return false
     setPreflightAction(action)
     const response = await sdk
@@ -731,7 +727,11 @@ function PreflightControls(props: {
       <Show when={report()}>
         {(current) => (
           <div style={{ display: "flex", "align-items": "center", gap: "5px", "flex-wrap": "wrap" }}>
-            <PreflightMetric label="blocking" value={current().summary.blocking} alert={current().summary.blocking > 0} />
+            <PreflightMetric
+              label="blocking"
+              value={current().summary.blocking}
+              alert={current().summary.blocking > 0}
+            />
             <PreflightMetric label="major" value={current().summary.major} />
             <PreflightMetric label="minor" value={current().summary.minor} />
             <PreflightMetric label="closed" value={current().summary.resolved + current().summary.overridden} />
