@@ -78,6 +78,19 @@ function completedSkillLoad(entry: ResearchTraceEntry): entry is CompletedSkillE
   })
 }
 
+function completedSkillSearch(entry: ResearchTraceEntry): entry is CompletedSkillEntry {
+  if (entry.part.type !== "tool" || entry.part.tool !== "skill" || entry.part.state.status !== "completed") return false
+  const input = (entry.part.state.input ?? {}) as Record<string, unknown>
+  return !completedSkillLoad(entry) && (typeof input.query === "string" || typeof input.category === "string")
+}
+
+function skillMatches(entry: CompletedSkillEntry) {
+  const metadata = (entry.part.state.metadata ?? {}) as Record<string, unknown>
+  return Array.isArray(metadata.matches)
+    ? metadata.matches.filter((name): name is string => typeof name === "string" && !!name)
+    : []
+}
+
 /**
  * Keep the primary activity transcript literal and chronological. Streaming
  * state changes must not replace already-visible rows with aggregate summaries;
@@ -97,6 +110,34 @@ export function visibleResearchTrace(entries: ResearchTraceEntry[]): ResearchTra
   const result: ResearchTraceEntry[] = []
   for (let index = 0; index < visible.length; index++) {
     const first = visible[index]!
+    if (completedSkillSearch(first)) {
+      const group: CompletedSkillEntry[] = [first]
+      while (index + 1 < visible.length) {
+        const next = visible[index + 1]!
+        if (!completedSkillSearch(next)) break
+        group.push(next)
+        index++
+      }
+      if (group.length === 1) {
+        result.push(first)
+        continue
+      }
+      const matches = [...new Set(group.flatMap(skillMatches))]
+      result.push({
+        message: first.message,
+        part: {
+          ...first.part,
+          state: {
+            ...first.part.state,
+            title: "Skill matches",
+            input: { query: "relevant scientific capabilities" },
+            output: matches.map((name) => `- ${name}`).join("\n"),
+            metadata: { matches },
+          },
+        },
+      })
+      continue
+    }
     if (!completedSkillLoad(first)) {
       result.push(first)
       continue
