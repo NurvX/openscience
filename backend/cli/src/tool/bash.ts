@@ -343,6 +343,13 @@ export const BashTool = Tool.define("bash", async () => {
         sessionID: ctx.sessionID,
         capability: "shell",
       })
+      // Starter discovery/provisioning may take minutes on first use and does
+      // not execute project code. Resolve it before the global spawn lease;
+      // the generation check below still rejects any authority change before
+      // the subprocess is created. This keeps independent shell launches from
+      // timing out behind environment maintenance.
+      const runtime = await KernelEnvironmentMutation.pythonRuntime("python")
+      if (runtime.env?.PIP_TARGET) readable.add(runtime.env.PIP_TARGET)
 
       const started = Date.now()
       const streams = { stdout: "", stderr: "" }
@@ -391,8 +398,6 @@ export const BashTool = Tool.define("bash", async () => {
         if (current.generation !== prepared.generation) {
           throw new Error("Execution authority changed while the shell command was being prepared; retry it")
         }
-        const runtime = await KernelEnvironmentMutation.pythonRuntime("python")
-        if (runtime.env?.PIP_TARGET) readable.add(runtime.env.PIP_TARGET)
         // Build the wrapper only after the final authority check, while trust
         // and filesystem mutations are excluded through durable registration.
         const sandbox = Sandbox.plan({
