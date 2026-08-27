@@ -406,6 +406,15 @@ describe("cadence runner contracts", () => {
       reply: "reject",
       reason: "environment mutation requires explicit campaign opt-in; none is configured",
     })
+    expect(
+      permissionDecision(
+        { permission: "environment_mutation", metadata: { package: "scipy" } },
+        { environmentMutation: true },
+      ),
+    ).toEqual({
+      reply: "once",
+      reason: "one scoped managed-environment mutation for this evaluation",
+    })
     expect(permissionDecision({ permission: "unknown" })).toMatchObject({ reply: "reject" })
   })
 

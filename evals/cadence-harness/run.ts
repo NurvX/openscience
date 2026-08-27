@@ -363,7 +363,12 @@ export function isUnsafeHost(host: string) {
   return false
 }
 
-export function permissionDecision(request: Json, policy: { managedCompute?: boolean } = {}) {
+type PermissionPolicy = {
+  managedCompute?: boolean
+  environmentMutation?: boolean
+}
+
+export function permissionDecision(request: Json, policy: PermissionPolicy = {}) {
   const permission = String(request.permission ?? "")
   const metadata = request.metadata && typeof request.metadata === "object" ? request.metadata : {}
   const compute = (metadata as Json).compute_job as Json | undefined
@@ -399,10 +404,12 @@ export function permissionDecision(request: Json, policy: { managedCompute?: boo
     }
   }
   if (permission === "environment_mutation") {
-    return {
-      reply: "reject" as const,
-      reason: "environment mutation requires explicit campaign opt-in; none is configured",
-    }
+    return policy.environmentMutation === true
+      ? { reply: "once" as const, reason: "one scoped managed-environment mutation for this evaluation" }
+      : {
+          reply: "reject" as const,
+          reason: "environment mutation requires explicit campaign opt-in; none is configured",
+        }
   }
   if (permission === "compute_job") {
     return computeProvider === "local" || (computeProvider === "modal" && policy.managedCompute === true)
@@ -424,7 +431,7 @@ async function permissionPump(
   client: ReturnType<typeof createOpenScienceClient>,
   file: string,
   signal: AbortSignal,
-  policy: { managedCompute?: boolean } = {},
+  policy: PermissionPolicy = {},
 ) {
   const decided = new Set<string>()
   while (!signal.aborted) {
@@ -701,9 +708,10 @@ export async function collectRuntimeRun(input: {
 
   const streamAbort = new AbortController()
   const streamSignal = AbortSignal.any([input.signal, streamAbort.signal])
-  const stallMs = Math.max(1, input.streamStallMs ?? Math.max(5_000, (input.pollIntervalMs ?? 1_000) * 5))
+  const stallMs = input.streamStallMs === undefined ? undefined : Math.max(1, input.streamStallMs)
   let stallTimer: ReturnType<typeof setTimeout> | undefined
   const resetStall = () => {
+    if (stallMs === undefined) return
     if (stallTimer) clearTimeout(stallTimer)
     stallTimer = setTimeout(() => streamAbort.abort(), stallMs)
   }
@@ -799,6 +807,7 @@ async function runOne(input: {
   agent: string
   limits?: RunLimits
   managedCompute?: boolean
+  environmentMutation?: boolean
   harness: Json
   server: Json
 }) {
@@ -976,6 +985,7 @@ async function runOne(input: {
     const permissionsFile = path.join(runRoot, "permissions.ndjson")
     const pump = permissionPump(client, permissionsFile, permissionAbort.signal, {
       managedCompute: input.managedCompute,
+      environmentMutation: input.environmentMutation,
     })
     const eventAbort = new AbortController()
     let abortRequest: Promise<unknown> | undefined
@@ -1352,6 +1362,7 @@ async function runSingle(input: Map<string, string | true>, promptID: string) {
     agent: "researchagent-test",
     limits,
     managedCompute: true,
+    environmentMutation: true,
     harness,
     server: { ...server, identity: preflightResult.health },
   })
