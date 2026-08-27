@@ -56,6 +56,25 @@ export function nextReconnectHydrationLimit(input: { limit: number; snapshotCoun
   return input.limit + Math.max(input.limit, SESSION_MESSAGE_CHUNK)
 }
 
+/** Only the newest reconnect request for one session may update its transcript. */
+export function createReconnectGenerationGuard() {
+  const active = new Map<string, number>()
+  let sequence = 0
+  return {
+    begin(key: string) {
+      const generation = ++sequence
+      active.set(key, generation)
+      return generation
+    },
+    isCurrent(key: string, generation: number) {
+      return active.get(key) === generation
+    },
+    invalidate(key: string) {
+      active.delete(key)
+    },
+  }
+}
+
 function initialLimit(count: number) {
   if (count <= SESSION_MESSAGE_CHUNK) return SESSION_MESSAGE_CHUNK
   return Math.ceil(count / SESSION_MESSAGE_CHUNK) * SESSION_MESSAGE_CHUNK

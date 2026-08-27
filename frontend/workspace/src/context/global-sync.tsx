@@ -25,7 +25,12 @@ import { retry } from "@synsci/util/retry"
 import { useGlobalSDK } from "./global-sdk"
 import { createInflightCache } from "./inflight-cache"
 import { createListeners } from "./listeners"
-import { mergeHydratedMessages, nextReconnectHydrationLimit, reconnectHydrationLimit } from "./session-hydration"
+import {
+  createReconnectGenerationGuard,
+  mergeHydratedMessages,
+  nextReconnectHydrationLimit,
+  reconnectHydrationLimit,
+} from "./session-hydration"
 // InitError used to live in pages/error.tsx (now deleted with the legacy
 // openscience shell). Inline the shape so the openscience context layer keeps
 // compiling — it's dead code under the new AtlasApp entry but is still
@@ -375,6 +380,7 @@ function createGlobalSync() {
     parts: Map<string, TranscriptMutation>
   }
   const transcriptMutations = new Map<string, TranscriptMutations>()
+  const reconnectGenerations = createReconnectGenerationGuard()
   const transcriptKey = (directory: string, sessionID: string) => `${directory}\0${sessionID}`
   const transcriptState = (directory: string, sessionID: string) => {
     const key = transcriptKey(directory, sessionID)
@@ -805,6 +811,8 @@ function createGlobalSync() {
       const slice = loaded.slice(index, index + 2)
       await Promise.all(
         slice.map(async ([sessionID, current]) => {
+          const reconnectKey = transcriptKey(directory, sessionID)
+          const generation = reconnectGenerations.begin(reconnectKey)
           const anchors = new Set(current.map((message) => message.id))
           const startedAt = transcriptState(directory, sessionID).revision
           let limit = reconnectHydrationLimit(current.length)
@@ -817,6 +825,7 @@ function createGlobalSync() {
           // long disconnect.
           while (true) {
             const response = await client.session.messages({ sessionID, limit })
+            if (!reconnectGenerations.isCurrent(reconnectKey, generation)) return
             items = (response.data ?? []).filter((item) => !!item?.info?.id)
             completeSnapshot = items.length < limit
             const next = nextReconnectHydrationLimit({
@@ -827,6 +836,8 @@ function createGlobalSync() {
             if (next === undefined) break
             limit = next
           }
+
+          if (!reconnectGenerations.isCurrent(reconnectKey, generation)) return
 
           const messages = items
             .map((item) => item.info)
@@ -918,7 +929,9 @@ function createGlobalSync() {
 
     const cleanupSessionCaches = (sessionID: string) => {
       if (!sessionID) return
-      transcriptMutations.delete(transcriptKey(directory, sessionID))
+      const key = transcriptKey(directory, sessionID)
+      transcriptMutations.delete(key)
+      reconnectGenerations.invalidate(key)
 
       const hasAny =
         store.message[sessionID] !== undefined ||

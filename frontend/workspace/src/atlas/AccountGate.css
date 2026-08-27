@@ -4,7 +4,7 @@
   place-items: center;
   padding: 32px 20px;
   color: var(--color-text);
-  background: var(--color-background);
+  background: var(--background-weak, var(--color-background));
 }
 
 .account-gate__panel {

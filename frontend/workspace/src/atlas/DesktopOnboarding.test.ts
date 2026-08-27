@@ -29,7 +29,7 @@ describe("desktop onboarding", () => {
     expect(source).toContain("URLS.dashboardBilling")
     expect(source).toContain("app.syntheticsciences.ai")
     expect(source).toContain("const known = await loadAccount()")
-    expect(source).toContain("wallet.managedSupported")
+    expect(source).toContain("canUseManaged(wallet())")
     expect(source).toContain("Account check failed")
     expect(source).toContain('accountState() === "error" ? "Retry"')
     expect(source).toContain('if (value === "ace") setKey("")')

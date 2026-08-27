@@ -3,7 +3,7 @@
   display: grid;
   place-items: center;
   padding: 24px;
-  background: var(--background-base);
+  background: var(--background-weak);
   color: var(--text-strong);
 }
 

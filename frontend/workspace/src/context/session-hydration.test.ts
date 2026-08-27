@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   SESSION_MESSAGE_CHUNK,
+  createReconnectGenerationGuard,
   mergeHydratedMessages,
   nextReconnectHydrationLimit,
   reconnectHydrationLimit,
@@ -109,6 +110,31 @@ describe("session transcript hydration", () => {
         overlapsCached: true,
       }),
     ).toBeUndefined()
+  })
+
+  test("an older reconnect response cannot overwrite a newer completed backfill", async () => {
+    const guard = createReconnectGenerationGuard()
+    const key = "project/session"
+    let transcript = "cached"
+    let resolveOlder!: () => void
+    let resolveNewer!: () => void
+    const olderResponse = new Promise<void>((resolve) => (resolveOlder = resolve))
+    const newerResponse = new Promise<void>((resolve) => (resolveNewer = resolve))
+
+    const commit = async (response: Promise<void>, value: string) => {
+      const generation = guard.begin(key)
+      await response
+      if (guard.isCurrent(key, generation)) transcript = value
+    }
+
+    const older = commit(olderResponse, "older snapshot")
+    const newer = commit(newerResponse, "newest snapshot")
+    resolveNewer()
+    await newer
+    resolveOlder()
+    await older
+
+    expect(transcript).toBe("newest snapshot")
   })
 
   test("ordinary sync still reuses a complete hydrated cache", () => {

@@ -44,7 +44,7 @@ await createClient({
 const sseRuntime = path.join(dir, "src/v2/gen/core/serverSentEvents.gen.ts")
 const generated = await Bun.file(sseRuntime).text()
 const settledCancel = generated.replace(
-  /const abortHandler = \(\) => \{\s*try \{\s*reader\.cancel\(\)\s*\} catch \{\s*\/\/ noop\s*\}\s*\}/,
+  /const abortHandler = \(\) => \{\s*try \{\s*reader\.cancel\(\);?\s*\} catch \{\s*\/\/ noop\s*\}\s*\};?/,
   "const abortHandler = () => {\n          void reader.cancel().catch(() => undefined)\n        }",
 )
 if (settledCancel === generated) throw new Error("Generated SSE cancel repair no longer matched @hey-api output")
