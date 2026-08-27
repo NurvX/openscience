@@ -99,6 +99,12 @@ describe("tool selection", () => {
     expect(
       ToolSelection.relevant("provenance_record", {
         agent: "research",
+        message: "Select accessions by maximin diversity across genotype, provenance climate, and ancestry.",
+      }),
+    ).toBe(false)
+    expect(
+      ToolSelection.relevant("provenance_record", {
+        agent: "research",
         message: "Record the provenance and lineage for these analysis outputs.",
       }),
     ).toBe(true)
