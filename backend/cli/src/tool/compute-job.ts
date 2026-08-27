@@ -1,9 +1,13 @@
 import z from "zod"
 import path from "node:path"
+import fs from "node:fs/promises"
 import { JobBroker } from "@/compute/job-broker"
 import type { ComputeCapabilities } from "@/compute/capabilities"
+import { ModalPlan } from "@/compute/modal/plan"
+import { ModalUpload } from "@/compute/modal/upload"
 import { Instance } from "@/project/instance"
 import { SessionFilesystem } from "@/session/filesystem"
+import { Filesystem } from "@/util/filesystem"
 import { Tool } from "./tool"
 
 const COMPUTE_ACTIONS = [
@@ -72,7 +76,9 @@ const ComputeWorkload = z
       .min(1)
       .max(2_000)
       .optional()
-      .describe("Existing relative workspace directory; create it first. Omit for the workspace root."),
+      .describe(
+        "Relative working directory. Remote compute uses Session scratch when it exists there, or snapshots approved regular files from the same relative Project-files directory before planning. Omit for the workspace root.",
+      ),
     target: ComputeTarget,
     resources: JobBroker.Resources.optional(),
     modules: z.array(z.string().trim().min(1).max(240)).max(64).optional(),
@@ -87,7 +93,9 @@ const ComputeWorkload = z
       .array(z.string().trim().min(1).max(2_000))
       .max(100)
       .optional()
-      .describe("Relative session files to stage."),
+      .describe(
+        "Relative session files to stage. Remote targets stage the selected cwd by default; pass an explicit empty array for no inputs.",
+      ),
     packages: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
     image: z.string().trim().min(1).max(2_000).optional(),
     gpu: z.string().trim().min(1).max(120).optional(),
@@ -261,14 +269,6 @@ function normalizeInput(input: unknown): unknown {
     }
   }
   const target = record(output.target) ? output.target : undefined
-  if (
-    (effective === "plan" || effective === "start") &&
-    target?.kind === "modal" &&
-    typeof output.cwd === "string" &&
-    path.isAbsolute(output.cwd)
-  ) {
-    delete copy().cwd
-  }
   if ((effective === "plan" || effective === "start") && target?.kind === "modal") {
     const normalized = copy()
     // These are scheduler/container fields for local and SSH targets. Modal's
@@ -349,7 +349,11 @@ const summary = (job: JobBroker.Job) => ({
 
 const json = (value: unknown) => JSON.stringify(value, null, 2)
 
-type ResolvedOptions = JobBroker.Options & { capabilities?: ComputeCapabilities.Target[] }
+type ResolvedOptions = JobBroker.Options & {
+  projectDirectory: string
+  workspace: string
+  capabilities?: ComputeCapabilities.Target[]
+}
 
 async function options(sessionID: string, base?: JobBroker.Options): Promise<ResolvedOptions> {
   const workspace = await SessionFilesystem.workspace(sessionID)
@@ -372,24 +376,165 @@ async function options(sessionID: string, base?: JobBroker.Options): Promise<Res
   }
 }
 
-function request(input: Extract<Input, { action: "plan" | "start" }>, sessionID: string): JobBroker.Request {
+type PreparedRequest = {
+  value: JobBroker.Request
+  staged?: string
+}
+
+const COMPUTE_STAGE_DISK_RESERVE_BYTES = 512 * 1024 * 1024
+
+async function directory(root: string, relative: string) {
+  const target = path.resolve(root, relative)
+  const canonical = await Filesystem.canonical(target)
+  const info = canonical ? await fs.stat(canonical).catch(() => undefined) : undefined
+  return { target, canonical, info }
+}
+
+async function stageProjectDirectory(input: {
+  cwd: string
+  projectDirectory: string
+  workspace: string
+  target: JobBroker.Target
+  uploads?: string[]
+  explicitUploads: boolean
+}): Promise<string | undefined> {
+  if (path.isAbsolute(input.cwd) || input.cwd.split(/[\\/]/).includes("..")) {
+    throw new Error(
+      `Compute working directory must be relative to Session scratch and cannot contain '..': ${input.cwd}`,
+    )
+  }
+
+  const [workspace, project] = await Promise.all([
+    Filesystem.canonical(input.workspace),
+    Filesystem.canonical(input.projectDirectory),
+  ])
+  if (!workspace) throw new Error("Session scratch is unavailable; no compute job was dispatched")
+  if (!project) throw new Error("Project files are unavailable; no compute job was dispatched")
+
+  const current = await directory(workspace, input.cwd)
+  if (!current.canonical || !Filesystem.contains(workspace, current.canonical)) {
+    throw new Error(`Compute working directory escaped Session scratch: ${input.cwd}`)
+  }
+  if (current.info?.isDirectory()) return
+  if (current.info) {
+    throw new Error(`Compute working directory is not a directory in Session scratch: ${input.cwd}`)
+  }
+
+  const source = await directory(project, input.cwd)
+  if (!source.canonical || !Filesystem.contains(project, source.canonical) || !source.info?.isDirectory()) {
+    throw new Error(
+      `Compute working directory "${input.cwd}" does not exist in Session scratch or Project files. ` +
+        "Create it in Session scratch, use an existing Project-files relative directory, or omit cwd for the workspace root. " +
+        "No compute job was dispatched.",
+    )
+  }
+  if (input.target.kind === "local") {
+    throw new Error(
+      `Local compute working directory "${input.cwd}" exists only in Project files. ` +
+        "Copy it into Session scratch before dispatch; automatic bounded snapshots are available for Modal and SSH only. " +
+        "No compute job was dispatched.",
+    )
+  }
+
+  const parent = await Filesystem.canonical(path.dirname(current.target))
+  if (!parent || !Filesystem.contains(workspace, parent)) {
+    throw new Error(`Compute working directory escaped Session scratch while staging: ${input.cwd}`)
+  }
+
+  const label = input.target.kind === "ssh" ? "SSH staging" : "Modal staging"
+  const manifest = await ModalPlan.stagingFiles(source.canonical, input.uploads ?? [], label, {
+    prefix: input.target.kind === "ssh" ? input.cwd.replaceAll("\\", "/").replace(/^\.\//, "") : undefined,
+    denied: input.explicitUploads ? "error" : "skip",
+  })
+  const disk = await fs.statfs(workspace)
+  const available = disk.bavail * disk.bsize
+  if (!Number.isSafeInteger(available) || available < 0) {
+    throw new Error(`${label} disk capacity could not be represented safely; no compute job was dispatched`)
+  }
+  const capacity = Math.max(0, available - COMPUTE_STAGE_DISK_RESERVE_BYTES)
+  if (manifest.bytes > capacity) {
+    throw new Error(
+      `${label} requires ${manifest.bytes} bytes but Session scratch has ${capacity} safe staging bytes available ` +
+        `after preserving the ${COMPUTE_STAGE_DISK_RESERVE_BYTES}-byte host reserve. No compute job was dispatched.`,
+    )
+  }
+
+  await fs.mkdir(path.dirname(current.target), { recursive: true, mode: 0o700 })
+  const materializedParent = await Filesystem.canonical(path.dirname(current.target))
+  if (!materializedParent || !Filesystem.contains(workspace, materializedParent)) {
+    throw new Error(`Compute working directory escaped Session scratch while staging: ${input.cwd}`)
+  }
+  const temporary = await fs.mkdtemp(path.join(workspace, ".compute-stage-"))
+  const snapshot = path.join(temporary, "snapshot")
+  try {
+    await fs.mkdir(snapshot, { recursive: true, mode: 0o700 })
+    for (const file of manifest.files) {
+      const target = path.resolve(snapshot, file.path)
+      if (!Filesystem.contains(snapshot, target))
+        throw new Error(`${label} destination escaped Session scratch: ${file.path}`)
+      await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 })
+      await ModalUpload.stage(file.canonical, target, { size: file.size, sha256: file.sha256 }, label)
+    }
+    await fs.rename(snapshot, current.target).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY") throw error
+      const existing = await directory(workspace, input.cwd)
+      if (!existing.canonical || !Filesystem.contains(workspace, existing.canonical) || !existing.info?.isDirectory()) {
+        throw error
+      }
+    })
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true })
+  }
+
+  const staged = await directory(workspace, input.cwd)
+  if (!staged.canonical || !Filesystem.contains(workspace, staged.canonical) || !staged.info?.isDirectory()) {
+    throw new Error(`OpenScience could not stage Project files into Session scratch: ${input.cwd}`)
+  }
+  return input.cwd
+}
+
+async function request(
+  input: Extract<Input, { action: "plan" | "start" }>,
+  sessionID: string,
+  options: ResolvedOptions,
+): Promise<PreparedRequest> {
+  const uploads =
+    input.uploads ??
+    (input.target.kind === "modal" && input.cwd
+      ? ["**/*"]
+      : input.target.kind === "ssh" && input.cwd
+        ? [`${input.cwd.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "")}/**/*`]
+        : undefined)
+  const staged = input.cwd
+    ? await stageProjectDirectory({
+        cwd: input.cwd,
+        projectDirectory: options.projectDirectory,
+        workspace: options.workspace,
+        target: input.target,
+        uploads,
+        explicitUploads: input.uploads !== undefined,
+      })
+    : undefined
   return {
-    sessionID,
-    name: input.name,
-    purpose: input.purpose,
-    command: input.command,
-    cwd: input.cwd,
-    target: input.target,
-    resources: input.resources,
-    modules: input.modules,
-    container: input.container,
-    artifacts: input.artifacts,
-    checkpoint: input.checkpoint,
-    uploads: input.uploads,
-    packages: input.packages,
-    image: input.image,
-    gpu: input.target.kind === "modal" ? (input.gpu ?? "none") : input.gpu,
-    secret_refs: input.secret_refs,
+    value: {
+      sessionID,
+      name: input.name,
+      purpose: input.purpose,
+      command: input.command,
+      cwd: input.cwd,
+      target: input.target,
+      resources: input.resources,
+      modules: input.modules,
+      container: input.container,
+      artifacts: input.artifacts,
+      checkpoint: input.checkpoint,
+      uploads,
+      packages: input.packages,
+      image: input.image,
+      gpu: input.target.kind === "modal" ? (input.gpu ?? "none") : input.gpu,
+      secret_refs: input.secret_refs,
+    },
+    staged,
   }
 }
 
@@ -447,7 +592,8 @@ export function createComputeJobTool(base?: JobBroker.Options) {
             configured: Boolean(resolved.modal && resolved.resolveCredentials),
             usage: {
               target: { kind: "modal" },
-              staging: "Omit cwd unless it names an existing relative directory in this session workspace.",
+              staging:
+                "cwd may name an existing relative directory in Session scratch or Project files. Project files are snapshotted into Session scratch before planning; Modal stages that cwd by default.",
               environment:
                 "Omit image to use the configured Python image. If packages are set, a custom image must already provide python and pip; bare CUDA runtime images do not.",
               network:
@@ -469,14 +615,24 @@ export function createComputeJobTool(base?: JobBroker.Options) {
 
       if (input.action === "plan" || input.action === "start") {
         const resolved = await options(ctx.sessionID, base)
-        const value = request(input, ctx.sessionID)
+        const prepared = await request(input, ctx.sessionID, resolved)
+        const value = prepared.value
         const plan = await JobBroker.plan(value, resolved)
         const metadata: Metadata = {
           compute_job: { action: input.action, plan },
           compute: { ...plan, name: input.name },
         }
         if (input.action === "plan") {
-          return { title: `Compute plan: ${input.name}`, metadata, output: json(plan) }
+          return {
+            title: `Compute plan: ${input.name}`,
+            metadata,
+            output: [
+              ...(prepared.staged
+                ? [`Staged Project files/${prepared.staged} into Session scratch before planning.`, ""]
+                : []),
+              json(plan),
+            ].join("\n"),
+          }
         }
 
         ctx.metadata({ title: `Review ${plan.provider} job: ${input.name}`, metadata })
@@ -495,7 +651,7 @@ export function createComputeJobTool(base?: JobBroker.Options) {
         return {
           title: `Compute job: ${input.name}`,
           metadata: complete,
-          output: `Dispatched ${plan.provider} job ${job.id}. Status: ${job.status}. Use compute_job wait to suspend until meaningful progress, completion, or your selected timeout; do not poll with shell sleep.`,
+          output: `${prepared.staged ? `Staged Project files/${prepared.staged} into Session scratch. ` : ""}Dispatched ${plan.provider} job ${job.id}. Status: ${job.status}. Use compute_job wait to suspend until meaningful progress, completion, or your selected timeout; do not poll with shell sleep.`,
         }
       }
 
