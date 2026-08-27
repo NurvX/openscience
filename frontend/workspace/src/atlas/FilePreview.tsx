@@ -29,6 +29,7 @@ import {
   describeFile,
   createFileRequestOwner,
   fileRequestKey,
+  fileReadRetryDelay,
   initialFileScope,
   missingFileFallback,
   PDF_PREVIEW_LIMIT,
@@ -150,6 +151,8 @@ export function FileView(props: {
   const [htmlView, setHtmlView] = createStore<HtmlState>({ status: "idle", value: "" })
   const request = createFileRequestOwner()
   const readRetry = { key: "", count: 0 }
+  let readyKey = ""
+  let readRetryTimer: ReturnType<typeof setTimeout> | undefined
   const pdfRequest = { current: 0 }
   const pdfAbort = { current: undefined as AbortController | undefined }
   const htmlRequest = { current: 0 }
@@ -161,22 +164,35 @@ export function FileView(props: {
     const activeSession = fileSessionID()
     view.refresh
     const key = fileRequestKey({ projectID: sdk.projectID, directory: dir, sessionID: activeSession, path })
+    if (readRetryTimer) {
+      clearTimeout(readRetryTimer)
+      readRetryTimer = undefined
+    }
     if (readRetry.key !== key) {
       readRetry.key = key
       readRetry.count = 0
     }
     const ticket = request.begin(key)
-    setView({
-      status: "loading",
-      data: undefined,
-      error: undefined,
-      saveError: undefined,
-      source: false,
-      draft: "",
-      saved: "",
-      saving: false,
-      inspection: undefined,
-    })
+    const retained = readyKey === key && view.status === "ready" && view.data
+    if (retained) {
+      // A reconnect or explicit refresh must not blank a valid preview. Keep
+      // the rendered bytes and any unsaved draft while the replacement read
+      // happens in the background.
+      setView({ error: undefined, saveError: undefined, saving: false })
+    } else {
+      readyKey = ""
+      setView({
+        status: "loading",
+        data: undefined,
+        error: undefined,
+        saveError: undefined,
+        source: false,
+        draft: "",
+        saved: "",
+        saving: false,
+        inspection: undefined,
+      })
+    }
     if (!dir || !path) {
       setView({ status: "error", error: new Error("The file location is unavailable.") })
       return
@@ -193,16 +209,23 @@ export function FileView(props: {
     }).then((result) => {
       if (!request.owns(ticket, key)) return
       if (result.cancelled) {
-        // A transport reconnect can abort the active request even though the
-        // person did not leave the file. Retry once without ever rendering the
-        // browser's raw "signal is aborted" implementation detail.
-        if (readRetry.count === 0) {
-          readRetry.count++
-          queueMicrotask(() => {
+        const delay = fileReadRetryDelay(readRetry.count)
+        if (delay !== undefined) {
+          readRetry.count += 1
+          readRetryTimer = setTimeout(() => {
+            readRetryTimer = undefined
             if (request.owns(ticket, key)) setView("refresh", (value) => value + 1)
-          })
-        } else {
+          }, delay)
+        } else if (readyKey !== key || view.status !== "ready" || !view.data) {
           setView({ status: "interrupted", error: undefined, data: undefined })
+        } else {
+          // The last valid preview remains usable. Keep the transport detail in
+          // diagnostics rather than replacing the document with an error card.
+          console.warn("File preview transport remained interrupted after bounded retries", {
+            requestID: ticket.id,
+            requestKey: key,
+            retries: readRetry.count,
+          })
         }
         return
       }
@@ -222,6 +245,7 @@ export function FileView(props: {
       const data = result.data ?? {}
       readRetry.count = 0
       const text = data.encoding === "base64" ? "" : (data.content ?? "")
+      readyKey = key
       setView({
         status: "ready",
         data,
@@ -233,6 +257,7 @@ export function FileView(props: {
   })
 
   onCleanup(() => {
+    if (readRetryTimer) clearTimeout(readRetryTimer)
     request.dispose()
   })
 

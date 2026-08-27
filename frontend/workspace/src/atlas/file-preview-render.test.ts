@@ -117,4 +117,13 @@ describe("file preview sandboxed html", () => {
     expect(preview).toContain("{ signal: controller.signal }")
     expect(preview).toContain("controller.signal.aborted")
   })
+
+  test("a transient primary read keeps the last valid preview while retrying with bounded backoff", async () => {
+    const preview = await read("./FilePreview.tsx")
+
+    expect(preview).toContain('readyKey === key && view.status === "ready" && view.data')
+    expect(preview).toContain("fileReadRetryDelay(readRetry.count)")
+    expect(preview).toContain("File preview transport remained interrupted after bounded retries")
+    expect(preview).not.toContain("queueMicrotask(() =>")
+  })
 })

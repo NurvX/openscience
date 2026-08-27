@@ -79,6 +79,15 @@ export function isFileRequestCancellation(error: unknown) {
   return /\bab(?:ort|orted)\b|cancell?ed|the user aborted|signal is aborted/i.test(message)
 }
 
+const FILE_READ_RETRY_DELAYS = [150, 500] as const
+
+/** Active transport interruptions get two quiet retries. Superseded requests
+ * are already rejected by request ownership, so this is only used while the
+ * same file identity remains visible. */
+export function fileReadRetryDelay(attempt: number): number | undefined {
+  return FILE_READ_RETRY_DELAYS[attempt]
+}
+
 /** SDK failures can be Error instances or structured API envelopes. Render
  * the server's useful message instead of JavaScript's `[object Object]`. */
 export function fileErrorMessage(error: unknown): string {
