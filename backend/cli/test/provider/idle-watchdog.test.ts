@@ -40,8 +40,8 @@ function watched(
 }
 
 describe("provider activity watchdog", () => {
-  test("uses a five-minute default, supports disable, and clamps unsafe timer values", () => {
-    expect(Provider.resolveIdleTimeout(undefined)).toBe(300_000)
+  test("leaves provider inactivity unbounded by default and clamps explicit timer values", () => {
+    expect(Provider.resolveIdleTimeout(undefined)).toBe(false)
     expect(Provider.resolveIdleTimeout(false)).toBe(false)
     expect(Provider.resolveIdleTimeout(12_345.9)).toBe(12_345)
     expect(Provider.resolveIdleTimeout(Number.MAX_SAFE_INTEGER)).toBe(2_147_483_647)

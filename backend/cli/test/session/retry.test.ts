@@ -155,6 +155,15 @@ describe("SessionProcessor.providerFailureAction", () => {
       message: error.message,
     })
   })
+
+  test("keeps the idle replay independent from a prior transient retry", () => {
+    const initial = { attempt: 0, transientRetries: 0, idleRetryUsed: false }
+    const afterReset = SessionProcessor.consumeProviderRetry("retry", initial)
+    expect(afterReset).toEqual({ attempt: 1, transientRetries: 1, idleRetryUsed: false })
+    const afterIdle = SessionProcessor.consumeProviderRetry("retry-idle", afterReset!)
+    expect(afterIdle).toEqual({ attempt: 2, transientRetries: 1, idleRetryUsed: true })
+    expect(SessionProcessor.consumeProviderRetry("retry-idle", afterIdle!)).toBeUndefined()
+  })
 })
 
 describe("session.message-v2.fromError", () => {

@@ -47,7 +47,7 @@ import { ProviderTransform } from "./transform"
 export namespace Provider {
   const log = Log.create({ service: "provider" })
   const MAX_TIMER_MS = 2_147_483_647
-  export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000
+  export const DEFAULT_IDLE_TIMEOUT_MS = false
 
   export type RequestContext = {
     sessionID: string

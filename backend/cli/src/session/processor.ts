@@ -148,9 +148,9 @@ export namespace SessionProcessor {
     return sharedPrefixLen(last[0], last[1]) >= prefix && sharedPrefixLen(last[1], last[2]) >= prefix
   }
 
-  /** Provider inactivity is already bounded and actionable. Retrying it at the
-   * same deadline would turn one five-minute failure into the original
-   * fifty-minute cascade. */
+  /** An explicitly configured provider inactivity deadline is already bounded
+   * and actionable. Retrying it repeatedly at the same deadline would turn one
+   * failure into a long cascade. */
   export function retryableProviderError(error: unknown, normalized: ReturnType<NamedError["toObject"]>) {
     return Provider.isIdleTimeoutError(error) ? undefined : SessionRetry.retryable(normalized)
   }
@@ -169,6 +169,29 @@ export namespace SessionProcessor {
     if (message === undefined) return { type: "terminal" as const }
     if (toolStarted) return { type: "drain" as const, message }
     return { type: "retry" as const, message }
+  }
+
+  export type ProviderRetryState = {
+    attempt: number
+    transientRetries: number
+    idleRetryUsed: boolean
+  }
+
+  /** Keep the one safe idle replay independent from ordinary transport
+   * retries. A preceding ECONNRESET must not silently consume the only replay
+   * available for a later, side-effect-free idle expiry. */
+  export function consumeProviderRetry(
+    type: "retry" | "retry-idle",
+    state: ProviderRetryState,
+  ): ProviderRetryState | undefined {
+    if (type === "retry-idle") {
+      if (state.idleRetryUsed) return
+      return { ...state, attempt: state.attempt + 1, idleRetryUsed: true }
+    }
+    if (type === "retry") {
+      if (state.transientRetries >= MAX_RETRY_ATTEMPTS) return
+      return { ...state, attempt: state.attempt + 1, transientRetries: state.transientRetries + 1 }
+    }
   }
 
   /** File snapshots protect tool side effects. A model that cannot call any
@@ -467,6 +490,8 @@ export namespace SessionProcessor {
     let blocked = false
     let shouldBreakOnDeny = true
     let attempt = 0
+    let transientRetries = 0
+    let idleRetryUsed = false
     let needsCompaction = false
     let overflow = false
     let creditDecision: "allow" | "finalize" | "block" | undefined
@@ -988,74 +1013,78 @@ export namespace SessionProcessor {
               // terminal, actionable outcome; other transient failures retain
               // the existing retry policy.
               const action = providerFailureAction(e, error, toolOutcomes.started())
-              const limit = action.type === "retry-idle" ? 1 : MAX_RETRY_ATTEMPTS
-              if ((action.type === "retry" || action.type === "retry-idle") && attempt < limit) {
-                attempt++
-                const delay =
-                  action.type === "retry-idle"
-                    ? 0
-                    : SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
-                if (action.type === "retry-idle") {
-                  // Nothing crossed the tool-execution boundary, so replay is
-                  // safe. Retire partial provider output before retrying and
-                  // persist an explicit boundary for crash recovery and audit.
-                  const parts = await MessageV2.parts(input.assistantMessage.id)
-                  for (const part of parts) {
-                    if (part.type === "text" && !part.synthetic && !part.ignored) {
-                      await Session.updatePart({ ...part, ignored: true, time: finishTime(part.time) })
-                      continue
+              if (action.type === "retry" || action.type === "retry-idle") {
+                const retry = consumeProviderRetry(action.type, { attempt, transientRetries, idleRetryUsed })
+                if (retry) {
+                  attempt = retry.attempt
+                  transientRetries = retry.transientRetries
+                  idleRetryUsed = retry.idleRetryUsed
+                  const delay =
+                    action.type === "retry-idle"
+                      ? 0
+                      : SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
+                  if (action.type === "retry-idle") {
+                    // Nothing crossed the tool-execution boundary, so replay is
+                    // safe. Retire partial provider output before retrying and
+                    // persist an explicit boundary for crash recovery and audit.
+                    const parts = await MessageV2.parts(input.assistantMessage.id)
+                    for (const part of parts) {
+                      if (part.type === "text" && !part.synthetic && !part.ignored) {
+                        await Session.updatePart({ ...part, ignored: true, time: finishTime(part.time) })
+                        continue
+                      }
+                      if (part.type !== "tool" || part.state.status === "completed" || part.state.status === "error") {
+                        continue
+                      }
+                      const failed = await Session.updatePart({
+                        ...part,
+                        state: {
+                          ...part.state,
+                          status: "error",
+                          error: "Provider became idle before tool execution started; no action was taken.",
+                          time: finishTime("time" in part.state ? part.state.time : undefined),
+                        },
+                      })
+                      void OutboundTelemetry.tool(failed as MessageV2.ToolPart).catch(() => undefined)
+                      toolOutcomes.abandon(part.callID)
                     }
-                    if (part.type !== "tool" || part.state.status === "completed" || part.state.status === "error") {
-                      continue
-                    }
-                    const failed = await Session.updatePart({
-                      ...part,
-                      state: {
-                        ...part.state,
-                        status: "error",
-                        error: "Provider became idle before tool execution started; no action was taken.",
-                        time: finishTime("time" in part.state ? part.state.time : undefined),
-                      },
-                    })
-                    void OutboundTelemetry.tool(failed as MessageV2.ToolPart).catch(() => undefined)
-                    toolOutcomes.abandon(part.callID)
+                    await Session.updatePart({
+                      id: Identifier.ascending("part"),
+                      messageID: input.assistantMessage.id,
+                      sessionID: input.sessionID,
+                      type: "text",
+                      synthetic: true,
+                      ignored: true,
+                      text: "Provider idle recovery boundary: partial output was retired before one automatic side-effect-free retry.",
+                      time: { start: Date.now(), end: Date.now() },
+                    } satisfies MessageV2.TextPart)
                   }
-                  await Session.updatePart({
-                    id: Identifier.ascending("part"),
-                    messageID: input.assistantMessage.id,
+                  await SessionTraceStore.recordRetry({
                     sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    ignored: true,
-                    text: "Provider idle recovery boundary: partial output was retired before one automatic side-effect-free retry.",
-                    time: { start: Date.now(), end: Date.now() },
-                  } satisfies MessageV2.TextPart)
+                    messageID: input.assistantMessage.id,
+                    attempt,
+                    message: action.message,
+                    delayMs: delay,
+                  })
+                  await OutboundTelemetry.retry({
+                    sessionID: input.sessionID,
+                    messageID: input.assistantMessage.id,
+                    attempt: attempt + 1,
+                    delay,
+                    route: traceRoute,
+                    provider: input.model.providerID,
+                    model: input.model.id,
+                    error,
+                  }).catch(() => undefined)
+                  SessionStatus.set(input.sessionID, {
+                    type: "retry",
+                    attempt,
+                    message: action.message,
+                    next: Date.now() + delay,
+                  })
+                  await SessionRetry.sleep(delay, input.abort).catch(() => {})
+                  continue
                 }
-                await SessionTraceStore.recordRetry({
-                  sessionID: input.sessionID,
-                  messageID: input.assistantMessage.id,
-                  attempt,
-                  message: action.message,
-                  delayMs: delay,
-                })
-                await OutboundTelemetry.retry({
-                  sessionID: input.sessionID,
-                  messageID: input.assistantMessage.id,
-                  attempt: attempt + 1,
-                  delay,
-                  route: traceRoute,
-                  provider: input.model.providerID,
-                  model: input.model.id,
-                  error,
-                }).catch(() => undefined)
-                SessionStatus.set(input.sessionID, {
-                  type: "retry",
-                  attempt,
-                  message: action.message,
-                  next: Date.now() + delay,
-                })
-                await SessionRetry.sleep(delay, input.abort).catch(() => {})
-                continue
               }
               if (action.type === "drain") {
                 log.warn("provider stream ended after tool execution started; draining authoritative tool outcome", {

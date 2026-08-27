@@ -1734,7 +1734,7 @@ export type ProviderConfig = {
      */
     timeout?: number | false
     /**
-     * Maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Defaults to 300000 (5 minutes), resets on each body chunk, and does not cap total generation time.
+     * Optional maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Disabled by default; when configured it resets on each body chunk and does not cap total generation time.
      */
     idleTimeout?: number | false
     [key: string]: unknown
