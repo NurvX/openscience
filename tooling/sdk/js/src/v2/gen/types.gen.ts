@@ -8369,6 +8369,7 @@ export type SettingsUpdatesInstallResponses = {
     releaseNotes: string
     installed: boolean
     restartRequired: boolean
+    restartScheduled?: boolean
   }
 }
 
