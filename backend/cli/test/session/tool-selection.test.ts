@@ -339,6 +339,19 @@ describe("tool selection", () => {
     expect(ToolSelection.relevant("generate_image", { agent: "research", message })).toBe(true)
   })
 
+  test("does not add stale checklist ceremony to a long autonomous research request", () => {
+    const message =
+      "Autonomously execute a comprehensive, multi-step protein analysis and deliver a publication-quality report with figures, uncertainty, and validation."
+    expect(ToolSelection.relevant("todowrite", { agent: "research", message })).toBe(false)
+    expect(ToolSelection.relevant("todoread", { agent: "research", message })).toBe(false)
+    expect(
+      ToolSelection.relevant("todowrite", {
+        agent: "research",
+        message: `${message} Keep a concise task list while you work.`,
+      }),
+    ).toBe(true)
+  })
+
   test("keeps normal research relevance filtering for a code-only minimal-profile request", () => {
     const input = {
       agent: ToolSelection.THIN_RESEARCH_AGENT,
