@@ -209,44 +209,6 @@ export namespace SessionProcessor {
     }
   }
 
-  /** Give the user a truthful recovery boundary when a provider dies after
-   * useful work but before emitting any normal assistant text. This is not a
-   * scientific synthesis: it only inventories durable activity and files, so
-   * it cannot turn a partial run into a false success. */
-  export function partialFailureNotice(parts: MessageV2.Part[], aborted = false) {
-    if (aborted) return
-    if (parts.some((part) => part.type === "text" && !part.synthetic && !part.ignored && part.text.trim())) return
-
-    const completed = parts.filter(
-      (part): part is MessageV2.ToolPart & { state: MessageV2.ToolStateCompleted } =>
-        part.type === "tool" && part.state.status === "completed",
-    )
-    const files = [
-      ...new Set(parts.flatMap((part) => (part.type === "patch" ? part.files : []))),
-    ]
-    if (!completed.length && !files.length) return
-
-    const titles = [
-      ...new Set(
-        completed
-          .map((part) => part.state.title.replace(/\s+/g, " ").trim())
-          .filter(Boolean)
-          .map((title) => (title.length > 120 ? `${title.slice(0, 117)}...` : title)),
-      ),
-    ].slice(-5)
-    const summary = [
-      `${completed.length} completed operation${completed.length === 1 ? "" : "s"}`,
-      ...(files.length ? [`${files.length} changed file${files.length === 1 ? "" : "s"}`] : []),
-    ].join(" and ")
-
-    return [
-      `The model connection ended before I could finish the answer. I preserved ${summary} from this turn.`,
-      ...(titles.length ? ["Latest completed work:", ...titles.map((title) => `- ${title}`)] : []),
-      ...(files.length ? ["Changed files:", ...files.slice(-8).map((file) => `- ${file}`)] : []),
-      'Send "continue" to resume from the preserved work; completed operations will not be repeated.',
-    ].join("\n")
-  }
-
   export type Info = Awaited<ReturnType<typeof create>>
   export type Result = Awaited<ReturnType<Info["process"]>>
 
@@ -1181,29 +1143,9 @@ export namespace SessionProcessor {
               toolOutcomes.abandon(part.callID)
             }
           }
-          let completedParts = await MessageV2.parts(input.assistantMessage.id)
-          if (input.assistantMessage.error) {
-            const history: MessageV2.WithParts[] = []
-            for await (const message of MessageV2.stream(input.sessionID)) history.push(message)
-            const turn = SessionProcessor.turnParts(history, streamInput.user.id)
-            const notice = SessionProcessor.partialFailureNotice(
-              turn,
-              input.abort.aborted || MessageV2.AbortedError.isInstance(input.assistantMessage.error),
-            )
-            if (notice) {
-              await Session.updatePart({
-                id: Identifier.ascending("part"),
-                messageID: input.assistantMessage.id,
-                sessionID: input.sessionID,
-                type: "text",
-                text: notice,
-                time: { start: Date.now(), end: Date.now() },
-              } satisfies MessageV2.TextPart)
-              completedParts = await MessageV2.parts(input.assistantMessage.id)
-            }
-          }
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
+          const completedParts = await MessageV2.parts(input.assistantMessage.id)
           await OutboundTelemetry.assistantMessage({
             sessionID: input.sessionID,
             messageID: input.assistantMessage.id,
