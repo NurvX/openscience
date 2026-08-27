@@ -37,7 +37,7 @@ afterEach(async () => {
 })
 
 describe("research_search", () => {
-  test("falls back to community search for every model when Gateway is unavailable", async () => {
+  test("does not start a second provider when managed settlement is unknown", async () => {
     managedAce()
     const dispatch = spyOn(OpenScience, "dispatchResearchSearch").mockResolvedValue(null)
     restores.push(dispatch)
@@ -52,12 +52,12 @@ describe("research_search", () => {
     const tool = await ResearchSearchTool.init({ model: { providerID: "openai", modelID: "gpt-test" } })
     const result = await tool.execute(tool.parameters.parse({ query: "current protein folding benchmarks" }), context)
     expect(JSON.parse(result.output)).toMatchObject({
-      status: "completed",
-      provider: "community",
-      content: "community fallback",
+      type: "search_unavailable",
+      retryable: true,
+      operation_id: "call_search",
     })
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   test("preserves the existing community search rule for the Free community route", async () => {
@@ -169,23 +169,12 @@ describe("research_search", () => {
     expect(result.metadata).toMatchObject({ creditState: "community" })
   })
 
-  test.each([
-    {
+  test("falls back to community after a definitive managed rate-limit rejection", async () => {
+    managedAce()
+    const dispatch = spyOn(OpenScience, "dispatchResearchSearch").mockResolvedValue({
       status: 429,
       body: { detail: { code: "rate_limited", message: "Gateway search is busy." } },
-      warning: "Gateway search is busy. A non-managed fallback was used.",
-    },
-    {
-      status: 503,
-      body: {
-        detail: { code: "search_unavailable", message: "Enhanced search is temporarily unavailable." },
-        warnings: ["Upstream search provider did not respond."],
-      },
-      warning: "Enhanced search is temporarily unavailable. A non-managed fallback was used.",
-    },
-  ])("falls back transparently on transient Gateway HTTP $status responses", async ({ status, body, warning }) => {
-    managedAce()
-    const dispatch = spyOn(OpenScience, "dispatchResearchSearch").mockResolvedValue({ status, body })
+    })
     restores.push(dispatch)
     const invalidate = spyOn(OpenScience, "invalidateBalance").mockImplementation(() => undefined)
     restores.push(invalidate)
@@ -203,12 +192,48 @@ describe("research_search", () => {
     const output = JSON.parse(result.output) as { provider: string; content: string; warnings: string[] }
 
     expect(output).toMatchObject({ provider: "community", content: "basic fallback" })
-    expect(output.warnings).toContain(warning)
-    if (status === 503) expect(output.warnings).toContain("Upstream search provider did not respond.")
+    expect(output.warnings).toContain("Gateway search is busy. Community search was used.")
     expect(result.metadata).toMatchObject({ creditState: "community" })
     expect(fetcher).toHaveBeenCalledTimes(1)
     // A failed enhanced request never creates a client-side wallet mutation.
     expect(invalidate).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    {
+      status: 503,
+      body: {
+        detail: { code: "search_unavailable", message: "Enhanced search is temporarily unavailable." },
+        warnings: ["Upstream search provider did not respond."],
+      },
+    },
+    {
+      status: 409,
+      body: { detail: { code: "operation_in_progress", message: "Managed search is still running." } },
+    },
+  ])("does not cross providers after an ambiguous managed $status response", async ({ status, body }) => {
+    managedAce()
+    const dispatch = spyOn(OpenScience, "dispatchResearchSearch").mockResolvedValue({
+      status,
+      body,
+    })
+    restores.push(dispatch)
+    const fetcher = spyOn(globalThis, "fetch").mockImplementation((async () => {
+      throw new Error("no second provider should start")
+    }) as unknown as typeof fetch)
+    restores.push(fetcher)
+
+    const tool = await ResearchSearchTool.init({ model: { providerID: "openrouter", modelID: "test-model" } })
+    const result = await tool.execute(tool.parameters.parse({ query: "current protein folding benchmarks" }), context)
+    const output = JSON.parse(result.output)
+
+    expect(output).toMatchObject({
+      type: "search_unavailable",
+      retryable: true,
+      operation_id: "call_search",
+    })
+    if (status === 503) expect(output.warnings).toContain("Upstream search provider did not respond.")
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   test("retries managed search on a later request after a transient service failure", async () => {
@@ -232,8 +257,8 @@ describe("research_search", () => {
     const second = await tool.execute(tool.parameters.parse({ query: "second managed search" }), context)
 
     expect(dispatch).toHaveBeenCalledTimes(2)
-    expect(fetcher).toHaveBeenCalledTimes(2)
-    expect(JSON.parse(second.output)).toMatchObject({ provider: "community", content: "community fallback" })
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(JSON.parse(second.output)).toMatchObject({ type: "search_unavailable", retryable: true })
   })
 
   test.each([

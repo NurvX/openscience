@@ -66,13 +66,14 @@ function completed(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
-function unavailable(message: string, retryable = false, warnings: string[] = []) {
+function unavailable(message: string, retryable = false, warnings: string[] = [], operationID?: string) {
   return {
     status: "completed" as const,
     type: "search_unavailable" as const,
     message,
     retryable,
     alternatives: ALTERNATIVES,
+    ...(operationID ? { operation_id: operationID } : {}),
     ...(warnings.length ? { warnings } : {}),
   }
 }
@@ -217,8 +218,10 @@ async function firecrawl(input: Params, ctx: Tool.Context, key: string, inherite
   }
 }
 
-async function fallback(input: Params, ctx: Tool.Context, key: string | undefined, warning: string) {
-  if (key) return firecrawl(input, ctx, key, [warning])
+async function fallback(input: Params, ctx: Tool.Context, warning: string) {
+  // A managed dispatch may already be running or awaiting settlement even when
+  // its response is unavailable. Never start a second paid/BYOK provider from
+  // this branch. Community search is the only safe transparent fallback.
   return community(input, ctx, [warning])
 }
 
@@ -253,6 +256,7 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
         ])
         const key = credential?.api_key
         const route = ResearchRouting.select({
+          mode: billing?.mode ?? "byok",
           aceEnabled: billing?.ace_enabled === true,
           managedUnlocked: billing?.managed_unlocked === true,
           firecrawl: !!key,
@@ -265,7 +269,18 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
         const operationID = ctx.callID || randomUUID()
         const response = await OpenScience.dispatchResearchSearch(input as ResearchSearchInput, operationID, ctx.abort)
         if (!response) {
-          return fallback(input, ctx, key, "Ace managed search was unavailable. A non-managed fallback was used.")
+          return {
+            output: completed(
+              unavailable(
+                "OpenScience could not confirm the managed search result. Retry later to reconcile the same operation; no second provider was started.",
+                true,
+                [],
+                operationID,
+              ),
+            ),
+            title: "Managed search pending",
+            metadata: metadata(input, "pending"),
+          }
         }
         const failure = detail(response.body)
         const code = typeof failure?.code === "string" ? failure.code : undefined
@@ -274,10 +289,9 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
           return fallback(
             input,
             ctx,
-            key,
             fallbackWarnings(
               response.body,
-              "Ace managed search was unavailable. A non-managed fallback was used.",
+              "Ace managed search was unavailable. Community search was used.",
             ).join(" "),
           )
         }
@@ -289,21 +303,36 @@ export const ResearchSearchTool = Tool.define<typeof ResearchSearchParameters, R
           return fallback(
             input,
             ctx,
-            key,
             fallbackWarnings(
               response.body,
-              "Ace managed search was unavailable. A non-managed fallback was used.",
+              "Ace managed search was unavailable. Community search was used.",
             ).join(" "),
           )
         }
-        if (response.status === 429 || response.status >= 500 || code === "operation_in_progress") {
+        if (response.status >= 500 || code === "operation_in_progress") {
           const reason =
             typeof failure?.message === "string"
               ? failure.message
               : `Enhanced search is temporarily unavailable (HTTP ${response.status}).`
-          const inherited = fallbackWarnings(response.body, `${reason} A non-managed fallback was used.`)
-          if (key) return firecrawl(input, ctx, key, inherited)
-          return community(input, ctx, inherited)
+          return {
+            output: completed(
+              unavailable(
+                `${reason} The original managed operation may still settle, so no second provider was started.`,
+                true,
+                warnings(response.body),
+                operationID,
+              ),
+            ),
+            title: "Managed search pending",
+            metadata: metadata(input, "pending"),
+          }
+        }
+        if (response.status === 429) {
+          const reason =
+            typeof failure?.message === "string"
+              ? failure.message
+              : "Enhanced search is rate limited."
+          return community(input, ctx, fallbackWarnings(response.body, `${reason} Community search was used.`))
         }
         if (response.status >= 400) {
           return {
