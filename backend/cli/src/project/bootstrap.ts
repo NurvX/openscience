@@ -212,14 +212,10 @@ export function applyRuntimeCancellationRequest(request: {
   runID: string
   source: "user" | "runner_timeout"
 }) {
-  return RuntimeEvents.cancel({
-    ...request,
-    // Run the controller abort synchronously after the exact journal owner is
-    // terminalized but before terminal event delivery yields. A stale request
-    // that no longer owns the journal never invokes this callback and cannot
-    // cancel a newer prompt in the same session.
-    onCancelled: () => SessionPrompt.cancel(request.sessionID),
-  })
+  const controller = SessionPrompt.activeController(request.sessionID)
+  if (!controller) return RuntimeEvents.cancel(request)
+  SessionPrompt.cancel(request.sessionID, controller)
+  return Promise.resolve({ status: "requested" as const, runID: request.runID })
 }
 
 export async function InstanceBootstrap() {

@@ -72,6 +72,7 @@ export namespace RuntimeEvents {
 
   export type CancelResult =
     | { status: "inactive" }
+    | { status: "requested"; runID: string }
     | { status: "cancelled"; runID: string; owner: "local" | "stale" }
     | { status: "foreign_owner"; runID: string }
     | { status: "forwarded"; runID: string }
@@ -493,22 +494,33 @@ export namespace RuntimeEvents {
     sessionID: string
     source: "user" | "runner_timeout"
   }): Promise<CancelResult> {
-    const result = await cancel(input)
-    if (result.status !== "foreign_owner") return result
-    let forwarded = false
+    const active = state().active.get(input.sessionID)
+    const current = await read(input.sessionID)
+    const runID = active ?? current.activeRunID
+    if (!runID || current.activeRunID !== runID) return { status: "inactive" }
+
+    const identity = await ProcessIdentity.capture(process.pid)
+    if (!identity) throw new Error("Could not capture the runtime server process identity")
+    const local = active === runID && current.activeOwner?.pid === process.pid && current.activeOwner.identity === identity
+    if (!local && (!current.activeOwner || !(await ProcessIdentity.owns(current.activeOwner.pid, current.activeOwner.identity)))) {
+      return cancel(input)
+    }
+
+    let requested = false
     await Storage.upsert<Journal>(key(input.sessionID), (current) => {
       const journal = current ? Journal.parse(current) : empty()
-      if (journal.activeRunID !== result.runID) return journal
-      forwarded = true
+      if (journal.activeRunID !== runID) return journal
+      requested = true
       return {
         ...journal,
         cancelRequest:
-          journal.cancelRequest?.runID === result.runID
+          journal.cancelRequest?.runID === runID
             ? journal.cancelRequest
-            : { runID: result.runID, source: input.source, requestedAt: Date.now() },
+            : { runID, source: input.source, requestedAt: Date.now() },
       }
     })
-    return forwarded ? { status: "forwarded", runID: result.runID } : { status: "inactive" }
+    if (!requested) return { status: "inactive" }
+    return local ? { status: "requested", runID } : { status: "forwarded", runID }
   }
 
   /** Poll only runs owned by this instance for durable cancellation requests. */
@@ -518,6 +530,7 @@ export namespace RuntimeEvents {
   ) {
     let polling = false
     let active = true
+    const handled = new Set<string>()
     const poll = async () => {
       if (!active || polling) return
       polling = true
@@ -525,7 +538,10 @@ export namespace RuntimeEvents {
         for (const [sessionID, runID] of state().active) {
           const request = (await read(sessionID)).cancelRequest
           if (!request || request.runID !== runID) continue
+          const key = `${sessionID}\0${runID}`
+          if (handled.has(key)) continue
           await handler({ sessionID, runID, source: request.source })
+          handled.add(key)
         }
       } finally {
         polling = false
@@ -568,7 +584,21 @@ export namespace RuntimeEvents {
       ) {
         throw new ActiveRunError(input.sessionID)
       }
-      event = nextEvent(journal, input)
+      const requested = journal.cancelRequest?.runID === input.runID ? journal.cancelRequest : undefined
+      event = nextEvent(
+        journal,
+        requested
+          ? {
+              sessionID: input.sessionID,
+              runID: input.runID,
+              type: "runtime.cancelled",
+              properties: {
+                source: requested.source,
+                ...(typeof input.properties.messageID === "string" ? { messageID: input.properties.messageID } : {}),
+              },
+            }
+          : input,
+      )
       return {
         nextSequence: journal.nextSequence + 1,
         events: [...journal.events, event].slice(-RETAINED_EVENTS),
