@@ -37,5 +37,6 @@ describe("event stream recovery", () => {
     expect(connected).toContain("refresh()")
     expect(connected).toContain("Object.keys(children)")
     expect(connected).toContain("push(directory)")
+    expect(connected).toContain("refreshLoadedMessages(directory)")
   })
 })

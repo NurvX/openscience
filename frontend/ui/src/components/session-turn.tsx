@@ -704,7 +704,7 @@ export function SessionTurn(
                           hideReasoning={!props.stepsExpanded}
                           hideTools={!props.stepsExpanded}
                           hideGeneratedTools
-                          pendingRequestCallID={pendingRequestCallID()}
+                          pendingRequestCallID={props.stepsExpanded ? undefined : pendingRequestCallID()}
                         />
                         <Show when={response()}>
                           <div
@@ -734,7 +734,12 @@ export function SessionTurn(
                         </Show>
                       </div>
                     </Show>
-                    <Show when={requestParts().length > 0 || (requestMessage() && nextQuestion())}>
+                    <Show
+                      when={
+                        (!props.stepsExpanded && requestParts().length > 0) ||
+                        (requestParts().length === 0 && requestMessage() && nextQuestion())
+                      }
+                    >
                       <div data-slot="session-turn-permission-parts">
                         <For each={requestParts()}>{({ part, message }) => <Part part={part} message={message} />}</For>
                         <Show when={requestParts().length === 0 && requestMessage() && nextQuestion()}>

@@ -1,5 +1,5 @@
 import { Show, type JSX } from "solid-js"
-import { IconCpu, IconFile, IconFolder, IconTerminal } from "@/atlas/shared/Icon"
+import { IconCpu, IconFolder, IconTerminal } from "@/atlas/shared/Icon"
 import { preloadTerminal } from "@/components/terminal"
 import "./session-sidebar.css"
 
@@ -87,7 +87,6 @@ export function SidebarAction(props: {
 export function SessionSidebarActions(props: {
   context: SessionContext
   contextOpen: boolean
-  artifact: boolean
   onContext: (context: SessionContext) => void
 }): JSX.Element {
   return (
@@ -125,17 +124,6 @@ export function SessionSidebarActions(props: {
         >
           <IconCpu size={16} strokeWidth={1.5} />
         </SidebarAction>
-        <Show when={props.artifact}>
-          <SidebarAction
-            label="Details"
-            detail="Active file"
-            ariaLabel="Open file details"
-            active={props.context === "artifact" && props.contextOpen}
-            onClick={(_event?: Event) => props.onContext("artifact")}
-          >
-            <IconFile size={15} strokeWidth={1.5} />
-          </SidebarAction>
-        </Show>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import path from "path"
+import crypto from "node:crypto"
 import * as fs from "fs/promises"
 import { ApplyPatchTool } from "../../src/tool/apply_patch"
 import { Instance } from "../../src/project/instance"
@@ -510,7 +511,12 @@ describe("tool.apply_patch freeform", () => {
 
         const patchText = "*** Begin Patch\n*** Update File: modify.txt\n@@\n-missing\n+changed\n*** End Patch"
 
-        await expect(execute({ patchText }, ctx)).rejects.toThrow("apply_patch verification failed")
+        const expectedHash = crypto.createHash("sha256").update("line1\nline2\n").digest("hex")
+        await expect(execute({ patchText }, ctx)).rejects.toThrow(
+          new RegExp(
+            `apply_patch verification failed:[\\s\\S]*Re-read [\\s\\S]*modify\\.txt before retrying;[\\s\\S]*${expectedHash}[\\s\\S]*1: line1[\\s\\S]*2: line2`,
+          ),
+        )
         expect(await fs.readFile(target, "utf-8")).toBe("line1\nline2\n")
       },
     })

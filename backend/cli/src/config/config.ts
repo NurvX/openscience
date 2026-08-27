@@ -27,6 +27,7 @@ import { Bus } from "@/bus"
 import { GlobalBus } from "@/bus/global"
 import { Event } from "../server/event"
 import { ProjectTrust } from "../project/trust"
+import { State } from "../project/state"
 
 export namespace Config {
   const log = Log.create({ service: "config" })
@@ -71,7 +72,10 @@ export namespace Config {
     return merged
   }
 
-  export const state = Instance.state(async () => {
+  let globalRevision = 0
+
+  const loadState = async () => {
+    const revision = globalRevision
     const auth = await Auth.all()
 
     // Load remote/well-known config first as the base layer (lowest precedence)
@@ -317,8 +321,19 @@ export namespace Config {
       execution,
       directories,
       executableDirectories: directories.filter((dir) => !projectSet.has(path.resolve(dir))),
+      globalRevision: revision,
     }
-  })
+  }
+
+  const cachedState = Instance.state(loadState)
+
+  export async function state() {
+    while (true) {
+      const current = await cachedState()
+      if (current.globalRevision === globalRevision) return current
+      State.clear(Instance.directory, loadState)
+    }
+  }
 
   function rel(item: string, patterns: string[]) {
     for (const pattern of patterns) {
@@ -1120,13 +1135,13 @@ export namespace Config {
                 .positive()
                 .max(2_147_483_647)
                 .describe(
-                  "Maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Defaults to 300000 (5 minutes) and resets on every body chunk.",
+                  "Optional maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Disabled by default and resets on every body chunk when configured.",
                 ),
               z.literal(false).describe("Disable the provider inactivity watchdog."),
             ])
             .optional()
             .describe(
-              "Maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Defaults to 300000 (5 minutes), resets on each body chunk, and does not cap total generation time.",
+              "Optional maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Disabled by default; when configured it resets on each body chunk and does not cap total generation time.",
             ),
         })
         .catchall(z.any())
@@ -1681,15 +1696,12 @@ export namespace Config {
   }
 
   /**
-   * Dispose every open project instance after a GLOBAL config write and
-   * announce it. Awaited (not fire-and-forget): the per-directory
-   * Config.state cache (config.ts's `state`, backed by Instance.state) is
-   * only invalidated by Instance.dispose()/disposeAll() — resetting the
-   * `global` lazy singleton above is not enough on its own for an
-   * already-instantiated project directory. Callers of setMcp/setProvider/
-   * setSandbox/unsetGlobal/updateGlobal/replaceGlobal rely on the write
-   * being visible to the very next Config.get(), not eventually-after-a-
-   * fire-and-forget-settles visible.
+   * Refresh per-project config after a GLOBAL write and announce it. Most
+   * global settings still dispose open project instances because their MCP,
+   * plugin, sandbox, formatter, or LSP state may need rebuilding. Narrow
+   * routing-only writes can preserve those instances: the revision carried by
+   * Config.state makes the new value visible to the next Config.get() without
+   * interrupting an active turn.
    *
    * The provider cache is dropped here too, and specifically BEFORE the
    * announcement. Provider memoises the resolved provider/SDK map at module
@@ -1701,8 +1713,9 @@ export namespace Config {
    * invalidate it afterwards. Announcing a disposal that the provider map has
    * not honoured yet is the bug; the two belong together.
    */
-  async function disposeGlobalInstances() {
-    await Instance.disposeAll().catch(() => undefined)
+  async function disposeGlobalInstances(options: { preserveInstances?: boolean } = {}) {
+    globalRevision++
+    if (!options.preserveInstances) await Instance.disposeAll().catch(() => undefined)
     // Lazy because provider.ts imports Config — the same cycle-break
     // provider/models.ts and openscience/index.ts already use to reach it.
     // Best-effort like the disposal above: the config file is already written
@@ -1720,6 +1733,22 @@ export namespace Config {
         properties: {},
       },
     })
+  }
+
+  /**
+   * Config.updateGlobal is also the narrow write path for model selection and
+   * billing-route changes. Those values are consumed through Config.state (and
+   * Provider's separately invalidated memo), so the revision above is enough
+   * to make them visible immediately. Tearing down every project for these
+   * patches would interrupt active turns and reject unrelated approvals.
+   *
+   * Keep the allow-list deliberately small: MCP, provider definitions,
+   * plugins, permissions, sandboxing, formatters, LSP, and other runtime
+   * configuration still require the normal full instance rebuild.
+   */
+  function canPreserveInstances(config: Info) {
+    const refreshOnly = new Set<keyof Info>(["billing", "model", "small_model"])
+    return Object.keys(config).every((key) => refreshOnly.has(key as keyof Info))
   }
 
   async function patchConfigPath(scope: Scope, target: string[], value: unknown) {
@@ -1880,7 +1909,7 @@ export namespace Config {
     })
   }
 
-  export async function updateGlobal(config: Info) {
+  export async function updateGlobal(config: Info, options: { preserveInstances?: boolean } = {}) {
     const filepath = globalConfigFile()
     const before = await Bun.file(filepath)
       .text()
@@ -1904,7 +1933,9 @@ export namespace Config {
     })()
 
     global.reset()
-    await disposeGlobalInstances()
+    await disposeGlobalInstances({
+      preserveInstances: options.preserveInstances ?? canPreserveInstances(config),
+    })
 
     return next
   }

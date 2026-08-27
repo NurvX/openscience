@@ -89,6 +89,9 @@ export const dict = {
   "ui.common.submit": "제출",
 
   "ui.permission.deny": "거부",
+  "ui.permission.required": "승인이 필요합니다",
+  "ui.permission.chooseScope": "승인 범위 선택",
+  "ui.permission.actions": "승인 작업",
   "ui.permission.allowAlways": "항상 허용",
   "ui.permission.allowOnce": "한 번만 허용",
   "ui.permission.allow": "허용 범위…",

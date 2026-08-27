@@ -65,9 +65,12 @@ export namespace ProjectAccess {
       "project.access.changed",
       z.object({
         status: Status,
+        narrowing: z.boolean(),
       }),
     ),
   }
+
+  const rank: Record<Mode, number> = { ask: 0, approve: 1, full: 2 }
 
   function root(project: Project.Info) {
     return Project.canonicalize(project.worktree)
@@ -130,6 +133,7 @@ export namespace ProjectAccess {
   export async function update(project: Project.Info, input: Update): Promise<Status> {
     const parsed = Update.parse(input)
     const canonical = root(project)
+    const previous = await status(project)
 
     // Establish trust before widening access. ProjectTrust validates the
     // canonical root, so a stale tab cannot grant a different checkout.
@@ -155,15 +159,27 @@ export namespace ProjectAccess {
         }
       })
       const next = await status(project)
+      const narrowing = rank[next.mode] < rank[previous.mode]
       if (!changed) {
-        const pending = await AuthoritySignal.pending({ kind: "access", projectID: project.id, mode: parsed.mode })
+        const pending =
+          (await AuthoritySignal.pending({
+            kind: "access",
+            projectID: project.id,
+            mode: parsed.mode,
+            narrowing,
+          })) ?? (await AuthoritySignal.pending({ kind: "access", projectID: project.id, mode: parsed.mode }))
         if (!pending) return next
-        await Bus.publish(Event.Changed, { status: next })
+        await Bus.publish(Event.Changed, { status: next, narrowing })
         await AuthoritySignal.settle(pending)
         return next
       }
-      const signal = await AuthoritySignal.publish({ kind: "access", projectID: project.id, mode: parsed.mode })
-      await Bus.publish(Event.Changed, { status: next })
+      const signal = await AuthoritySignal.publish({
+        kind: "access",
+        projectID: project.id,
+        mode: parsed.mode,
+        narrowing,
+      })
+      await Bus.publish(Event.Changed, { status: next, narrowing })
       await AuthoritySignal.settle(signal.revision)
       return next
     })

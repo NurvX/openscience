@@ -25,6 +25,12 @@ import { retry } from "@synsci/util/retry"
 import { useGlobalSDK } from "./global-sdk"
 import { createInflightCache } from "./inflight-cache"
 import { createListeners } from "./listeners"
+import {
+  createReconnectGenerationGuard,
+  mergeHydratedMessages,
+  nextReconnectHydrationLimit,
+  reconnectHydrationLimit,
+} from "./session-hydration"
 // InitError used to live in pages/error.tsx (now deleted with the legacy
 // openscience shell). Inline the shape so the openscience context layer keeps
 // compiling — it's dead code under the new AtlasApp entry but is still
@@ -367,6 +373,44 @@ function createGlobalSync() {
   })
 
   const children: Record<string, [Store<State>, SetStoreFunction<State>]> = {}
+  type TranscriptMutation = { revision: number; removed: boolean }
+  type TranscriptMutations = {
+    revision: number
+    messages: Map<string, TranscriptMutation>
+    parts: Map<string, TranscriptMutation>
+  }
+  const transcriptMutations = new Map<string, TranscriptMutations>()
+  const reconnectGenerations = createReconnectGenerationGuard()
+  const transcriptKey = (directory: string, sessionID: string) => `${directory}\0${sessionID}`
+  const transcriptState = (directory: string, sessionID: string) => {
+    const key = transcriptKey(directory, sessionID)
+    const existing = transcriptMutations.get(key)
+    if (existing) return existing
+    const created = { revision: 0, messages: new Map(), parts: new Map() } satisfies TranscriptMutations
+    transcriptMutations.set(key, created)
+    return created
+  }
+  const markTranscriptMutation = (
+    directory: string,
+    sessionID: string,
+    kind: "messages" | "parts",
+    id: string,
+    removed = false,
+  ) => {
+    const state = transcriptState(directory, sessionID)
+    state.revision += 1
+    state[kind].set(id, { revision: state.revision, removed })
+  }
+  const transcriptChangesSince = (mutations: Map<string, TranscriptMutation>, revision: number) => {
+    const changed = new Set<string>()
+    const removed = new Set<string>()
+    for (const [id, mutation] of mutations) {
+      if (mutation.revision <= revision) continue
+      if (mutation.removed) removed.add(id)
+      else changed.add(id)
+    }
+    return { changed, removed }
+  }
 
   /**
    * Fired after every `refreshProviders`. That call is the shared choke point
@@ -748,6 +792,94 @@ function createGlobalSync() {
     return promise
   }
 
+  /**
+   * The global SSE endpoint is intentionally ephemeral: reconnecting starts a
+   * fresh stream and cannot replay events emitted while the browser was
+   * disconnected. Rehydrate only transcripts that are already open/cached so
+   * a brief transport interruption cannot leave a live turn missing text or
+   * reasoning until the user reloads the page.
+   */
+  async function refreshLoadedMessages(directory: string) {
+    const existing = children[directory]
+    if (!existing) return
+    const [store, setStore] = existing
+    const loaded = Object.entries(store.message).filter(([, messages]) => messages.length > 0)
+    if (!loaded.length) return
+
+    const client = sdkFor(directory, store.project)
+    for (let index = 0; index < loaded.length; index += 2) {
+      const slice = loaded.slice(index, index + 2)
+      await Promise.all(
+        slice.map(async ([sessionID, current]) => {
+          const reconnectKey = transcriptKey(directory, sessionID)
+          const generation = reconnectGenerations.begin(reconnectKey)
+          const anchors = new Set(current.map((message) => message.id))
+          const startedAt = transcriptState(directory, sessionID).revision
+          let limit = reconnectHydrationLimit(current.length)
+          let items: Array<{ info: Message; parts: Part[] }> = []
+          let completeSnapshot = false
+
+          // The endpoint returns the newest N. Expand a full window until it
+          // overlaps the history that was present when this request began; a
+          // fixed amount of headroom can otherwise leave a silent gap after a
+          // long disconnect.
+          while (true) {
+            const response = await client.session.messages({ sessionID, limit })
+            if (!reconnectGenerations.isCurrent(reconnectKey, generation)) return
+            items = (response.data ?? []).filter((item) => !!item?.info?.id)
+            completeSnapshot = items.length < limit
+            const next = nextReconnectHydrationLimit({
+              limit,
+              snapshotCount: items.length,
+              overlapsCached: items.some((item) => anchors.has(item.info.id)),
+            })
+            if (next === undefined) break
+            limit = next
+          }
+
+          if (!reconnectGenerations.isCurrent(reconnectKey, generation)) return
+
+          const messages = items
+            .map((item) => item.info)
+            .filter((message) => !!message?.id)
+            .sort((a, b) => a.id.localeCompare(b.id))
+
+          batch(() => {
+            // Read the store only after the request settles. SSE may have
+            // updated it while the snapshot was in flight; those entities must
+            // win over older response bytes, while untouched fetched entities
+            // still refresh the cache.
+            const mutations = transcriptState(directory, sessionID)
+            const messageChanges = transcriptChangesSince(mutations.messages, startedAt)
+            const partChanges = transcriptChangesSince(mutations.parts, startedAt)
+            const liveMessages = store.message[sessionID] ?? []
+            const mergedMessages = mergeHydratedMessages(liveMessages, messages, {
+              preserveCached: !completeSnapshot,
+              preferCached: messageChanges.changed,
+              removed: messageChanges.removed,
+            })
+            setStore("message", sessionID, reconcile(mergedMessages, { key: "id" }))
+
+            for (const item of items) {
+              if (messageChanges.removed.has(item.info.id)) continue
+              const incomingParts = item.parts.filter((part) => !!part?.id).sort((a, b) => a.id.localeCompare(b.id))
+              const liveParts = store.part[item.info.id] ?? []
+              const mergedParts = mergeHydratedMessages(liveParts, incomingParts, {
+                // A message response contains its complete part list, unlike
+                // the partial transcript window. Preserve only parts that SSE
+                // changed after this request started.
+                preserveCached: false,
+                preferCached: partChanges.changed,
+                removed: partChanges.removed,
+              })
+              setStore("part", item.info.id, reconcile(mergedParts, { key: "id" }))
+            }
+          })
+        }),
+      )
+    }
+  }
+
   const unsub = globalSDK.event.listen((e) => {
     const directory = e.name
     const event = e.details
@@ -757,7 +889,12 @@ function createGlobalSync() {
         case "server.connected": {
           if (!globalStore.ready) return
           refresh()
-          for (const directory of Object.keys(children)) push(directory)
+          for (const directory of Object.keys(children)) {
+            push(directory)
+            void refreshLoadedMessages(directory).catch((error) =>
+              console.warn("Failed to backfill loaded transcripts after reconnect", { directory, error }),
+            )
+          }
           return
         }
         case "global.disposed": {
@@ -792,6 +929,9 @@ function createGlobalSync() {
 
     const cleanupSessionCaches = (sessionID: string) => {
       if (!sessionID) return
+      const key = transcriptKey(directory, sessionID)
+      transcriptMutations.delete(key)
+      reconnectGenerations.invalidate(key)
 
       const hasAny =
         store.message[sessionID] !== undefined ||
@@ -902,6 +1042,7 @@ function createGlobalSync() {
         break
       }
       case "message.updated": {
+        markTranscriptMutation(directory, event.properties.info.sessionID, "messages", event.properties.info.id)
         const messages = store.message[event.properties.info.sessionID]
         if (!messages) {
           setStore("message", event.properties.info.sessionID, [event.properties.info])
@@ -924,6 +1065,7 @@ function createGlobalSync() {
       case "message.removed": {
         const sessionID = event.properties.sessionID
         const messageID = event.properties.messageID
+        markTranscriptMutation(directory, sessionID, "messages", messageID, true)
 
         setStore(
           produce((draft) => {
@@ -942,6 +1084,7 @@ function createGlobalSync() {
       }
       case "message.part.updated": {
         const part = event.properties.part
+        markTranscriptMutation(directory, part.sessionID, "parts", part.id)
         const parts = store.part[part.messageID]
         if (!parts) {
           setStore("part", part.messageID, [part])
@@ -963,6 +1106,7 @@ function createGlobalSync() {
       }
       case "message.part.removed": {
         const messageID = event.properties.messageID
+        markTranscriptMutation(directory, event.properties.sessionID, "parts", event.properties.partID, true)
         const parts = store.part[messageID]
         if (!parts) break
         const result = Binary.search(parts, event.properties.partID, (p) => p.id)

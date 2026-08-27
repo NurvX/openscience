@@ -128,6 +128,40 @@ test("same conversation and environment reuses one Python process while child co
   })
 }, 60_000)
 
+test("Python execution errors omit the internal eval probe and kernel wrapper frames", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const session = await executionSession()
+      const tool = await PythonTool.init()
+      const identity: KernelIdentity = {
+        projectID: Instance.project.id,
+        sessionID: session.id,
+        name: "python",
+        language: "python",
+      }
+      try {
+        const result = await tool.execute(
+          {
+            code: "from pathlib import Path\nraise PermissionError('Operation not permitted: /project/output.png')",
+            timeout: 30_000,
+          },
+          context(session.id, "call_clean_python_error"),
+        )
+
+        expect(result.output).toContain("PermissionError")
+        expect(result.output).toContain('File "<python>", line 2')
+        expect(result.output).not.toContain("SyntaxError")
+        expect(result.output).not.toContain("During handling of the above exception")
+        expect(result.output).not.toContain("openscience-pykernel-")
+      } finally {
+        await KernelRuntime.release(identity)
+      }
+    },
+  })
+}, 60_000)
+
 test("a timed-out Python cell fully retires its process before the next call starts clean", async () => {
   await using tmp = await tmpdir({ git: true })
   await Instance.provide({

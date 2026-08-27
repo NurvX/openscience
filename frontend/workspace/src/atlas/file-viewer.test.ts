@@ -4,6 +4,7 @@ import {
   createFileRequestOwner,
   describeFile,
   fileRequestKey,
+  fileReadRetryDelay,
   fileErrorMessage,
   initialFileScope,
   missingFileFallback,
@@ -195,6 +196,12 @@ describe("file viewer reads", () => {
 
     expect(named).toEqual({ cancelled: true })
     expect(browser).toEqual({ cancelled: true })
+  })
+
+  test("uses bounded backoff for an active interrupted file read", () => {
+    expect(fileReadRetryDelay(0)).toBe(150)
+    expect(fileReadRetryDelay(1)).toBe(500)
+    expect(fileReadRetryDelay(2)).toBeUndefined()
   })
 
   test("invalidates an in-flight read when project or session identity changes", () => {

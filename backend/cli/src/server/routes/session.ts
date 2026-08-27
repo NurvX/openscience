@@ -510,13 +510,16 @@ export const SessionRoutes = lazy(() =>
         const source = c.req.header("x-openscience-abort-source") === "runner_timeout" ? "runner_timeout" : "user"
         const controller = SessionPrompt.activeController(sessionID)
         try {
-          await RuntimeEvents.requestCancel({ sessionID, source })
+          const result = await RuntimeEvents.requestCancel({ sessionID, source })
+          if (!controller && result.status === "requested") {
+            await RuntimeEvents.cancel({ sessionID, runID: result.runID, source })
+          }
         } catch (error) {
           log.error("failed to record runtime cancellation", { sessionID, source, error })
         } finally {
-          // Durable cancellation can await a foreign owner. Bind the local
-          // abort to the controller observed when this HTTP request arrived so
-          // an old/stale request can never cancel a newer prompt.
+          // Keep the runtime active while abort-aware tools and the assistant
+          // message settle. Their events must commit before RuntimeEvents.fail
+          // turns the durable cancellation request into the terminal event.
           if (controller) SessionPrompt.cancel(sessionID, controller)
         }
         return c.json(true)

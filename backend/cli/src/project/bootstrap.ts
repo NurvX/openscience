@@ -165,6 +165,10 @@ const authoritySync = Instance.state(
           }
           if (event.kind === "access") {
             if (event.projectID !== projectID) return false
+            if (event.narrowing === false) {
+              await Promise.all([invalidateProjectExecutionCaches(), invalidateProjectTokenCache(projectID)])
+              return true
+            }
             const jobs = import("../compute/jobs").then((module) => module.ComputeJobs.cancelProject(projectID))
             const biology = BiologyKernelLifecycle.releaseProject(projectID)
             await Promise.all([
@@ -212,14 +216,10 @@ export function applyRuntimeCancellationRequest(request: {
   runID: string
   source: "user" | "runner_timeout"
 }) {
-  return RuntimeEvents.cancel({
-    ...request,
-    // Run the controller abort synchronously after the exact journal owner is
-    // terminalized but before terminal event delivery yields. A stale request
-    // that no longer owns the journal never invokes this callback and cannot
-    // cancel a newer prompt in the same session.
-    onCancelled: () => SessionPrompt.cancel(request.sessionID),
-  })
+  const controller = SessionPrompt.activeController(request.sessionID)
+  if (!controller) return RuntimeEvents.cancel(request)
+  SessionPrompt.cancel(request.sessionID, controller)
+  return Promise.resolve({ status: "requested" as const, runID: request.runID })
 }
 
 export async function InstanceBootstrap() {
@@ -303,7 +303,11 @@ export async function InstanceBootstrap() {
     ])
   })
 
-  Bus.subscribe(ProjectAccess.Event.Changed, async () => {
+  Bus.subscribe(ProjectAccess.Event.Changed, async (payload) => {
+    if (!payload.properties.narrowing) {
+      await Promise.all([invalidateProjectExecutionCaches(), invalidateProjectTokenCache(Instance.project.id)])
+      return
+    }
     const jobs = import("../compute/jobs").then((module) => module.ComputeJobs.cancelProject(Instance.project.id))
     const biology = BiologyKernelLifecycle.releaseProject(Instance.project.id)
     await Promise.all([

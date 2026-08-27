@@ -57,6 +57,7 @@ describe("generate_image response parsing", () => {
             {
               prompt: "A precise monochrome benchmark schematic",
               output_path: "figures/benchmark.png",
+              input_path: "/dev/null",
               model: "google/gemini-3-pro-image",
               aspect_ratio: "16:9",
             },
@@ -95,11 +96,107 @@ describe("generate_image response parsing", () => {
             metadata: { route: "byok", mime: "image/png", size: image.byteLength, attachment: "inline" },
           })
           expect(result.attachments).toHaveLength(1)
+
+          const directoryPlaceholder = await tool.execute(
+            {
+              prompt: "A second precise monochrome benchmark schematic",
+              output_path: "figures/benchmark-directory-placeholder.png",
+              input_path: ".",
+              model: "google/gemini-3-pro-image",
+            },
+            {
+              sessionID: session.id,
+              messageID: "msg_generate_image_directory_placeholder",
+              callID: "call_generate_image_directory_placeholder",
+              agent: "research",
+              abort: new AbortController().signal,
+              messages: [],
+              metadata() {},
+              async ask(input) {
+                asks.push(input)
+              },
+            },
+          )
+          expect(requests).toHaveLength(2)
+          expect(requests[1]?.body).not.toHaveProperty("input_references")
+          expect(directoryPlaceholder.metadata).toMatchObject({ mime: "image/png", route: "byok" })
+
+          await Bun.write(path.join(workspace, "input.png"), image)
+          await tool.execute(
+            {
+              prompt: "Preserve the source and improve its contrast",
+              output_path: "figures/benchmark-edited.png",
+              input_path: "input.png",
+              model: "google/gemini-3-pro-image",
+            },
+            {
+              sessionID: session.id,
+              messageID: "msg_generate_image_edit",
+              callID: "call_generate_image_edit",
+              agent: "research",
+              abort: new AbortController().signal,
+              messages: [],
+              metadata() {},
+              async ask(input) {
+                asks.push(input)
+              },
+            },
+          )
+          expect(requests).toHaveLength(3)
+          expect(requests[2]?.body).toMatchObject({
+            input_references: [
+              { type: "image_url", image_url: { url: expect.stringContaining("data:image/png;base64,") } },
+            ],
+          })
         },
       })
     } finally {
       server.stop(true)
     }
+  })
+
+  test("rejects unsupported external image paths before requesting filesystem approval", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Provider.invalidate(),
+      fn: async () => {
+        const session = await executionSession()
+        const tool = await GenerateImageTool.init()
+        const asks: Parameters<Tool.Context["ask"]>[0][] = []
+        const ctx: Tool.Context = {
+          sessionID: session.id,
+          messageID: "msg_invalid_image_paths",
+          callID: "call_invalid_image_paths",
+          agent: "research",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata() {},
+          async ask(input) {
+            asks.push(input)
+          },
+        }
+
+        await expect(
+          tool.execute(
+            { prompt: "figure", output_path: "/tmp/not-an-image.txt", model: "google/gemini-3-pro-image" },
+            ctx,
+          ),
+        ).rejects.toThrow("output_path must end in")
+        await expect(
+          tool.execute(
+            {
+              prompt: "figure",
+              output_path: "figure.png",
+              input_path: "/tmp/not-an-image",
+              model: "google/gemini-3-pro-image",
+            },
+            ctx,
+          ),
+        ).rejects.toThrow("input_path must be an existing")
+        expect(asks).toHaveLength(0)
+      },
+    })
   })
 
   test("rejects a managed wallet token pointed at a non-Atlas image host", async () => {

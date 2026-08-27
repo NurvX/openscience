@@ -365,6 +365,13 @@ describe("managed project session scratch", () => {
       expect(pythonResult.stdout).toContain(firstRoot)
       expect(KernelRuntime.status(python).environment?.cwd).toBe(firstRoot)
       expect(await Bun.file(path.join(firstRoot, "python.txt")).text()).toBe("python")
+      const pythonProject = path.join(root, "python-project.txt")
+      const pythonProjectResult = await KernelRuntime.execute(
+        python,
+        `open(${JSON.stringify(pythonProject)}, "w").write("durable-python")`,
+      )
+      expect(pythonProjectResult.ok).toBe(true)
+      expect(await Bun.file(pythonProject).text()).toBe("durable-python")
 
       if (Bun.which("Rscript")) {
         const r: KernelIdentity = {
@@ -376,6 +383,10 @@ describe("managed project session scratch", () => {
         const rResult = await KernelRuntime.execute(r, "cat(getwd())")
         expect(rResult.stdout).toContain(firstRoot)
         expect(KernelRuntime.status(r).environment?.cwd).toBe(firstRoot)
+        const rProject = path.join(root, "r-project.txt")
+        const rProjectResult = await KernelRuntime.execute(r, `writeLines("durable-r", ${JSON.stringify(rProject)})`)
+        expect(rProjectResult.ok).toBe(true)
+        expect(await Bun.file(rProject).text()).toBe("durable-r\n")
       }
 
       const biology = await BiologyNotebookTool.init()

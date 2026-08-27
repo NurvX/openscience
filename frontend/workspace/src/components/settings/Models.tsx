@@ -17,12 +17,13 @@ import {
   modelRouteValue,
   modelSummary,
 } from "@/context/model-catalog"
+import { resolveModelAccessRoute, type ModelRouteAccess } from "@/context/model-route-resolution"
 import { CodexConnection } from "./CodexConnection"
 import { ManagedInference } from "./ManagedInference"
 import { ProviderKeys } from "./ProviderKeys"
 import { ProviderLogo } from "./ProviderLogo"
 import { modelGroup, modelGroupLabel, modelGroupRank } from "../model-groups"
-import { PanelBody, PanelHeader, PanelScroll, Section } from "./_shared"
+import { FilterMenu, PanelBody, PanelHeader, PanelScroll, RowCopy, SearchInput, Section } from "./_shared"
 import { settingsApi } from "./api"
 import { type CapabilityPreferences, type DelegationModel, publishCapabilityPreferences } from "../prompt-capabilities"
 import "./models.css"
@@ -32,6 +33,7 @@ type AvailableModel = ReturnType<ReturnType<typeof useModels>["list"]>[number]
 type RouteOption = {
   key: ModelKey
   source: AvailableModel
+  routeAccess: ModelRouteAccess
   access: string
   provider: string
   providerLogo: string
@@ -58,6 +60,7 @@ type Option = {
 }
 
 type Scope = "all" | "reasoning" | "latest" | "long"
+type BillingPreference = { llm: "managed" | "byok" | null }
 type OptionGroup<T> = { id: string; label: string; models: T[] }
 type WorkerOption = {
   value: string
@@ -99,22 +102,25 @@ export default function Models() {
   const [preferences, preferenceActions] = createResource(() =>
     settingsApi<CapabilityPreferences>(sdk.url, fetchFn, "/settings/preferences"),
   )
-  const routeAccess = (item: AvailableModel) =>
-    inferenceSourceLabel(
+  const [billing, billingActions] = createResource(() =>
+    settingsApi<BillingPreference>(sdk.url, fetchFn, "/settings/billing"),
+  )
+  const unsubscribeBilling = sync.onProvidersRefreshed(() => void billingActions.refetch())
+  onCleanup(unsubscribeBilling)
+  const routeOption = (item: AvailableModel): RouteOption => {
+    const display = displayProviderForModel(item.provider, item.id)
+    const key = { providerID: item.provider.id, modelID: item.id }
+    const routeAccess =
       inferenceSource({
         providerID: item.provider.id,
         credential: item.provider.source,
         billing: sync.data.config.billing?.llm,
-      }),
-      item.provider.name,
-    )
-  const routeOption = (item: AvailableModel): RouteOption => {
-    const display = displayProviderForModel(item.provider, item.id)
-    const key = { providerID: item.provider.id, modelID: item.id }
+      }) ?? (item.provider.source === "managed" || item.provider.id.startsWith("synsci") ? "managed" : "byok")
     return {
       key,
       source: item,
-      access: routeAccess(item),
+      routeAccess,
+      access: inferenceSourceLabel(routeAccess, item.provider.name),
       provider: display.name,
       providerLogo: display.id,
       value: modelRouteValue(key),
@@ -188,49 +194,65 @@ export default function Models() {
   const [renderLimit, setRenderLimit] = createSignal(48)
   const visibleGroups = createMemo(() => takeModelGroups(groups(), renderLimit()))
 
-  // Mount the long catalog in bounded chunks. The first viewport is useful
-  // immediately; the rest fills over subsequent frames instead of forcing one
-  // click to synchronously create hundreds of rows.
+  // Keep the catalog intentionally bounded. Search and filters still cover the
+  // full set, while explicit expansion avoids silently mounting hundreds of
+  // rows into a 25,000px settings page.
   createEffect(() => {
     query()
     scope()
     const total = filtered().length
     setRenderLimit(Math.min(48, total))
-    if (total <= 48) return
-    let frame = requestAnimationFrame(function load() {
-      setRenderLimit((current) => Math.min(total, current + 48))
-      if (renderLimit() < total) frame = requestAnimationFrame(load)
-    })
-    onCleanup(() => cancelAnimationFrame(frame))
   })
   const [notice, setNotice] = createSignal("Pinned models appear first. Hidden models stay out of the picker.")
   const pinnedCount = createMemo(() => options().filter((model) => model.pinned).length)
   const visibleCount = createMemo(() => options().filter((model) => model.visible).length)
   const workerOptions = createMemo<WorkerOption[]>(() => {
-    const selected = preferences()?.delegation_worker_model
-    const routes = models
-      .list()
+    const selected = preferences()?.delegation_worker_model ?? undefined
+    const currentBilling = billing.latest?.llm ?? sync.data.config.billing?.llm
+    const routes = options()
       .filter(
         (model) =>
-          models.visible({ providerID: model.provider.id, modelID: model.id }) ||
-          (selected?.providerID === model.provider.id && selected.modelID === model.id),
+          model.visible ||
+          model.routes.some(
+            (route) => route.key.providerID === selected?.providerID && route.key.modelID === selected?.modelID,
+          ),
       )
-      .map((model) => {
-        const display = displayProviderForModel(model.provider, model.id)
-        const key = { providerID: model.provider.id, modelID: model.id }
-        return {
-          value: modelRouteValue(key),
-          label: modelDisplayName(model.name, model.provider.id, model.id),
-          provider: display.name,
-          providerLogo: display.id,
-          model: key,
-        }
+      .flatMap((model): WorkerOption[] => {
+        const resolved = resolveModelAccessRoute({
+          routes: model.routes.map((route) => ({ ...route.key, access: route.routeAccess, route })),
+          billing: currentBilling,
+          current: selected,
+        })
+        const route = resolved?.route
+        if (!route) return []
+        return [
+          {
+            value: model.logicalKey,
+            label: model.label,
+            provider: route.access,
+            providerLogo: route.providerLogo,
+            model: route.key,
+          },
+        ]
       })
       .toSorted((a, b) => a.label.localeCompare(b.label) || a.value.localeCompare(b.value))
-    return [{ value: "inherit", label: "Same as conversation" }, ...routes]
+    const saved =
+      selected &&
+      !routes.some(
+        (option) => option.model?.providerID === selected.providerID && option.model.modelID === selected.modelID,
+      )
+        ? ({
+            value: `saved:${modelRouteValue(selected)}`,
+            label: modelDisplayName(selected.modelID, selected.providerID, selected.modelID),
+            provider: `Saved · ${selected.providerID}`,
+            providerLogo: selected.providerID,
+            model: selected,
+          } satisfies WorkerOption)
+        : undefined
+    return [{ value: "inherit", label: "Same as conversation" }, ...(saved ? [saved] : []), ...routes]
   })
   const workerSelection = createMemo(() => {
-    const selected = preferences()?.delegation_worker_model
+    const selected = preferences()?.delegation_worker_model ?? undefined
     if (!selected) return workerOptions()[0]
     return workerOptions().find(
       (option) => option.model?.providerID === selected.providerID && option.model.modelID === selected.modelID,
@@ -283,91 +305,85 @@ export default function Models() {
   return (
     <div class="settings-models-panel h-full min-h-0">
       <PanelScroll>
-        <PanelHeader title="Models" description="Manage model access and the choices shown in the composer." />
+        <PanelHeader title="Models" description="Connect model access and choose what appears while you work." />
         <PanelBody>
           <Show when={error()}>
             <div role="alert" class="settings-alert text-12-regular" data-tone="critical">
               {error()}
             </div>
           </Show>
-          <Section
-            id="model-access"
-            title="Access and routing"
-            description="Choose how model calls use credits, keys, or subscriptions."
-          >
+          <Section id="model-access" title="Model access">
             <div class="settings-card models-access-card">
               <ManagedInference onError={setError} />
             </div>
           </Section>
 
           <Section
-            id="provider-keys"
-            title="Provider keys"
-            description="Connect provider keys and subscriptions. Credentials stay in the owner-only local auth file."
+            id="model-connections"
+            title="Connections"
+            description="Subscriptions and provider keys available on this machine."
           >
-            <div class="settings-card models-access-card">
+            <div class="settings-card models-connections-card">
               <CodexConnection onError={setError} />
+              <ProviderKeys onError={setError} />
             </div>
-            <ProviderKeys onError={setError} />
           </Section>
 
-          <Section id="worker-model" title="Worker model">
-            <div class="settings-card settings-defaults-card models-worker-card">
-              <Select
-                aria-label="Worker model"
-                options={workerOptions()}
-                current={workerSelection()}
-                value={(option) => option.value}
-                label={(option) => option.label}
-                disabled={!preferences()}
-                onSelect={(option) => option && void setWorkerModel(option)}
-                variant="secondary"
-                size="small"
-                triggerVariant="settings"
-              >
-                {(option) => (
-                  <Show when={option}>
-                    {(entry) => (
-                      <span class="models-default-option">
-                        <Show when={entry().providerLogo}>
-                          {(logo) => (
-                            <ProviderLogo id={logo()} label={entry().provider ?? "Model provider"} size="small" />
-                          )}
-                        </Show>
-                        <span class="min-w-0 truncate">{entry().label}</span>
-                        <Show when={entry().provider}>
-                          <span class="models-default-option__provider">{entry().provider}</span>
-                        </Show>
-                      </span>
+          <Section id="model-preferences" title="Model preferences">
+            <div class="settings-card settings-defaults-card models-preferences-card">
+              <div class="settings-row models-preference-row">
+                <RowCopy title="Worker model" description="Used for delegated research." />
+                <div class="models-worker-control">
+                  <Select
+                    aria-label="Worker model"
+                    options={workerOptions()}
+                    current={workerSelection()}
+                    value={(option) => option.value}
+                    label={(option) => option.label}
+                    disabled={!preferences()}
+                    onSelect={(option) => option && void setWorkerModel(option)}
+                    variant="secondary"
+                    size="small"
+                    triggerVariant="settings"
+                  >
+                    {(option) => (
+                      <Show when={option}>
+                        {(entry) => (
+                          <span class="models-default-option">
+                            <Show when={entry().providerLogo}>
+                              {(logo) => (
+                                <ProviderLogo id={logo()} label={entry().provider ?? "Model provider"} size="small" />
+                              )}
+                            </Show>
+                            <span class="min-w-0 truncate">{entry().label}</span>
+                            <Show when={entry().provider}>
+                              {(provider) => (
+                                <span class="shrink-0 text-10-regular text-text-weaker">· {provider()}</span>
+                              )}
+                            </Show>
+                          </span>
+                        )}
+                      </Show>
                     )}
-                  </Show>
-                )}
-              </Select>
-            </div>
-          </Section>
-
-          <Section
-            id="model-visibility"
-            title="Composer models"
-            description="Keep the composer focused. Open the full catalog only when you want to change its model list."
-          >
-            <div class="models-catalog-summary">
-              <div class="models-catalog-summary__copy">
-                <strong class="text-13-medium text-text-strong">Model picker</strong>
-                <span class="text-11-regular text-text-weak">
-                  {visibleCount()} shown · {pinnedCount()}/3 pinned
-                </span>
+                  </Select>
+                </div>
               </div>
-              <Button
-                class="settings-panel-action models-secondary-action"
-                size="small"
-                variant="secondary"
-                aria-expanded={catalogOpen()}
-                aria-controls="composer-model-catalog"
-                onClick={() => setCatalogOpen((open) => !open)}
-              >
-                {catalogOpen() ? "Done" : "Customize models"}
-              </Button>
+              <div class="settings-row models-preference-row">
+                <RowCopy
+                  title="Composer models"
+                  description={`${visibleCount()} visible · ${pinnedCount()}/3 pinned for quick access`}
+                />
+                <Button
+                  class="settings-panel-action models-secondary-action"
+                  size="small"
+                  variant="secondary"
+                  aria-expanded={catalogOpen()}
+                  aria-controls="composer-model-catalog"
+                  onClick={() => setCatalogOpen((open) => !open)}
+                >
+                  {catalogOpen() ? "Done" : "Edit"}
+                </Button>
+              </div>
             </div>
             <Show when={catalogOpen()}>
               <div id="composer-model-catalog" class="models-catalog-disclosure">
@@ -375,31 +391,18 @@ export default function Models() {
                   {notice()}
                 </p>
                 <div class="models-catalog-toolbar">
-                  <label class="settings-control settings-control--search text-text-weak">
-                    <Icon name="magnifying-glass" size="small" />
-                    <input
-                      type="search"
-                      aria-label="Filter models"
-                      value={query()}
-                      onInput={(event) => setQuery(event.currentTarget.value)}
-                      placeholder="Search name, provider, or try is:reasoning"
-                      class="min-w-0 flex-1 bg-transparent text-13-regular text-text-strong outline-none placeholder:text-text-weaker"
-                    />
-                  </label>
-                  <div class="models-filter-group" aria-label="Model filters">
-                    <For each={scopes}>
-                      {(item) => (
-                        <button
-                          type="button"
-                          aria-pressed={scope() === item.id}
-                          onClick={() => setScope(item.id)}
-                          class="settings-filter-pill"
-                        >
-                          {item.label}
-                        </button>
-                      )}
-                    </For>
-                  </div>
+                  <SearchInput
+                    value={query()}
+                    onInput={setQuery}
+                    placeholder="Search models"
+                    ariaLabel="Filter models"
+                  />
+                  <FilterMenu
+                    options={scopes}
+                    value={scope()}
+                    onSelect={(value) => setScope(value as Scope)}
+                    ariaLabel="Model filter"
+                  />
                 </div>
                 <div class="settings-card settings-model-catalog">
                   <For each={visibleGroups()}>
@@ -472,9 +475,19 @@ export default function Models() {
                     <p class="px-4 py-6 text-center text-12-regular text-text-weak">No models match this filter.</p>
                   </Show>
                   <Show when={renderLimit() < filtered().length}>
-                    <p class="models-catalog-progress" role="status">
-                      Loading more models…
-                    </p>
+                    <div class="models-catalog-progress" role="status">
+                      <span>
+                        Showing {renderLimit()} of {filtered().length}
+                      </span>
+                      <Button
+                        class="settings-panel-action models-secondary-action"
+                        size="small"
+                        variant="secondary"
+                        onClick={() => setRenderLimit((current) => Math.min(filtered().length, current + 48))}
+                      >
+                        Show more
+                      </Button>
+                    </div>
                   </Show>
                 </div>
               </div>

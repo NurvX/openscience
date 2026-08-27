@@ -64,6 +64,13 @@ export namespace ModalPlan {
 
   export type Prepared = { plan: Schema; files: ModalAdapter.File[] }
 
+  export type StagingOptions = {
+    /** Prefix used when upload globs are rooted above the selected cwd (SSH). */
+    prefix?: string
+    /** Explicit upload requests keep the normal fail-closed denied-path behavior. */
+    denied?: "skip" | "error"
+  }
+
   const posix = (value: string) => value.split(path.sep).join("/").replace(/^\.\//, "")
 
   function workspaceCwd(value: string | undefined) {
@@ -77,6 +84,23 @@ export namespace ModalPlan {
   function forbidden(file: string) {
     const segments = file.split("/")
     return segments.some((part) => DENY.has(part)) || SECRET.test(file)
+  }
+
+  function uploadPatterns(patterns: string[], label: string) {
+    return patterns.map((pattern) => {
+      if (path.isAbsolute(pattern) || pattern.split(/[\\/]/).includes("..")) {
+        throw new Error(`${label} upload pattern must stay inside the project: ${pattern}`)
+      }
+      const normalized = posix(pattern)
+      return { pattern: normalized, glob: new Bun.Glob(normalized) }
+    })
+  }
+
+  function requestsDirectory(pattern: string, glob: Bun.Glob, directory: string) {
+    if (pattern === directory || pattern.startsWith(`${directory}/`)) return true
+    return ["file", "file.txt", "file.py", "nested/file", "nested/file.txt", "nested/file.py"].some((probe) =>
+      glob.match(`${directory}/${probe}`),
+    )
   }
 
   async function ignored(root: string, files: string[]) {
@@ -157,6 +181,104 @@ export namespace ModalPlan {
       })
     }
     return { files: result, bytes }
+  }
+
+  /**
+   * Build a bounded Project-files manifest for copying into Session scratch.
+   * Unlike the ordinary upload resolver, this traversal never follows a
+   * symbolic link. The returned files have already passed the same ignore,
+   * denied-path, regular-file, count, byte, and content-stability checks used
+   * by remote compute approval.
+   */
+  export async function stagingFiles(
+    root: string,
+    patterns: string[],
+    label = "Compute staging",
+    options: StagingOptions = {},
+  ) {
+    const project = await Filesystem.canonical(root)
+    if (!project) throw new Error(`${label} project directory is unavailable: ${root}`)
+    const globs = uploadPatterns(patterns, label)
+    const prefix = posix(options.prefix?.trim() || "")
+    if (path.posix.isAbsolute(prefix) || prefix.split("/").includes("..")) {
+      throw new Error(`${label} prefix must stay inside the project: ${options.prefix}`)
+    }
+
+    const found: string[] = []
+    const visit = async (directory: string, relative = ""): Promise<void> => {
+      const entries = await fs.readdir(directory, { withFileTypes: true })
+      for (const entry of entries) {
+        const current = relative ? `${relative}/${entry.name}` : entry.name
+        // Project snapshots contain ordinary files only. Do not traverse or
+        // preserve links, sockets, devices, or other filesystem capabilities.
+        if (entry.isSymbolicLink()) {
+          const projected = prefix ? `${prefix}/${current}` : current
+          if (
+            options.denied === "error" &&
+            globs.some(({ pattern, glob }) => glob.match(projected) || requestsDirectory(pattern, glob, projected))
+          ) {
+            throw new Error(`${label} input may not be staged through a symbolic link: ${projected}`)
+          }
+          continue
+        }
+        if (entry.isDirectory()) {
+          if (forbidden(current)) {
+            const projected = prefix ? `${prefix}/${current}` : current
+            if (
+              options.denied === "error" &&
+              globs.some(({ pattern, glob }) => requestsDirectory(pattern, glob, projected))
+            ) {
+              throw new Error(`${label} upload policy denied: ${projected}`)
+            }
+            continue
+          }
+          await visit(path.join(directory, entry.name), current)
+          continue
+        }
+        if (!entry.isFile()) continue
+        const projected = prefix ? `${prefix}/${current}` : current
+        if (!globs.some(({ glob }) => glob.match(projected))) continue
+        if (forbidden(current)) {
+          if (options.denied === "error") throw new Error(`${label} upload policy denied: ${projected}`)
+          continue
+        }
+        found.push(current)
+      }
+    }
+    if (globs.length) await visit(project)
+
+    const excludes = await ignored(project, found)
+    const selected = found.filter((file) => !excludes.has(file))
+    if (selected.length > ModalUpload.COUNT_LIMIT) {
+      throw new Error(`${label} uploads exceed the ${ModalUpload.COUNT_LIMIT}-file approval limit`)
+    }
+
+    const candidates: Array<Omit<ModalAdapter.File, "sha256"> & { snapshot: ModalUpload.Snapshot }> = []
+    for (const relative of selected) {
+      const canonical = await Filesystem.canonical(path.resolve(project, relative))
+      if (!canonical || !Filesystem.contains(project, canonical)) {
+        throw new Error(`${label} upload escaped the project: ${relative}`)
+      }
+      const snapshot = await ModalUpload.inspect(canonical, label)
+      candidates.push({
+        path: relative,
+        canonical,
+        size: snapshot.size,
+        snapshot,
+      })
+    }
+    const ordered = candidates.toSorted((a, b) => a.path.localeCompare(b.path))
+    const bytes = ModalUpload.validate(ordered, label)
+    const files: ModalAdapter.File[] = []
+    for (const file of ordered) {
+      files.push({
+        path: file.path,
+        canonical: file.canonical,
+        size: file.size,
+        sha256: (await ModalUpload.hash(file.canonical, file.snapshot, label)).sha256,
+      })
+    }
+    return { files, bytes }
   }
 
   export async function prepare(input: Input): Promise<Prepared> {

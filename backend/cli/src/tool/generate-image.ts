@@ -19,6 +19,28 @@ const MAX_IMAGE_ERROR_BYTES = 1024 * 1024
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
 const DEFAULT_MODEL = "google/gemini-3-pro-image"
 
+function normalizedInputPath(value: string | undefined) {
+  if (!value) return
+  const input = value.trim()
+  // Some model providers compulsively fill optional file fields with a Unix
+  // sink or the current directory. Neither can ever be an image, and both mean
+  // "no source image" in a generation request. Treat them as omitted so a
+  // brand-new image does not require a fake blank canvas.
+  if (input === "." || input === "/dev/null" || (process.platform === "win32" && input.toUpperCase() === "NUL")) {
+    return
+  }
+  return input
+}
+
+function normalizeInput(args: unknown) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args
+  const input = { ...(args as Record<string, unknown>) }
+  if (typeof input.input_path === "string" && normalizedInputPath(input.input_path) === undefined) {
+    delete input.input_path
+  }
+  return input
+}
+
 type OpenRouterImage = {
   data?: Array<{
     b64_json?: string
@@ -254,18 +276,25 @@ export const GenerateImageTool = Tool.define("generate_image", {
       .min(1)
       .max(10_000)
       .optional()
-      .describe("Optional existing image path for image editing"),
+      .describe(
+        "Existing regular image file to edit. Omit this field entirely when generating a new image; never use a directory, '.', /dev/null, or a blank placeholder.",
+      ),
     model: z.string().trim().min(1).max(300).default(DEFAULT_MODEL).describe("OpenRouter image model ID"),
     aspect_ratio: z
       .enum(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"])
       .optional()
       .describe("Requested output aspect ratio"),
   }),
+  normalizeInput,
   async execute(params, ctx) {
     const directory = await sessionToolDirectory(ctx)
     const requested = path.isAbsolute(params.output_path)
       ? params.output_path
       : path.join(directory, params.output_path)
+    const requestedExtension = path.extname(requested).toLowerCase()
+    if (![".png", ".jpg", ".jpeg", ".webp"].includes(requestedExtension)) {
+      throw new Error("output_path must end in .png, .jpg, .jpeg, or .webp")
+    }
     using outputAccess = await assertExternalDirectory(ctx, requested, { access: "write" })
     const output = outputAccess?.path ?? requested
     const extension = path.extname(output).toLowerCase()
@@ -278,12 +307,21 @@ export const GenerateImageTool = Tool.define("generate_image", {
       }
       throw error
     })
-    using inputAccess = params.input_path
-      ? await assertExternalDirectory(
-          ctx,
-          path.isAbsolute(params.input_path) ? params.input_path : path.join(directory, params.input_path),
-          { access: "read" },
-        )
+    const requestedInput = params.input_path
+      ? path.isAbsolute(params.input_path)
+        ? params.input_path
+        : path.join(directory, params.input_path)
+      : undefined
+    const requestedInputExtension = requestedInput ? path.extname(requestedInput).toLowerCase() : undefined
+    if (requestedInput && ![".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(requestedInputExtension!)) {
+      throw new Error(
+        "input_path must be an existing .png, .jpg, .jpeg, .webp, or .gif image. Omit input_path when generating a new image.",
+      )
+    }
+    using inputAccess = requestedInput
+      ? await assertExternalDirectory(ctx, requestedInput, {
+          access: "read",
+        })
       : undefined
     const source = inputAccess?.path
     const sourceExtension = source ? path.extname(source).toLowerCase() : undefined
@@ -295,6 +333,11 @@ export const GenerateImageTool = Tool.define("generate_image", {
           (error) => {
             if (error instanceof SafeFileIO.LimitError) {
               throw new Error("The input image exceeds the 30 MB safety limit.")
+            }
+            if (error instanceof Error && error.message.startsWith("Only regular files can be accessed:")) {
+              throw new Error(
+                "input_path must be an existing image file. Omit input_path when generating a new image; directories and placeholder files are not valid image references.",
+              )
             }
             throw error
           },

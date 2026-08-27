@@ -147,6 +147,9 @@ while True:
         # Try eval first so a final expression can be returned without print().
         try:
             compiled = compile(code, "<python>", "eval")
+        except SyntaxError:
+            compiled = None
+        if compiled is not None:
             value = eval(compiled, ns)
             if value is not None:
                 try:
@@ -161,17 +164,20 @@ while True:
                             result_html = html
                     except Exception:
                         pass
-        except SyntaxError:
+        else:
             exec(compile(code, "<python>", "exec"), ns)
     except SystemExit:
         stderr_buf.write("SystemExit caught (kernel stays alive)\\n")
         ok = False
     except BaseException as e:
         ok = False
+        tb = e.__traceback__
+        while tb is not None and tb.tb_frame.f_code.co_filename == __file__:
+            tb = tb.tb_next
         error = {
             "name": type(e).__name__,
             "message": str(e),
-            "traceback": traceback.format_exc().splitlines(),
+            "traceback": "".join(traceback.format_exception(type(e), e, tb)).splitlines(),
         }
     finally:
         # Capture any open matplotlib figures as PNG MIME parts, then close them.
@@ -318,12 +324,16 @@ class PythonKernel implements Kernel {
     this.cachePath = cachePath
 
     const interpreter = await findPython(opts?.binary)
-    const workspace = opts?.sessionID
-      ? await SessionFilesystem.processWriteRoots(opts.sessionID)
-      : [Instance.directory, Instance.worktree]
-    const readable = opts?.sessionID
-      ? await SessionFilesystem.processReadRoots(opts.sessionID)
-      : [Instance.directory, Instance.worktree]
+    const workspace = opts?.authorizedWritable
+      ? [...opts.authorizedWritable]
+      : opts?.sessionID
+        ? await SessionFilesystem.processWriteRoots(opts.sessionID)
+        : [Instance.directory, Instance.worktree]
+    const readable = opts?.authorizedReadable
+      ? [...opts.authorizedReadable]
+      : opts?.sessionID
+        ? await SessionFilesystem.processReadRoots(opts.sessionID)
+        : [Instance.directory, Instance.worktree]
     // Confine the kernel to the workspace when the execution sandbox is on: the
     // runtime runs arbitrary agent-authored code — the same threat model as the
     // bash tool — so it must not be able to escape the boundary bash respects.
@@ -922,12 +932,13 @@ async function executePython(params: PythonInput, ctx: Tool.Context, compatibili
 
 const PythonDefinition: Awaited<ReturnType<Tool.Info<typeof PythonParameters>["init"]>> = {
   description: [
-    "Run Python code in one long-lived managed process per conversation and selected environment. Variables, imports, and state persist across calls in that environment; child conversations and other environments are isolated.",
-    "State is working memory, not reproducibility; save source, inputs, parameters, and outputs for material results and clean-rerun when practical.",
-    "Omit `environment`/use `default` for the shared Python starter. An approved package change can create a named, machine-wide task environment that later sessions and projects reuse.",
-    "Set a concise scientific `title` and `source` for script-backed work. Use `action: stop` with the same environment to clear state.",
-    "Prefer this to `bash python` for analysis. Submit pip changes separately with sys.executable + subprocess; they require approval and automatically restart this environment after success.",
-    "np, pd, scipy, and plt load on first use; final expressions return automatically and matplotlib figures become inline PNGs.",
+    "Run Python in one long-lived managed process per conversation and selected environment. State persists across calls; child conversations and other environments are isolated.",
+    "Treat state as working memory, not reproducibility. Save code, inputs, parameters, and outputs for material results; clean-rerun when practical.",
+    "`environment` defaults to the shared Python starter. Approved package changes can create named machine-wide environments reusable across projects.",
+    "Set a concise `title`; set `source` for script-backed work. `action: stop` clears that environment.",
+    "Prefer this over `bash python`. Submit pip changes separately with sys.executable + subprocess; approval is required and will automatically restart this environment after success.",
+    "Execution starts in Session scratch, so relative outputs stay there. Approved Project paths support durable edits; other external paths remain sandboxed.",
+    "np, pd, scipy, and plt load lazily; final expressions return and matplotlib figures become inline PNGs.",
   ].join("\n"),
   parameters: PythonParameters,
   execute: (params, ctx) => executePython(params, ctx, false),

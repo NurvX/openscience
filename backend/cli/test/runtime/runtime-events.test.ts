@@ -281,6 +281,44 @@ describe("public runtime event journal", () => {
     })
   })
 
+  test("appends cancellation only after abort settlement events", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        await RuntimeEvents.begin({
+          sessionID: session.id,
+          runID: "run_cancel_order",
+          acceptedAt: 100,
+          effort: "normal",
+        })
+
+        await expect(RuntimeEvents.requestCancel({ sessionID: session.id, source: "user" })).resolves.toEqual({
+          status: "requested",
+          runID: "run_cancel_order",
+        })
+        await Bus.publish(Tick, { sessionID: session.id, value: 1 })
+        await RuntimeEvents.fail({
+          sessionID: session.id,
+          runID: "run_cancel_order",
+          messageID: "msg_cancelled",
+          error: new Error("The operation was aborted."),
+        })
+        await Bus.publish(Tick, { sessionID: session.id, value: 2 })
+
+        expect((await RuntimeEvents.replay(session.id)).events).toMatchObject([
+          { type: "runtime.accepted" },
+          { type: Tick.type, properties: { value: 1 } },
+          {
+            type: "runtime.cancelled",
+            properties: { source: "user", messageID: "msg_cancelled" },
+          },
+        ])
+      },
+    })
+  })
+
   test("stops the active controller even when cancellation event delivery fails", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
@@ -318,16 +356,21 @@ describe("public runtime event journal", () => {
         })
 
         const response = await SessionRoutes().request(`/${session.id}/abort`, { method: "POST" })
-        unsubscribe()
 
         expect(response.status).toBe(200)
         expect(() => SessionPrompt.assertNotBusy(session.id)).not.toThrow()
+        await running
+        await RuntimeEvents.cancel({
+          sessionID: session.id,
+          runID: "run_cancel_delivery_failure",
+          source: "user",
+        })
+        unsubscribe()
         expect((await RuntimeEvents.replay(session.id)).events.at(-1)).toMatchObject({
           runID: "run_cancel_delivery_failure",
           type: "runtime.cancelled",
           properties: { source: "user" },
         })
-        await running
         expect(CommandRuntime.list(Instance.project.id, session.id)).toEqual([])
         await Session.remove(session.id)
       },

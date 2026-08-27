@@ -526,6 +526,12 @@
       color: var(--text-weak);
     }
 
+    > [data-component="reasoning-status-part"] {
+      margin: 1px 0 1px 5px;
+      padding-left: 12px;
+      border-left: 1px solid var(--border-weaker-base);
+    }
+
     > [data-component="text-part"] [data-slot="text-part-body"] {
       margin-top: 14px;
     }

@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import z from "zod"
 import { ComputeJobs } from "../../src/compute/jobs"
+import { ModalUpload } from "../../src/compute/modal/upload"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
 import { SessionFilesystem } from "../../src/session/filesystem"
@@ -210,6 +211,9 @@ test("keeps one project inventory across isolated conversation workspaces", asyn
 test("discovers saved SSH targets and produces an exact scoped Slurm plan", async () => {
   await using tmp = await tmpdir({ git: true })
   const root = path.join(tmp.path, "compute")
+  const source = path.join(tmp.path, "ssh-analysis")
+  await fs.mkdir(source, { recursive: true })
+  await Bun.write(path.join(source, "train.py"), "print('ssh input')\n")
   const host = ComputeJobs.Host.parse({
     id: "lab-slurm",
     label: "Lab Slurm",
@@ -253,6 +257,25 @@ test("discovers saved SSH targets and produces an exact scoped Slurm plan", asyn
       const digest = preview.metadata.compute_job.plan?.digest
       expect(digest).toMatch(/^[a-f0-9]{64}$/)
       expect(asked).toEqual([])
+
+      const staged = await tool.execute(
+        {
+          action: "plan",
+          name: "Staged Slurm run",
+          purpose: "Stage the project analysis before dispatch.",
+          command: "python train.py",
+          cwd: "ssh-analysis",
+          target: { kind: "ssh", host_id: host.id },
+          resources: { cpus: 2, time_minutes: 5 },
+        },
+        context(session.id, asked),
+      )
+      expect(staged.output).toContain("Staged Project files/ssh-analysis into Session scratch before planning.")
+      expect(staged.metadata.compute_job.plan).toMatchObject({
+        provider: "ssh",
+        remote_cwd: "ssh-analysis",
+        uploads: [expect.objectContaining({ path: "ssh-analysis/train.py" })],
+      })
 
       const stopped = {
         ...context(session.id, asked),
@@ -343,6 +366,348 @@ test("starts Modal through JobBroker only after a digest-bound scoped approval",
       expect(asked[0]).toMatchObject({ permission: "modal", patterns: [digest], always: [digest] })
       expect(dispatched.metadata.job?.modal?.approval).toBe(digest)
       expect(dispatched.output).toContain("Dispatched modal job")
+    },
+  })
+})
+
+test("snapshots an existing Project-files cwd into Session scratch before a Modal plan", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const root = path.join(tmp.path, "compute")
+  const source = path.join(tmp.path, "cerbench-analysis")
+  await fs.mkdir(source, { recursive: true })
+  await Bun.write(path.join(source, "analysis.py"), "print('staged input')\n")
+  const modal = {
+    app: "openscience-test",
+    image: "python:3.12-slim",
+    network: "none" as const,
+    timeoutMinutes: 10,
+    concurrency: 1,
+  }
+  const provider = {
+    volume: (project: string, id: string) => `test-${Bun.hash(`${project}\0${id}`)}`,
+    run: async () => ({ code: 0, outputs: [] }),
+    recover: async () => ({ code: 0, outputs: [] }),
+    find: async () => undefined,
+    close: async () => undefined,
+    release: async () => undefined,
+  } satisfies ComputeJobs.ModalProvider
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await trustProject()
+      const session = await Session.create({})
+      const workspace = await SessionFilesystem.workspace(session.id)
+      const asked: Asked[] = []
+      const tool = await createComputeJobTool({
+        root,
+        modal,
+        credentials: { ...modal, tokenId: "ak", tokenSecret: "as" },
+        provider,
+      }).init()
+
+      const preview = await tool.execute(
+        {
+          action: "plan",
+          name: "CERBench shards",
+          purpose: "Run the reviewed evaluation inputs.",
+          command: "python analysis.py",
+          cwd: "cerbench-analysis",
+          target: { kind: "modal" },
+          gpu: "none",
+        },
+        context(session.id, asked),
+      )
+
+      expect(preview.output).toContain("Staged Project files/cerbench-analysis into Session scratch before planning.")
+      expect(preview.metadata.compute_job.plan).toMatchObject({
+        provider: "modal",
+        cwd: path.join(workspace, "cerbench-analysis"),
+        workspace_cwd: "cerbench-analysis",
+        uploads: [expect.objectContaining({ path: "analysis.py" })],
+      })
+      expect(await Bun.file(path.join(workspace, "cerbench-analysis", "analysis.py")).text()).toBe(
+        "print('staged input')\n",
+      )
+      expect(asked).toEqual([])
+      expect(await ComputeJobs.list({ root, projectDirectory: tmp.path, workspace })).toEqual([])
+
+      const dispatched = await tool.execute(
+        {
+          action: "start",
+          name: "CERBench shards",
+          purpose: "Run the reviewed evaluation inputs.",
+          command: "python analysis.py",
+          cwd: "cerbench-analysis",
+          target: { kind: "modal" },
+          gpu: "none",
+        },
+        context(session.id, asked),
+      )
+      expect(dispatched.metadata.job?.modal?.uploads).toEqual([expect.objectContaining({ path: "analysis.py" })])
+      expect(asked).toHaveLength(1)
+    },
+  })
+})
+
+test("remote Project-files staging excludes symlinks, denied paths, and ignored large directories", async () => {
+  if (process.platform === "win32") return
+  await using tmp = await tmpdir({ git: true })
+  const root = path.join(tmp.path, "compute")
+  const source = path.join(tmp.path, "filtered-analysis")
+  const outside = path.join(tmp.path, "outside-inputs")
+  await Promise.all([
+    fs.mkdir(path.join(source, "ignored"), { recursive: true }),
+    fs.mkdir(path.join(source, "node_modules", "package"), { recursive: true }),
+    fs.mkdir(outside, { recursive: true }),
+  ])
+  await Promise.all([
+    Bun.write(path.join(source, "analysis.py"), "print('approved')\n"),
+    Bun.write(path.join(source, ".gitignore"), "ignored/\n"),
+    Bun.write(path.join(source, ".env"), "PRIVATE_TOKEN=secret\n"),
+    Bun.write(path.join(source, "node_modules", "package", "index.js"), "throw new Error('not staged')\n"),
+    Bun.write(path.join(outside, "external.py"), "print('outside')\n"),
+  ])
+  await Bun.write(path.join(source, "ignored", "large.bin"), "")
+  await fs.truncate(path.join(source, "ignored", "large.bin"), ModalUpload.LIMIT + 1)
+  await Promise.all([
+    fs.symlink(outside, path.join(source, "external")),
+    fs.symlink(path.join(source, "analysis.py"), path.join(source, "alias.py")),
+  ])
+  const modal = {
+    app: "openscience-test",
+    image: "python:3.12-slim",
+    network: "none" as const,
+    timeoutMinutes: 10,
+    concurrency: 1,
+  }
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await trustProject()
+      const session = await Session.create({})
+      const workspace = await SessionFilesystem.workspace(session.id)
+      const tool = await createComputeJobTool({
+        root,
+        modal,
+        credentials: { ...modal, tokenId: "ak", tokenSecret: "as" },
+      }).init()
+
+      const preview = await tool.execute(
+        {
+          action: "plan",
+          name: "Filtered inputs",
+          purpose: "Stage only bounded ordinary project files.",
+          command: "python analysis.py",
+          cwd: "filtered-analysis",
+          target: { kind: "modal" },
+          gpu: "none",
+        },
+        context(session.id, []),
+      )
+
+      const plan = preview.metadata.compute_job.plan
+      if (plan?.provider !== "modal") throw new Error("compute_job did not return its Modal staging plan")
+      expect(plan.uploads.map((file) => file.path)).toEqual([".gitignore", "analysis.py"])
+      const staged = path.join(workspace, "filtered-analysis")
+      expect(await Bun.file(path.join(staged, "analysis.py")).text()).toBe("print('approved')\n")
+      expect(await Bun.file(path.join(staged, ".gitignore")).exists()).toBe(true)
+      expect(await fs.lstat(path.join(staged, "alias.py")).catch(() => undefined)).toBeUndefined()
+      expect(await fs.lstat(path.join(staged, "external")).catch(() => undefined)).toBeUndefined()
+      expect(await fs.lstat(path.join(staged, "ignored")).catch(() => undefined)).toBeUndefined()
+      expect(await fs.lstat(path.join(staged, "node_modules")).catch(() => undefined)).toBeUndefined()
+      expect(await Bun.file(path.join(staged, ".env")).exists()).toBe(false)
+    },
+  })
+})
+
+test("rejects an oversized Project-files staging manifest before copying or approval", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const root = path.join(tmp.path, "compute")
+  const source = path.join(tmp.path, "oversized-analysis")
+  await fs.mkdir(source, { recursive: true })
+  await Bun.write(path.join(source, "large.bin"), "")
+  await fs.truncate(path.join(source, "large.bin"), ModalUpload.LIMIT + 1)
+  const modal = {
+    app: "openscience-test",
+    image: "python:3.12-slim",
+    network: "none" as const,
+    timeoutMinutes: 10,
+    concurrency: 1,
+  }
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await trustProject()
+      const session = await Session.create({})
+      const workspace = await SessionFilesystem.workspace(session.id)
+      const asked: Asked[] = []
+      const tool = await createComputeJobTool({
+        root,
+        modal,
+        credentials: { ...modal, tokenId: "ak", tokenSecret: "as" },
+      }).init()
+
+      await expect(
+        tool.execute(
+          {
+            action: "start",
+            name: "Oversized inputs",
+            purpose: "Prove the copy is bounded before dispatch.",
+            command: "python analysis.py",
+            cwd: "oversized-analysis",
+            target: { kind: "modal" },
+            gpu: "none",
+          },
+          context(session.id, asked),
+        ),
+      ).rejects.toThrow("Modal staging input exceeds the 100 MiB approval limit")
+      expect(asked).toEqual([])
+      expect(await fs.lstat(path.join(workspace, "oversized-analysis")).catch(() => undefined)).toBeUndefined()
+      expect((await fs.readdir(workspace)).some((name) => name.startsWith(".compute-stage-"))).toBe(false)
+      expect(await ComputeJobs.list({ root, projectDirectory: tmp.path, workspace })).toEqual([])
+    },
+  })
+})
+
+test("explicit remote uploads narrow or disable the Project-files snapshot", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const root = path.join(tmp.path, "compute")
+  const selected = path.join(tmp.path, "selected-analysis")
+  const empty = path.join(tmp.path, "empty-analysis")
+  const denied = path.join(tmp.path, "denied-analysis")
+  await Promise.all([
+    fs.mkdir(selected, { recursive: true }),
+    fs.mkdir(empty, { recursive: true }),
+    fs.mkdir(path.join(denied, ".ssh"), { recursive: true }),
+  ])
+  await Promise.all([
+    Bun.write(path.join(selected, "analysis.py"), "print('selected')\n"),
+    Bun.write(path.join(selected, "notes.txt"), "not selected\n"),
+    Bun.write(path.join(selected, ".env"), "PRIVATE_TOKEN=secret\n"),
+    Bun.write(path.join(empty, "analysis.py"), "print('not uploaded')\n"),
+    Bun.write(path.join(denied, ".ssh", "id_ed25519"), "private key\n"),
+  ])
+  const modal = {
+    app: "openscience-test",
+    image: "python:3.12-slim",
+    network: "none" as const,
+    timeoutMinutes: 10,
+    concurrency: 1,
+  }
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await trustProject()
+      const session = await Session.create({})
+      const workspace = await SessionFilesystem.workspace(session.id)
+      const tool = await createComputeJobTool({
+        root,
+        modal,
+        credentials: { ...modal, tokenId: "ak", tokenSecret: "as" },
+      }).init()
+
+      const narrowed = await tool.execute(
+        {
+          action: "plan",
+          name: "Selected inputs",
+          purpose: "Stage only the explicit input.",
+          command: "python analysis.py",
+          cwd: "selected-analysis",
+          uploads: ["analysis.py"],
+          target: { kind: "modal" },
+          gpu: "none",
+        },
+        context(session.id, []),
+      )
+      const narrowedPlan = narrowed.metadata.compute_job.plan
+      if (narrowedPlan?.provider !== "modal") throw new Error("compute_job did not return its Modal upload plan")
+      expect(narrowedPlan.uploads.map((file) => file.path)).toEqual(["analysis.py"])
+      expect(await Bun.file(path.join(workspace, "selected-analysis", "analysis.py")).exists()).toBe(true)
+      expect(await Bun.file(path.join(workspace, "selected-analysis", "notes.txt")).exists()).toBe(false)
+      expect(await Bun.file(path.join(workspace, "selected-analysis", ".env")).exists()).toBe(false)
+
+      const disabled = await tool.execute(
+        {
+          action: "plan",
+          name: "No inputs",
+          purpose: "Preserve the explicit no-input contract.",
+          command: "python -c 'print(42)'",
+          cwd: "empty-analysis",
+          uploads: [],
+          target: { kind: "modal" },
+          gpu: "none",
+        },
+        context(session.id, []),
+      )
+      const disabledPlan = disabled.metadata.compute_job.plan
+      if (disabledPlan?.provider !== "modal") throw new Error("compute_job did not return its no-input Modal plan")
+      expect(disabledPlan.uploads).toEqual([])
+      expect(await fs.readdir(path.join(workspace, "empty-analysis"))).toEqual([])
+
+      await expect(
+        tool.execute(
+          {
+            action: "plan",
+            name: "Denied inputs",
+            purpose: "Keep explicit denied inputs fail-closed.",
+            command: "true",
+            cwd: "denied-analysis",
+            uploads: [".ssh/id_ed25519"],
+            target: { kind: "modal" },
+            gpu: "none",
+          },
+          context(session.id, []),
+        ),
+      ).rejects.toThrow("Modal staging upload policy denied: .ssh")
+      expect(await fs.lstat(path.join(workspace, "denied-analysis")).catch(() => undefined)).toBeUndefined()
+    },
+  })
+})
+
+test("rejects an unavailable or absolute compute cwd before approval and dispatch", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const root = path.join(tmp.path, "compute")
+  const modal = {
+    app: "openscience-test",
+    image: "python:3.12-slim",
+    network: "none" as const,
+    timeoutMinutes: 10,
+    concurrency: 1,
+  }
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await trustProject()
+      const session = await Session.create({})
+      const workspace = await SessionFilesystem.workspace(session.id)
+      const asked: Asked[] = []
+      const tool = await createComputeJobTool({
+        root,
+        modal,
+        credentials: { ...modal, tokenId: "ak", tokenSecret: "as" },
+      }).init()
+      const workload = {
+        action: "start" as const,
+        name: "Missing inputs",
+        purpose: "Verify compute preflight.",
+        command: "python analysis.py",
+        target: { kind: "modal" as const },
+        gpu: "none",
+      }
+
+      await expect(tool.execute({ ...workload, cwd: "missing-analysis" }, context(session.id, asked))).rejects.toThrow(
+        'Compute working directory "missing-analysis" does not exist in Session scratch or Project files',
+      )
+      await expect(tool.execute({ ...workload, cwd: tmp.path }, context(session.id, asked))).rejects.toThrow(
+        "Compute working directory must be relative to Session scratch",
+      )
+      expect(asked).toEqual([])
+      expect(await ComputeJobs.list({ root, projectDirectory: tmp.path, workspace })).toEqual([])
     },
   })
 })

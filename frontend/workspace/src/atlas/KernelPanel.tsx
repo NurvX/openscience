@@ -12,6 +12,7 @@ import { createKernelRouteRequester, kernelAPI, type KernelRoute } from "@/atlas
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { kernelMemoryLabel, type CommandStatus, type KernelStatus } from "@/atlas/kernel-runtime"
+import { IconCpu } from "@/atlas/shared/Icon"
 import type { Part, ToolPart } from "@synsci/sdk/v2/client"
 
 type KernelsPayload = { kernels: KernelStatus[] }
@@ -301,12 +302,19 @@ export function KernelPanel(props: KernelPanelProps = {}): JSX.Element {
           when={groups().length > 0}
           fallback={
             <div class="kernel-panel__empty" data-state={state().problem ? "unavailable" : "idle"}>
-              <strong>{state().empty}</strong>
-              <Show when={state().problem}>
+              <span class="kernel-panel__empty-glyph" aria-hidden="true">
+                <IconCpu size={18} strokeWidth={1.5} />
+              </span>
+              <div class="kernel-panel__empty-copy">
+                <strong>{state().empty}</strong>
                 <span>
-                  {state().stale ? "Showing the last successful inventory." : "The live inventory could not be read."}
+                  {state().problem
+                    ? state().stale
+                      ? "Showing the last successful inventory."
+                      : "The live inventory could not be read."
+                    : "Runtimes and jobs appear here while agents work."}
                 </span>
-              </Show>
+              </div>
             </div>
           }
         >

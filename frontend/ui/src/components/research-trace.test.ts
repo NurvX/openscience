@@ -126,6 +126,35 @@ describe("research trace presentation", () => {
     expect(trace.map((item) => item.part.id)).toEqual(["skill-search", "read"])
   })
 
+  test("collapses adjacent skill discovery calls without claiming the matches were loaded", () => {
+    const searched = (id: string, query: string, matches: string[]) => {
+      const item = entry(id, "skill", `Skill matches: ${query}`)
+      return {
+        ...item,
+        part: {
+          ...item.part,
+          state: {
+            status: "completed",
+            input: { query },
+            metadata: { matches },
+            output: "matches",
+          },
+        },
+      } as unknown as ResearchTraceEntry
+    }
+    const trace = visibleResearchTrace([
+      searched("search-1", "writing figures", ["scientific-writing", "scientific-schematics"]),
+      searched("search-2", "vector diagrams", ["scientific-schematics", "scientific-visualization"]),
+      entry("read", "read", "Read report.md"),
+    ])
+
+    expect(trace.map((item) => item.part.id)).toEqual(["search-1", "read"])
+    const search = trace[0]?.part
+    expect(search?.type === "tool" && search.state.status === "completed" && search.state.metadata).toEqual({
+      matches: ["scientific-writing", "scientific-schematics", "scientific-visualization"],
+    })
+  })
+
   test("keeps repeated failed source attempts individually inspectable", () => {
     const trace = visibleResearchTrace([
       entry("fetch-1", "webfetch", "Download returned HTML", "error"),
@@ -136,7 +165,7 @@ describe("research trace presentation", () => {
     expect(trace.map((item) => item.part.id)).toEqual(["fetch-1", "fetch-2", "fetch-3"])
   })
 
-  test("uses provider status-only reasoning in the live header without adding transcript rows", () => {
+  test("keeps provider status-only reasoning chronological instead of leaving a tool-only gap", () => {
     const trace = visibleResearchTrace([
       narrative("status-1", "reasoning", "Planning source retrieval", "msg-1"),
       entry("search", "websearch", "Find assay data", "completed", "msg-1"),
@@ -144,7 +173,7 @@ describe("research trace presentation", () => {
       entry("fetch", "webfetch", "Fetch assay data", "completed", "msg-2"),
     ])
 
-    expect(trace.map((item) => item.part.id)).toEqual(["search", "fetch"])
+    expect(trace.map((item) => item.part.id)).toEqual(["status-1", "search", "status-2", "fetch"])
   })
 
   test("omits deliberately hidden tools from the inline activity list", () => {

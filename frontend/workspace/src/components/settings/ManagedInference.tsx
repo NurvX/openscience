@@ -159,46 +159,48 @@ export function ManagedInference(props: { onError?: (error: string | undefined) 
     unsubscribe()
   })
 
-  const needsAce = () => wallet() !== undefined && (!wallet()!.signedIn || !wallet()!.aceEnabled)
+  const needsAce = () =>
+    wallet() !== undefined && (!wallet()!.signedIn || !wallet()!.managedSupported || !wallet()!.aceEnabled)
   const aceLabel = () => {
     if (!wallet()) return "Checking account"
     if (!wallet()!.signedIn) return "Account required"
+    if (!wallet()!.managedSupported) return "Managed unavailable"
     if (wallet()!.aceEnabled) return "Ace on"
     return "Ace off"
+  }
+  const aceAction = () => {
+    if (!wallet()?.signedIn) return "Sign in"
+    if (!wallet()?.managedSupported) return "Learn more"
+    if (!wallet()?.aceEnabled) return "Turn on Ace"
+    return "Manage Ace"
   }
 
   return (
     <div class="models-inference">
       <div class="models-routing" aria-label="Inference routing">
-        <div class="models-routing__header">
-          <div class="models-routing__title">
-            <span class="text-13-medium text-text-strong">Model access</span>
-            <span class="text-11-regular text-text-weak">Choose who bills each model call.</span>
-          </div>
-          <div
-            class="models-routing__options"
-            role="group"
-            aria-label="Inference routing mode"
-            aria-describedby="managed-inference-description"
-          >
-            <For each={MODES}>
-              {(option) => (
-                <button
-                  type="button"
-                  aria-pressed={mode() === option.value}
-                  aria-busy={busy()}
-                  disabled={busy() || wallet() === undefined}
-                  class="models-routing__option"
-                  title={option.value === "managed" && needsAce() ? "Enable Ace to use Managed models" : undefined}
-                  onClick={() => update(option.value)}
-                >
-                  <span class="models-routing__option-label">
-                    <span>{option.title}</span>
-                  </span>
-                </button>
-              )}
-            </For>
-          </div>
+        <div
+          class="models-routing__options"
+          role="group"
+          aria-label="Inference routing mode"
+          aria-describedby="managed-inference-description"
+        >
+          <For each={MODES}>
+            {(option) => (
+              <button
+                type="button"
+                aria-pressed={mode() === option.value}
+                aria-busy={busy()}
+                disabled={busy() || (option.value === "managed" && wallet() === undefined)}
+                class="models-routing__option"
+                title={option.value === "managed" && needsAce() ? "Enable Ace to use Managed models" : undefined}
+                onClick={() => update(option.value)}
+              >
+                <span class="models-routing__option-label">
+                  <span>{option.title}</span>
+                </span>
+              </button>
+            )}
+          </For>
         </div>
         <div class="models-routing__details">
           <p id="managed-inference-description" class="models-routing__description" aria-live="polite">
@@ -207,22 +209,24 @@ export function ManagedInference(props: { onError?: (error: string | undefined) 
               <span class="models-routing__sync"> Updating model availability…</span>
             </Show>
           </p>
-          <div class="models-routing__account">
-            <span class="models-routing__account-state">{aceLabel()}</span>
-            <span aria-live="polite" class="models-account-summary__balance">
-              <Show when={wallet()} fallback="Checking balance…">
-                {walletBalanceLabel(wallet()!)}
-              </Show>
-            </span>
-            <Button
-              class="settings-panel-action models-secondary-action"
-              size="small"
-              variant="secondary"
-              onClick={() => platform.openLink(URLS.dashboardBilling)}
-            >
-              {!wallet()?.signedIn ? "Sign in" : needsAce() ? "Turn on Ace" : "Manage Ace"}
-            </Button>
-          </div>
+          <Show when={mode() === "managed"}>
+            <div class="models-routing__account">
+              <span class="models-routing__account-state">{aceLabel()}</span>
+              <span aria-live="polite" class="models-account-summary__balance">
+                <Show when={wallet()} fallback="Checking balance…">
+                  {walletBalanceLabel(wallet()!)}
+                </Show>
+              </span>
+              <Button
+                class="settings-panel-action models-secondary-action"
+                size="small"
+                variant="secondary"
+                onClick={() => platform.openLink(URLS.dashboardBilling)}
+              >
+                {aceAction()}
+              </Button>
+            </div>
+          </Show>
         </div>
       </div>
 

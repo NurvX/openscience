@@ -7,16 +7,17 @@ const [css, strip, shell] = await Promise.all([
 ])
 
 describe("compute tracker styling", () => {
-  test("uses flat rows and dividers instead of nested cards", () => {
+  test("uses compact Files-style rows instead of a systems dashboard", () => {
     expect(css).toContain(".compute-row")
-    expect(css).toContain("border-bottom: 1px solid var(--color-border)")
+    expect(css).toContain("min-height: 48px")
+    expect(css).toContain("background: transparent")
+    expect(css).toContain("transition: background-color 140ms ease")
     expect(css).toContain(".kernel-session__header")
     expect(css).toContain(".kernel-panel__other")
-    expect(css).toContain(".compute-row__metric")
+    expect(css).toContain(".compute-row__telemetry")
     expect(css).not.toContain(".activity-card")
     expect(css).not.toContain(".activity-disclosure")
     expect(css).not.toContain(".compute-guide")
-    expect(css).not.toContain("box-shadow")
   })
 
   test("keeps the live inventory as the only scrolling content area", () => {
@@ -31,8 +32,10 @@ describe("compute tracker styling", () => {
     expect(shell).not.toMatch(/\.(?:compute-surface|kernel-panel|kernel-card)(?:[\s_:{.[#]|$)/)
   })
 
-  test("keeps all three host readings permanently visible", () => {
+  test("keeps host identity and the two useful capacity readings visible", () => {
     expect(strip).toContain("grid-template-columns:")
+    expect(strip).toContain(".host-strip__identity")
+    expect(strip).toContain(".host-strip__resources")
     expect(strip).toContain(".host-strip__metric")
     expect(strip).toContain("height: 2px")
     expect(strip).not.toContain("details")

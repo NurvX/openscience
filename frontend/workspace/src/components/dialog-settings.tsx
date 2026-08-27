@@ -29,16 +29,16 @@ const SETTINGS_STYLES = `
   --settings-space-6: 32px;
   --settings-space-7: 48px;
   --settings-radius-control: var(--radius-xs, 8px);
-  --settings-radius-card: var(--radius-md, 14px);
-  --settings-radius-modal: 20px;
+  --settings-radius-card: var(--radius-md, 12px);
+  --settings-radius-modal: var(--radius-lg, 16px);
   --settings-radius-pill: 999px;
-  --settings-canvas: var(--background-strong);
-  --settings-rail: color-mix(in srgb, var(--background-weak) 88%, transparent);
+  --settings-canvas: var(--background-base);
+  --settings-rail: var(--background-weak);
   --settings-surface: var(--surface-raised-stronger-non-alpha);
   --settings-surface-muted: var(--input-base);
   --settings-surface-hover: var(--surface-base-hover);
   --settings-surface-active: var(--surface-base-active);
-  --settings-selection: var(--surface-interactive-weak);
+  --settings-selection: color-mix(in srgb, var(--text-strong) 8%, transparent);
   --settings-border: var(--border-base);
   --settings-border-strong: var(--border-strong-base);
   --settings-accent: var(--border-selected);
@@ -51,8 +51,8 @@ const SETTINGS_STYLES = `
   --settings-on-primary: var(--text-interactive-base);
   --settings-toggle-active: var(--surface-brand-base);
   --settings-shadow-modal: var(--atlas-shadow-md, var(--shadow-lg));
-  --settings-shadow-card: var(--atlas-shadow-xs, none);
-  --settings-type-title: 20px;
+  --settings-shadow-card: none;
+  --settings-type-title: 18px;
   --settings-type-heading: 13px;
   --settings-type-body: 13px;
   --settings-type-helper: 12px;
@@ -183,8 +183,6 @@ const SETTINGS_STYLES = `
   border-radius: var(--settings-radius-modal);
   background: var(--settings-canvas);
   box-shadow: var(--settings-shadow-modal);
-  backdrop-filter: blur(24px) saturate(1.12);
-  -webkit-backdrop-filter: blur(24px) saturate(1.12);
   isolation: isolate;
 }
 [data-component="dialog"]:has([data-slot="dialog-content"].settings-expanded) [data-slot="dialog-container"] {
@@ -217,13 +215,13 @@ const SETTINGS_STYLES = `
   overflow: hidden;
 }
 .settings-nav {
-  width: 220px;
+  width: 208px;
   min-height: 0;
-  flex: 0 0 220px;
+  flex: 0 0 208px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: var(--settings-space-5) var(--settings-space-3) var(--settings-space-3);
+  padding: var(--settings-space-4) var(--settings-space-3) var(--settings-space-3);
   overflow: hidden;
   border-right: 1px solid var(--settings-border);
   background: var(--settings-rail);
@@ -232,8 +230,8 @@ const SETTINGS_STYLES = `
   flex: 0 0 auto;
   padding: var(--settings-space-1) var(--settings-space-2) var(--settings-space-4);
   color: var(--text-strong);
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: var(--font-weight-medium);
   line-height: 22px;
   letter-spacing: -0.012em;
 }
@@ -268,7 +266,7 @@ const SETTINGS_STYLES = `
 }
 .settings-nav__item {
   min-width: 0;
-  min-height: 34px;
+  min-height: 32px;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
@@ -294,7 +292,7 @@ const SETTINGS_STYLES = `
 }
 .settings-nav__item[data-active="true"] {
   background: var(--settings-selection);
-  color: var(--settings-accent-strong);
+  color: var(--text-strong);
   font-weight: var(--font-weight-medium);
   box-shadow: none;
 }
@@ -342,7 +340,7 @@ const SETTINGS_STYLES = `
   container-type: inline-size;
 }
 .settings-main__header {
-  min-height: 52px;
+  min-height: 48px;
   display: grid;
   grid-template-columns: minmax(72px, 1fr) auto minmax(72px, 1fr);
   align-items: center;
@@ -350,9 +348,7 @@ const SETTINGS_STYLES = `
   gap: 8px;
   padding: 0 var(--settings-space-4);
   border-bottom: 1px solid var(--settings-border);
-  background: color-mix(in srgb, var(--settings-canvas) 82%, transparent);
-  backdrop-filter: blur(18px) saturate(1.15);
-  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  background: var(--settings-canvas);
   flex-shrink: 0;
 }
 .settings-main__header > :last-child {
@@ -462,7 +458,7 @@ const SETTINGS_STYLES = `
   width: 100%;
   flex-direction: column;
   gap: var(--settings-space-3);
-  padding: var(--settings-space-6) var(--settings-space-6) var(--settings-space-4);
+  padding: var(--settings-space-5) var(--settings-space-6) var(--settings-space-3);
   border-bottom: 0;
   background: var(--settings-canvas);
 }
@@ -478,9 +474,9 @@ const SETTINGS_STYLES = `
   margin: 0;
   color: var(--text-strong);
   font-size: var(--settings-type-title);
-  font-weight: 580;
+  font-weight: var(--font-weight-medium);
   line-height: var(--settings-leading-title);
-  letter-spacing: -0.025em;
+  letter-spacing: -0.015em;
 }
 .settings-page-header p {
   max-width: 700px;
@@ -496,7 +492,7 @@ const SETTINGS_STYLES = `
   flex-direction: column;
   gap: var(--settings-space-5);
   margin-inline: auto;
-  padding: var(--settings-space-4) var(--settings-space-6) var(--settings-space-7);
+  padding: var(--settings-space-3) var(--settings-space-6) var(--settings-space-7);
 }
 .settings-section {
   display: flex;
@@ -659,10 +655,10 @@ const SETTINGS_STYLES = `
   flex-direction: column;
   gap: 2px;
   padding: 4px;
-  border: 1px solid var(--settings-border);
+  border: 0;
   border-radius: var(--settings-radius-card);
   background: var(--settings-surface);
-  box-shadow: var(--settings-shadow-card);
+  box-shadow: none;
 }
 .settings-form-card {
   display: flex;
@@ -758,7 +754,7 @@ const SETTINGS_STYLES = `
   flex-direction: column;
   gap: 6px;
   padding: var(--settings-space-3);
-  border: 1px solid var(--settings-border);
+  border: 1px solid transparent;
   border-radius: var(--settings-radius-card);
   color: var(--text-weak);
   background: var(--settings-surface-muted);
@@ -772,9 +768,9 @@ const SETTINGS_STYLES = `
   background: var(--settings-surface-hover);
 }
 .settings-choice[aria-pressed="true"] {
-  border-color: var(--settings-accent);
-  color: var(--settings-accent-strong);
-  background: var(--settings-accent-muted);
+  border-color: var(--settings-border-strong);
+  color: var(--text-strong);
+  background: var(--settings-surface);
 }
 .settings-choice:disabled {
   cursor: not-allowed;

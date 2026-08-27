@@ -7,6 +7,8 @@ export type CapturedSessionSource = {
   session?: unknown
   trace?: unknown
   executions?: unknown
+  messages?: unknown
+  filesystem?: unknown
 }
 
 function record(value: unknown): Json | undefined {

@@ -115,7 +115,9 @@ export const ProjectRoutes = lazy(() =>
         const projectID = c.req.valid("param").projectID
         await current(projectID)
         const status = await ProjectTrust.update(Instance.project, c.req.valid("json"))
-        await Instance.dispose()
+        // ProjectTrust.Event.Changed performs targeted authority revocation.
+        // Whole-instance disposal would also abort unrelated active turns and
+        // strand any approvals they are awaiting.
         return c.json(status)
       },
     )
@@ -170,7 +172,10 @@ export const ProjectRoutes = lazy(() =>
         const projectID = c.req.valid("param").projectID
         await current(projectID)
         const status = await ProjectAccess.update(Instance.project, c.req.valid("json"))
-        await Instance.dispose()
+        // ProjectAccess.Event.Changed already revokes governed processes and
+        // invalidates execution authority. Disposing the whole instance here
+        // also aborts unrelated active model turns, including when access is
+        // merely widened, so keep the conversation runtime alive.
         return c.json(status)
       },
     )

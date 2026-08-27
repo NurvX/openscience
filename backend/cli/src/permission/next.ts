@@ -125,28 +125,39 @@ export namespace PermissionNext {
   const GLOBAL_KEY = ["permission-standing", "global"]
   const projectKey = () => ["permission-standing", Instance.project.id]
 
-  const state = Instance.state(async () => {
-    const project = await Storage.read<Standing[]>(projectKey()).catch(() => [] as Standing[])
-    const global = await Storage.read<Standing[]>(GLOBAL_KEY).catch(() => [] as Standing[])
+  const state = Instance.state(
+    async () => {
+      const project = await Storage.read<Standing[]>(projectKey()).catch(() => [] as Standing[])
+      const global = await Storage.read<Standing[]>(GLOBAL_KEY).catch(() => [] as Standing[])
 
-    const pending: Record<
-      string,
-      {
-        info: Request
-        resolve: () => void
-        reject: (e: any) => void
-        trace: Promise<void>
+      const pending: Record<
+        string,
+        {
+          info: Request
+          resolve: () => void
+          reject: (e: any) => void
+          trace: Promise<void>
+        }
+      > = {}
+
+      return {
+        pending,
+        standing: { project, global },
+        // "Allow for this conversation" grants, keyed by sessionID. In-memory on
+        // purpose: the scope ends with the conversation.
+        session: {} as Record<string, Ruleset>,
       }
-    > = {}
-
-    return {
-      pending,
-      standing: { project, global },
-      // "Allow for this conversation" grants, keyed by sessionID. In-memory on
-      // purpose: the scope ends with the conversation.
-      session: {} as Record<string, Ruleset>,
-    }
-  })
+    },
+    async (current) => {
+      const traces: Promise<void>[] = []
+      for (const [id, pending] of Object.entries(current.pending)) {
+        delete current.pending[id]
+        traces.push(pending.trace)
+        pending.reject(new InstanceDisposedError())
+      }
+      await Promise.allSettled(traces)
+    },
+  )
 
   type State = Awaited<ReturnType<typeof state>>
 
@@ -476,6 +487,13 @@ export namespace PermissionNext {
   export class CorrectedError extends Error {
     constructor(message: string) {
       super(`The user rejected permission to use this specific tool call with the following feedback: ${message}`)
+    }
+  }
+
+  /** A genuine server/project shutdown ended an unresolved approval. */
+  export class InstanceDisposedError extends Error {
+    constructor() {
+      super("The permission request ended because the project runtime was closed.")
     }
   }
 

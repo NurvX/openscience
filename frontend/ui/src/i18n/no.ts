@@ -92,6 +92,9 @@ export const dict: Record<Keys, string> = {
   "ui.common.submit": "Send inn",
 
   "ui.permission.deny": "Avslå",
+  "ui.permission.required": "Godkjenning kreves",
+  "ui.permission.chooseScope": "Velg godkjenningsomfang",
+  "ui.permission.actions": "Godkjenningshandlinger",
   "ui.permission.allowAlways": "Tillat alltid",
   "ui.permission.allowOnce": "Tillat én gang",
   "ui.permission.scopeOnce": "Én gang",

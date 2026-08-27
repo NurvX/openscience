@@ -46,21 +46,21 @@ export function HeaderIconButton(props: {
         display: "inline-flex",
         "align-items": "center",
         "justify-content": "center",
-        "border-radius": "var(--atlas-radius-xs)",
-        border: "1px solid transparent",
+        "border-radius": "4px",
+        border: "1px solid var(--color-border)",
         color: "var(--color-text-muted)",
-        background: "transparent",
+        background: "var(--color-surface-solid)",
         transition: "background 120ms ease, color 120ms ease",
         opacity: props.disabled ? 0.45 : 1,
       }}
       onMouseEnter={(e) => {
         if (props.disabled) return
-        e.currentTarget.style.background = "var(--surface-base-hover)"
+        e.currentTarget.style.background = "var(--color-bg-elevated)"
         e.currentTarget.style.color = "var(--color-text)"
       }}
       onMouseLeave={(e) => {
         if (props.disabled) return
-        e.currentTarget.style.background = "transparent"
+        e.currentTarget.style.background = "var(--color-surface-solid)"
         e.currentTarget.style.color = "var(--color-text-muted)"
       }}
     >

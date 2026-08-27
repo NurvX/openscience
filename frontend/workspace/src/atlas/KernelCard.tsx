@@ -1,6 +1,5 @@
 import { Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
 import { FileIcon } from "@synsci/ui/file-icon"
-import { ComputeMetric } from "@/atlas/ComputeMetric"
 import { kernelLabel, kernelLanguageLabel, kernelMemoryLabel, type KernelStatus } from "@/atlas/kernel-runtime"
 
 const age = (then: number | null, now: number) => {
@@ -74,19 +73,9 @@ export function KernelCard(props: { kernel: KernelStatus; sample?: number }): JS
           <Show when={environment(props.kernel)}>{(name) => ` · ${name()}`}</Show>
         </span>
       </div>
-      <div class="compute-row__metrics" aria-label="Current kernel resources">
-        <ComputeMetric
-          metric="memory"
-          label={memory(props.kernel.resources?.memory_bytes)}
-          value={props.kernel.resources?.memory_bytes}
-          sample={props.sample}
-        />
-        <ComputeMetric
-          metric="cpu"
-          label={cores(props.kernel.resources?.cpu_percent)}
-          value={props.kernel.resources?.cpu_percent}
-          sample={props.sample}
-        />
+      <div class="compute-row__telemetry" aria-label="Current kernel resources">
+        <span data-metric="memory">{memory(props.kernel.resources?.memory_bytes)}</span>
+        <span data-metric="cpu">{cores(props.kernel.resources?.cpu_percent)}</span>
       </div>
     </article>
   )

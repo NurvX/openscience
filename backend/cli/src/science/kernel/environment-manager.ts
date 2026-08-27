@@ -175,83 +175,149 @@ async function probe(language: ManagedEnvironmentLanguage, prefix = environmentP
   )
 }
 
+async function replaceEnvironment(target: string, create: () => Promise<void>) {
+  await fs.mkdir(environmentRoot(), { recursive: true })
+  const previous = path.join(rollbackRoot(), `${path.basename(target)}-${Date.now()}-${crypto.randomUUID()}`)
+  const hadPrevious = !!(await fs.stat(target).catch(() => undefined))
+  if (hadPrevious) {
+    await fs.mkdir(rollbackRoot(), { recursive: true })
+    await fs.rename(target, previous)
+  }
+  try {
+    // Conda environments contain absolute prefixes (including Mach-O dylib
+    // install names on macOS). Solve directly at the durable path: renaming a
+    // staged prefix makes an otherwise valid environment unlaunchable.
+    await create()
+  } catch (error) {
+    await fs.rm(target, { recursive: true, force: true }).catch(() => undefined)
+    if (hadPrevious) await fs.rename(previous, target).catch(() => undefined)
+    throw error
+  }
+  if (hadPrevious) {
+    await fs.rm(previous, { recursive: true, force: true }).catch((error) => {
+      log.warn("failed to remove replaced environment rollback", { previous, error: String(error) })
+    })
+  }
+}
+
 async function ensureStarter(language: ManagedEnvironmentLanguage) {
   if (await probe(language)) return
   const spec = STARTERS[language]
   await state({ status: "installing", phase: `provisioning_${language}`, error: undefined })
-  const stage = path.join(stagingRoot(), `${language}-${crypto.randomUUID()}`)
-  await fs.mkdir(stagingRoot(), { recursive: true })
-  const channels = spec.channels.flatMap((channel) => ["-c", channel])
-  await run([await installMicromamba(), "--no-rc", "create", "-y", "-p", stage, ...channels, ...spec.packages])
-  if (!(await probe(language, stage))) throw new Error(`${language} starter environment failed its import probe`)
-  const now = new Date().toISOString()
-  const digest = crypto
-    .createHash("sha256")
-    .update(JSON.stringify({ channels: spec.channels, packages: spec.packages }))
-    .digest("hex")
-  await writeJson(path.join(stage, ".openscience-environment.json"), {
-    version: 1,
-    name: spec.name,
-    language,
-    kind: "starter",
-    spec: digest,
-    packages: [...spec.packages],
-    channels: [...spec.channels],
-    created_at: now,
-    verified_at: now,
-  } satisfies z.infer<typeof Manifest>)
-  await fs.mkdir(environmentRoot(), { recursive: true })
   const target = environmentPath(language)
-  const previous = path.join(rollbackRoot(), `${language}-${Date.now()}`)
-  if (await fs.stat(target).catch(() => undefined)) {
-    await fs.mkdir(rollbackRoot(), { recursive: true })
-    await fs.rename(target, previous)
-  }
-  await fs.rename(stage, target).catch(async (error) => {
-    if (await fs.stat(previous).catch(() => undefined)) await fs.rename(previous, target).catch(() => undefined)
-    throw error
+  const channels = spec.channels.flatMap((channel) => ["-c", channel])
+  await replaceEnvironment(target, async () => {
+    await run([await installMicromamba(), "--no-rc", "create", "-y", "-p", target, ...channels, ...spec.packages])
+    if (!(await probe(language, target))) throw new Error(`${language} starter environment failed its import probe`)
+    const now = new Date().toISOString()
+    const digest = crypto
+      .createHash("sha256")
+      .update(JSON.stringify({ channels: spec.channels, packages: spec.packages }))
+      .digest("hex")
+    await writeJson(path.join(target, ".openscience-environment.json"), {
+      version: 1,
+      name: spec.name,
+      language,
+      kind: "starter",
+      spec: digest,
+      packages: [...spec.packages],
+      channels: [...spec.channels],
+      created_at: now,
+      verified_at: now,
+    } satisfies z.infer<typeof Manifest>)
   })
 }
 
 async function ensureTaskEnvironment(name: string) {
   const target = environmentPath(name)
   const binary = path.join(target, process.platform === "win32" ? "python.exe" : "bin/python")
-  if (await executable(binary)) return
+  if (
+    (await executable(binary)) &&
+    (await run([binary, "-I", "-c", 'print("ok")'], { timeout: 30_000 }).then(
+      () => true,
+      () => false,
+    ))
+  )
+    return
   await state({ status: "installing", phase: `provisioning_task:${name}`, error: undefined })
-  const stage = path.join(stagingRoot(), `${name}-${crypto.randomUUID()}`)
-  await fs.mkdir(stagingRoot(), { recursive: true })
-  await run([
-    await installMicromamba(),
-    "--no-rc",
-    "create",
-    "-y",
-    "-p",
-    stage,
-    "-c",
-    "conda-forge",
-    "python=3.11",
-    "pip",
-  ])
-  const stageBinary = path.join(stage, process.platform === "win32" ? "python.exe" : "bin/python")
-  if (!(await executable(stageBinary))) throw new Error(`Task environment '${name}' did not contain Python`)
-  await run([stageBinary, "-I", "-c", 'print("ok")'], { timeout: 30_000 })
-  const now = new Date().toISOString()
-  await writeJson(path.join(stage, ".openscience-environment.json"), {
-    version: 1,
-    name,
-    language: "python",
-    kind: "task",
-    spec: crypto.createHash("sha256").update("python=3.11\npip").digest("hex"),
-    packages: ["python=3.11", "pip"],
-    channels: ["conda-forge"],
-    created_at: now,
-    verified_at: now,
-  } satisfies z.infer<typeof Manifest>)
-  await fs.mkdir(environmentRoot(), { recursive: true })
-  await fs.rename(stage, target)
+  await replaceEnvironment(target, async () => {
+    await run([
+      await installMicromamba(),
+      "--no-rc",
+      "create",
+      "-y",
+      "-p",
+      target,
+      "-c",
+      "conda-forge",
+      "python=3.11",
+      "pip",
+    ])
+    if (!(await executable(binary))) throw new Error(`Task environment '${name}' did not contain Python`)
+    await run([binary, "-I", "-c", 'print("ok")'], { timeout: 30_000 })
+    const now = new Date().toISOString()
+    await writeJson(path.join(target, ".openscience-environment.json"), {
+      version: 1,
+      name,
+      language: "python",
+      kind: "task",
+      spec: crypto.createHash("sha256").update("python=3.11\npip").digest("hex"),
+      packages: ["python=3.11", "pip"],
+      channels: ["conda-forge"],
+      created_at: now,
+      verified_at: now,
+    } satisfies z.infer<typeof Manifest>)
+  })
 }
 
-const setup: { value?: Promise<void> } = {}
+const micromambaSetup: { value?: Promise<void> } = {}
+const starterSetup: Partial<Record<ManagedEnvironmentLanguage, Promise<void>>> = {}
+
+async function ensureMicromamba() {
+  if (await executable(micromamba())) return
+  if (micromambaSetup.value) {
+    await micromambaSetup.value
+    if (await executable(micromamba())) return
+    micromambaSetup.value = undefined
+  }
+  const current = (async () => {
+    await fs.mkdir(root(), { recursive: true })
+    await using lease = await FileLease.acquire(path.join(root(), "micromamba.lock"), 45 * 60 * 1000)
+    await installMicromamba()
+  })()
+  micromambaSetup.value = current
+  try {
+    await current
+  } catch (error) {
+    if (micromambaSetup.value === current) micromambaSetup.value = undefined
+    throw error
+  }
+}
+
+async function ensureLanguage(language: ManagedEnvironmentLanguage) {
+  const existing = starterSetup[language]
+  if (existing) return existing
+  const current = (async () => {
+    await fs.mkdir(root(), { recursive: true })
+    await ensureMicromamba()
+    await using lease = await FileLease.acquire(path.join(root(), `starter-${language}.lock`), 45 * 60 * 1000)
+    try {
+      await ensureStarter(language)
+      await state({ status: "ready", phase: `ready:${language}`, error: undefined })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await state({ status: "failed", phase: `failed:${language}`, error: message }).catch(() => undefined)
+      throw error
+    }
+  })()
+  starterSetup[language] = current
+  try {
+    await current
+  } catch (error) {
+    if (starterSetup[language] === current) delete starterSetup[language]
+    throw error
+  }
+}
 
 export namespace ManagedEnvironments {
   export const pythonPackages = [...STARTERS.python.packages]
@@ -260,26 +326,9 @@ export namespace ManagedEnvironments {
   export async function bootstrap() {
     if (process.env.OPENSCIENCE_SKIP_ENVIRONMENT_BOOTSTRAP === "1") return
     if (process.env.OPENSCIENCE_TEST_HOME && process.env.OPENSCIENCE_TEST_MANAGED_ENVIRONMENTS !== "1") return
-    const current =
-      setup.value ??
-      (async () => {
-        await fs.mkdir(root(), { recursive: true })
-        await using lease = await FileLease.acquire(path.join(root(), "bootstrap.lock"), 45 * 60 * 1000)
-        try {
-          await installMicromamba()
-          await ensureStarter("python")
-          await ensureStarter("r")
-          await state({ status: "ready", phase: "ready", error: undefined })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          await state({ status: "failed", phase: "failed", error: message }).catch(() => undefined)
-          throw error
-        }
-      })()
-    setup.value = current
-    return current.finally(() => {
-      if (setup.value === current) setup.value = undefined
-    })
+    await ensureLanguage("python")
+    await ensureLanguage("r")
+    await state({ status: "ready", phase: "ready", error: undefined })
   }
 
   export async function status() {
@@ -309,7 +358,7 @@ export namespace ManagedEnvironments {
   export async function ensureTask(name: string) {
     const parsed = TaskName.parse(name)
     if (process.env.OPENSCIENCE_TEST_HOME && process.env.OPENSCIENCE_TEST_MANAGED_ENVIRONMENTS !== "1") return
-    await bootstrap()
+    await ensureMicromamba()
     await using lease = await FileLease.acquire(path.join(root(), `task-${parsed}.lock`), 45 * 60 * 1000)
     await ensureTaskEnvironment(parsed)
     await state({ status: "ready", phase: "ready", error: undefined })
@@ -325,12 +374,20 @@ export namespace ManagedEnvironments {
       }
       return { environmentName: environment }
     }
-    if (environment === language) await bootstrap()
+    if (environment === language) await ensureLanguage(language)
     const prefix = environmentPath(environment)
-    const binary =
+    let binary =
       language === "python"
         ? path.join(prefix, process.platform === "win32" ? "python.exe" : "bin/python")
         : path.join(prefix, process.platform === "win32" ? "Scripts/Rscript.exe" : "bin/Rscript")
+    if (environment === language && !(await executable(binary))) {
+      delete starterSetup[language]
+      await ensureLanguage(language)
+      binary =
+        language === "python"
+          ? path.join(prefix, process.platform === "win32" ? "python.exe" : "bin/python")
+          : path.join(prefix, process.platform === "win32" ? "Scripts/Rscript.exe" : "bin/Rscript")
+    }
     if (!(await executable(binary))) {
       throw new Error(
         environment === language

@@ -22,6 +22,8 @@ The backend defaults to `127.0.0.1:4196`; the workspace defaults to `127.0.0.1:4
 ## One trajectory at a time
 
 ```bash
+bun evals/cadence-harness/dev-lab.ts run P11
+bun evals/cadence-harness/dev-lab.ts run P15
 bun evals/cadence-harness/dev-lab.ts run P21
 bun evals/cadence-harness/dev-lab.ts run P23
 bun evals/cadence-harness/dev-lab.ts run P24

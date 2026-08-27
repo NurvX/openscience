@@ -94,7 +94,12 @@ export function AccountGate(props: ParentProps) {
       fallback={
         <main class="account-gate" aria-labelledby="account-gate-title">
           <section class="account-gate__panel">
-            <div class="account-gate__brand">OpenScience</div>
+            <div class="account-gate__brand">
+              <span class="account-gate__mark" aria-hidden="true">
+                OS
+              </span>
+              <span>OpenScience</span>
+            </div>
             <Switch>
               <Match when={state() === "checking"}>
                 <div class="account-gate__loading">
@@ -111,17 +116,28 @@ export function AccountGate(props: ParentProps) {
                 </div>
               </Match>
               <Match when={state() === "signed-out"}>
-                <h1 id="account-gate-title">Sign in to continue</h1>
+                <p class="account-gate__eyebrow">Your research workspace</p>
+                <h1 id="account-gate-title">Connect OpenScience</h1>
                 <p>
-                  Create a free Synthetic Sciences account or sign in. This device stays connected with a revocable key.
+                  Sign in at <strong>app.syntheticsciences.ai</strong> to connect this device and use OpenScience Ace.
                 </p>
-                <p class="account-gate__disclosure">
-                  Use my data is on by default for connected accounts and shares a redacted complete research
-                  trajectory. Turn it off anytime in Settings.
-                </p>
+                <div class="account-gate__steps" aria-label="Setup overview">
+                  <div data-current="true">
+                    <span>1</span>
+                    <strong>Account</strong>
+                  </div>
+                  <div>
+                    <span>2</span>
+                    <strong>Model access</strong>
+                  </div>
+                  <div>
+                    <span>3</span>
+                    <strong>Workspace</strong>
+                  </div>
+                </div>
                 <div class="account-gate__actions">
                   <Button variant="primary" size="small" disabled={busy()} onClick={() => void connectBrowser()}>
-                    {busy() ? "Waiting for browser…" : "Sign in or create account"}
+                    {busy() ? "Waiting for browser…" : "Continue to sign in"}
                   </Button>
                 </div>
                 <Show when={error()}>
@@ -129,11 +145,9 @@ export function AccountGate(props: ParentProps) {
                     {error()}
                   </p>
                 </Show>
-                <details>
-                  <summary>Use an API key instead</summary>
-                  <div class="account-gate__divider">
-                    <span>advanced</span>
-                  </div>
+                <details class="account-gate__advanced">
+                  <summary>Connect with a device key</summary>
+                  <p>For headless or managed setups. Create a key from app.syntheticsciences.ai.</p>
                   <label class="account-gate__field">
                     <span>Synthetic Sciences API key</span>
                     <TextField
@@ -161,7 +175,14 @@ export function AccountGate(props: ParentProps) {
                     </Button>
                   </div>
                 </details>
-                <p class="account-gate__note">You only need to do this once on this device.</p>
+                <details class="account-gate__data-use">
+                  <summary>Data use</summary>
+                  <p>
+                    Improve OpenScience is on by default for connected accounts and shares redacted research activity.
+                    Change it anytime in Settings.
+                  </p>
+                </details>
+                <p class="account-gate__note">This device stays connected with a revocable key.</p>
               </Match>
             </Switch>
           </section>

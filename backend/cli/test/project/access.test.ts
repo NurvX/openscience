@@ -1,10 +1,23 @@
 import { expect, test } from "bun:test"
+import { Agent } from "../../src/agent/agent"
+import { Bus } from "../../src/bus"
 import { Config } from "../../src/config/config"
 import { Instance } from "../../src/project/instance"
 import { ProjectAccess } from "../../src/project/access"
 import { ProjectTrust } from "../../src/project/trust"
+import { PermissionNext } from "../../src/permission/next"
 import { Server } from "../../src/server/server"
+import { Session } from "../../src/session"
+import { SessionPrompt } from "../../src/session/prompt"
 import { tmpdir } from "../fixture/fixture"
+
+let accessRouteProbeDisposals = 0
+const accessRouteProbe = Instance.state(
+  () => ({ token: crypto.randomUUID() }),
+  async () => {
+    accessRouteProbeDisposals++
+  },
+)
 
 test("action access is atomic and isolated to its owning project", async () => {
   const previous = await Config.trustedSandbox()
@@ -46,7 +59,7 @@ test("action access is atomic and isolated to its owning project", async () => {
   }
 })
 
-test("project access route updates one project without machine-wide sandbox writes", async () => {
+test("project access and trust routes update authority without disposing the active runtime", async () => {
   const previous = await Config.trustedSandbox()
   try {
     await Config.setSandbox({ enabled: true })
@@ -54,6 +67,8 @@ test("project access route updates one project without machine-wide sandbox writ
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        accessRouteProbeDisposals = 0
+        const activeRuntime = accessRouteProbe()
         const initial = await ProjectAccess.status(Instance.project)
         const response = await Server.internalFetch()(
           `http://openscience.internal/project/${Instance.project.id}/access`,
@@ -73,6 +88,61 @@ test("project access route updates one project without machine-wide sandbox writ
           sandbox: { enabled: false },
         })
         expect(await Config.trustedSandbox()).toMatchObject({ enabled: true })
+        expect(accessRouteProbe()).toBe(activeRuntime)
+        expect(accessRouteProbeDisposals).toBe(0)
+
+        const trust = await Server.internalFetch()(`http://openscience.internal/project/${Instance.project.id}/trust`, {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+            "x-openscience-project": Instance.project.id,
+          },
+          body: JSON.stringify({ trusted: false }),
+        })
+        expect(trust.status).toBe(200)
+        expect(accessRouteProbe()).toBe(activeRuntime)
+        expect(accessRouteProbeDisposals).toBe(0)
+      },
+    })
+  } finally {
+    await Config.setSandbox(previous)
+  }
+})
+
+test("widening preserves work while a later narrowing refreshes same-turn tool permissions", async () => {
+  const previous = await Config.trustedSandbox()
+  try {
+    await Config.setSandbox({ enabled: true, onUnavailable: "error" })
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const changes: boolean[] = []
+        const unsubscribe = Bus.subscribe(ProjectAccess.Event.Changed, (event) => {
+          changes.push(event.properties.narrowing)
+        })
+        try {
+          const initial = await ProjectAccess.status(Instance.project)
+          const full = await ProjectAccess.update(Instance.project, { mode: "full", root: initial.root })
+          const session = await Session.createNext({ directory: Instance.directory })
+          const agent = await Agent.get("research")
+          if (!agent) throw new Error("Missing Research agent")
+          const advertised = PermissionNext.merge(agent.permission, session.permission ?? [])
+          expect(PermissionNext.evaluate("websearch", "*", advertised).action).toBe("allow")
+
+          const approve = await ProjectAccess.update(Instance.project, { mode: "approve", root: full.root })
+          const refreshed = await SessionPrompt.permissionAtExecution({
+            agent,
+            session,
+            authority: full,
+            permission: advertised,
+          })
+          expect(refreshed.authority.revision).toBe(approve.revision)
+          expect(PermissionNext.evaluate("websearch", "*", refreshed.permission).action).toBe("ask")
+          expect(changes).toEqual([false, true])
+        } finally {
+          unsubscribe()
+        }
       },
     })
   } finally {

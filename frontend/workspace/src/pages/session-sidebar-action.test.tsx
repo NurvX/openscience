@@ -83,10 +83,10 @@ describe("SessionSidebarActions", () => {
   test("never exposes Gateway or Trace in public project navigation", async () => {
     const subject = await import("./session-sidebar-action")
     const hidden = mount(() => (
-      <subject.SessionSidebarActions context="trace" contextOpen={true} artifact={false} onContext={() => {}} />
+      <subject.SessionSidebarActions context="trace" contextOpen={true} onContext={() => {}} />
     ))
     const canvas = mount(() => (
-      <subject.SessionSidebarActions context="canvas" contextOpen={true} artifact={false} onContext={() => {}} />
+      <subject.SessionSidebarActions context="canvas" contextOpen={true} onContext={() => {}} />
     ))
 
     expect(button(hidden, "Open session trace")).toBeNull()
@@ -107,7 +107,7 @@ describe("SessionSidebarActions", () => {
       </subject.SidebarAction>
     ))
     const actions = mount(() => (
-      <subject.SessionSidebarActions context="canvas" contextOpen={false} artifact={false} onContext={() => {}} />
+      <subject.SessionSidebarActions context="canvas" contextOpen={false} onContext={() => {}} />
     ))
 
     expect(action.querySelector(".session-sidebar__action-copy strong")?.textContent).toBe("New research")
@@ -123,7 +123,6 @@ describe("SessionSidebarActions", () => {
       SessionSidebarActions?: (props: {
         context: "files" | "terminal" | "canvas" | "kernels" | "artifact"
         contextOpen: boolean
-        artifact: boolean
         onContext: (context: "files" | "terminal" | "canvas" | "kernels" | "artifact") => void
       }) => JSX.Element
     }
@@ -135,7 +134,6 @@ describe("SessionSidebarActions", () => {
       <subject.SessionSidebarActions
         context={state.context()}
         contextOpen={state.open()}
-        artifact={false}
         onContext={state.openContext}
       />
     ))
@@ -155,40 +153,33 @@ describe("SessionSidebarActions", () => {
     expect(state.context()).toBe("kernels")
 
     const selected = mount(() => (
-      <subject.SessionSidebarActions context="canvas" contextOpen={true} artifact={false} onContext={() => {}} />
+      <subject.SessionSidebarActions context="canvas" contextOpen={true} onContext={() => {}} />
     ))
     expect(button(selected, "Open Gateway")).toBeNull()
     expect(button(selected, "Open project terminal")).not.toBeNull()
     expect(button(selected, "Open Evidence")).toBeNull()
 
-    const files = mount(() => (
-      <subject.SessionSidebarActions context="files" contextOpen={true} artifact={false} onContext={() => {}} />
-    ))
+    const files = mount(() => <subject.SessionSidebarActions context="files" contextOpen={true} onContext={() => {}} />)
     expect(button(files, "Open project files")?.getAttribute("aria-pressed")).toBe("true")
     expect(button(files, "Open Gateway")).toBeNull()
   })
 
-  test("offers Details only when an artifact is active", async () => {
+  test("keeps file details and provenance out of project navigation", async () => {
     const subject = (await import("./session-sidebar-action")) as typeof import("./session-sidebar-action") & {
       SessionSidebarActions?: (props: {
         context: "files" | "terminal" | "canvas" | "kernels" | "artifact"
         contextOpen: boolean
-        artifact: boolean
         onContext: (context: "files" | "terminal" | "canvas" | "kernels" | "artifact") => void
       }) => JSX.Element
     }
     expect(subject.SessionSidebarActions).toBeDefined()
     if (!subject.SessionSidebarActions) return
 
-    const empty = mount(() => (
-      <subject.SessionSidebarActions context="artifact" contextOpen={true} artifact={false} onContext={() => {}} />
-    ))
-    const active = mount(() => (
-      <subject.SessionSidebarActions context="artifact" contextOpen={true} artifact={true} onContext={() => {}} />
+    const navigation = mount(() => (
+      <subject.SessionSidebarActions context="files" contextOpen={true} onContext={() => {}} />
     ))
 
-    expect(button(empty, "Open file details")).toBeNull()
-    expect(button(active, "Open file details")).not.toBeNull()
-    expect(button(active, "Open file details")?.getAttribute("aria-pressed")).toBe("true")
+    expect(button(navigation, "Open file details")).toBeNull()
+    expect(navigation.textContent).not.toContain("Provenance")
   })
 })

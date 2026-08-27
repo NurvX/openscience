@@ -1,6 +1,5 @@
 import { createSignal, onCleanup, type JSX } from "solid-js"
 import { Icon } from "@synsci/ui/icon"
-import { ComputeMetric } from "@/atlas/ComputeMetric"
 import { kernelMemoryLabel, type CommandStatus } from "@/atlas/kernel-runtime"
 
 const memory = (value?: number) => {
@@ -35,19 +34,9 @@ export function CommandCard(props: { command: CommandStatus; sample?: number }):
         <strong title={props.command.description}>{props.command.description}</strong>
         <span>Running · {elapsed(props.command.started_at, now())}</span>
       </div>
-      <div class="compute-row__metrics" aria-label="Current command resources">
-        <ComputeMetric
-          metric="memory"
-          label={memory(props.command.resources?.memory_bytes)}
-          value={props.command.resources?.memory_bytes}
-          sample={props.sample}
-        />
-        <ComputeMetric
-          metric="cpu"
-          label={cores(props.command.resources?.cpu_percent)}
-          value={props.command.resources?.cpu_percent}
-          sample={props.sample}
-        />
+      <div class="compute-row__telemetry" aria-label="Current command resources">
+        <span data-metric="memory">{memory(props.command.resources?.memory_bytes)}</span>
+        <span data-metric="cpu">{cores(props.command.resources?.cpu_percent)}</span>
       </div>
     </article>
   )

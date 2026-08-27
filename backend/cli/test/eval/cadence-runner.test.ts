@@ -17,10 +17,12 @@ import {
   promptRunID,
   resumeCheckpoint,
   safeValue,
+  snapshotSessionWorkspace,
   mergeFailures,
   trajectory,
   updateCampaignProgress,
   unsettledComputeJobs,
+  workspaceOutputCandidate,
 } from "../../../../evals/cadence-harness/run"
 import { aggregateCapturedSessionTree } from "../../../../evals/cadence-harness/tree-metrics"
 import { devPrompt } from "../../../../evals/cadence-harness/dev-prompts"
@@ -207,6 +209,30 @@ describe("cadence runner contracts", () => {
     ])
   })
 
+  test("freezes bounded session-owned recovery files without treating every input as output", async () => {
+    const source = path.join(root, "workspace-source")
+    const destination = path.join(root, "workspace-capture")
+    await mkdir(path.join(source, "derived"), { recursive: true })
+    await Bun.write(path.join(source, "analysis.py"), "print('ok')\n")
+    await Bun.write(path.join(source, "derived", "ranking.csv"), "id,score\na,1\n")
+    await Bun.write(path.join(source, "raw.bin"), new Uint8Array(64))
+    await Bun.write(path.join(source, "large.csv"), "x".repeat(128))
+
+    const captured = await snapshotSessionWorkspace({
+      scratchRoot: source,
+      destination,
+      maxFileBytes: 80,
+      maxBytes: 1_000,
+    })
+
+    expect(captured.files.map((item) => item.path)).toEqual(["analysis.py", "derived/ranking.csv", "raw.bin"])
+    expect(captured.outputCandidates).toBe(2)
+    expect(captured.omitted).toEqual([{ path: "large.csv", bytes: 128, reason: "capture_limit" }])
+    expect(await Bun.file(path.join(destination, "derived", "ranking.csv")).text()).toBe("id,score\na,1\n")
+    expect(workspaceOutputCandidate("download/source.csv")).toBe(false)
+    expect(workspaceOutputCandidate("report/main.tex")).toBe(true)
+  })
+
   test("classifies semantic outcomes separately from runtime lifecycle", () => {
     expect(campaignOutcome({ terminalType: "runtime.completed", finalText: "answer" })).toEqual({
       status: "completed",
@@ -230,6 +256,13 @@ describe("cadence runner contracts", () => {
       status: "failed",
       reason: "no_usable_output",
     })
+    expect(campaignOutcome({ terminalType: "runtime.completed", recoveryCount: 2 })).toEqual({
+      status: "partial",
+      reason: "workspace_output_without_final_response",
+    })
+    expect(
+      campaignOutcome({ terminalType: "runtime.failed", terminalError: "late failure", recoveryCount: 2 }),
+    ).toEqual({ status: "partial", reason: "error_after_usable_output" })
     expect(campaignOutcome({ finalText: "recovered output" })).toEqual({
       status: "partial",
       reason: "runtime_terminal_missing",
@@ -406,16 +439,29 @@ describe("cadence runner contracts", () => {
       reply: "reject",
       reason: "environment mutation requires explicit campaign opt-in; none is configured",
     })
+    expect(
+      permissionDecision(
+        { permission: "environment_mutation", metadata: { package: "scipy" } },
+        { environmentMutation: true },
+      ),
+    ).toEqual({
+      reply: "once",
+      reason: "one scoped managed-environment mutation for this evaluation",
+    })
     expect(permissionDecision({ permission: "unknown" })).toMatchObject({ reply: "reject" })
   })
 
   test("binds a single dev prompt to exact source identity without implicit hard caps", () => {
+    const p11 = devPrompt("p11")
+    const p15 = devPrompt("P15")
     const p21 = devPrompt("p21")
     const p24 = devPrompt("P24")
+    expect(p11).toMatchObject({ id: "P11", ordinal: 11 })
+    expect(p15).toMatchObject({ id: "P15", ordinal: 15 })
     expect(p21).toMatchObject({ id: "P21", ordinal: 21 })
     expect(p21.sha256).toHaveLength(64)
     expect(p24.text).toContain("at most 4× H100 GPUs")
-    expect(() => devPrompt("P22")).toThrow("Use P21, P23, or P24")
+    expect(() => devPrompt("P22")).toThrow("Use P11, P15, P21, P23, or P24")
 
     const health = { sourceSha: "abc", sourceWorktreeHash: "def", runId: "run-one" }
     expect(() => assertServerIdentity(health, { sourceSha: "abc", sourceWorktreeHash: "def" })).not.toThrow()

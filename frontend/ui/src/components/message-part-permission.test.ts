@@ -4,6 +4,24 @@ const source = Bun.file(new URL("./message-part.tsx", import.meta.url)).text()
 const styles = Bun.file(new URL("./message-part.css", import.meta.url)).text()
 
 describe("Modal permission card", () => {
+  test("keeps ordinary approvals in one compact responsive row", async () => {
+    const component = await source
+    const css = await styles
+
+    expect(component).toContain('data-slot="permission-context"')
+    expect(component).toContain('name="shield"')
+    expect(component).toContain('i18n.t("ui.permission.required")')
+    expect(component).toContain('i18n.t("ui.permission.chooseScope")')
+    expect(component).toContain('typeof query === "string" && query.trim()')
+    expect(component).toContain("title={value()}")
+    expect(component).toContain('role="group"')
+    expect(component).toContain('aria-expanded="false"')
+    expect(css).toContain("min-height: 44px")
+    expect(css).toContain("flex: 1 1 220px")
+    expect(css).toContain("text-overflow: ellipsis")
+    expect(css).not.toContain("chase-border")
+  })
+
   test("shows the remote and billing boundary with the reviewed workload", async () => {
     const component = await source
 

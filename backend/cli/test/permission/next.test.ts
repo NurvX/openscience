@@ -507,9 +507,35 @@ test("ask - returns pending promise when action is ask", async () => {
         always: [],
         ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
       })
+      const settled = promise.catch((error) => error)
       // Promise should be pending, not resolved
       expect(promise).toBeInstanceOf(Promise)
-      // Don't await - just verify it returns a promise
+      const request = (await PermissionNext.list()).find((item) => item.sessionID === "session_test")
+      expect(request).toBeDefined()
+      await PermissionNext.reply({ requestID: request!.id, reply: "reject" })
+      expect(await settled).toBeInstanceOf(PermissionNext.RejectedError)
+    },
+  })
+})
+
+test("ask - rejects a pending request when its project runtime is genuinely disposed", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const pending = PermissionNext.ask({
+        id: "permission_disposed",
+        sessionID: "session_test",
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).catch((error) => error)
+
+      expect(await PermissionNext.list()).toHaveLength(1)
+      await Instance.dispose()
+      expect(await pending).toBeInstanceOf(PermissionNext.InstanceDisposedError)
     },
   })
 })

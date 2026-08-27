@@ -94,6 +94,9 @@ export const dict = {
   "ui.common.submit": "Absenden",
 
   "ui.permission.deny": "Verweigern",
+  "ui.permission.required": "Genehmigung erforderlich",
+  "ui.permission.chooseScope": "Genehmigungsumfang wählen",
+  "ui.permission.actions": "Genehmigungsaktionen",
   "ui.permission.allowAlways": "Immer erlauben",
   "ui.permission.allowOnce": "Einmal erlauben",
   "ui.permission.allow": "Erlauben für…",

@@ -11,11 +11,12 @@ describe("pending questions", () => {
     expect(component).toContain("<QuestionPrompt request={question()} />")
   })
 
-  test("renders a pending request once, outside the trace", async () => {
+  test("renders a pending request once inline when expanded and below the collapsed trace", async () => {
     const component = await source
 
-    expect(component).toContain("pendingRequestCallID={pendingRequestCallID()}")
+    expect(component).toContain("pendingRequestCallID={props.stepsExpanded ? undefined : pendingRequestCallID()}")
     expect(component).toContain("part.callID === props.pendingRequestCallID")
+    expect(component).toContain("!props.stepsExpanded && requestParts().length > 0")
     expect(component).not.toContain('data-slot="session-turn-collapsible-content-inner" aria-hidden={working()}')
   })
 })

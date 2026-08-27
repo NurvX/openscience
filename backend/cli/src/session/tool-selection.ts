@@ -163,7 +163,10 @@ export namespace ToolSelection {
     // capability. Keep it available for explicit Atlas work without letting
     // unrelated scientific prompts wander into a retired service path.
     if (tool === "atlas" || tool === "atlas_record") return Boolean(message && /\batlas\b/i.test(message))
-    if (tool.startsWith("provenance_")) return Boolean(message && /\b(?:lineage|provenance)\b/i.test(message))
+    // Provenance remains an internal integrity primitive. It is deliberately
+    // absent from the user-facing Research tool surface; Results and ordinary
+    // files are the product-facing record.
+    if (tool.startsWith("provenance_")) return false
     if (core.has(tool)) return true
 
     const text = message ?? ""
@@ -195,10 +198,12 @@ export namespace ToolSelection {
         /modal-compute|protein-binder/i.test(capability)
       )
     if (tool === "research_contract") return /\bresearch contract\b/i.test(text)
-    if (todo.has(tool))
-      return (
-        text.length > 700 || /\b(?:autonomous|comprehensive|end-to-end|multi-step|publication-quality)\b/i.test(text)
-      )
+    if (todo.has(tool)) {
+      // A long research prompt is not consent to add controller ceremony. A
+      // stale 0/N checklist is worse than no checklist, so expose these tools
+      // only when the user explicitly asks to track one.
+      return /\b(?:to-?dos?|task list|checklist)\b/i.test(text)
+    }
     if (biology.has(tool)) {
       if (/literature-review/i.test(capability) && tool === "query_pubmed") return true
       const pattern: Record<string, RegExp> = {

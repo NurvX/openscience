@@ -181,7 +181,7 @@ describe("launch settings truth pass", () => {
     expect(managed).toContain('title: "BYOK / Subscription"')
     expect(providers).toContain("sdk.client.auth.set")
     expect(providers).toContain("sdk.client.auth.remove")
-    expect(models).toContain("owner-only local auth file")
+    expect(providers).toContain("owner-only local auth file")
     expect(providers).toContain("not the system keychain")
     expect(ids).not.toContain("billing")
     expect(credentials).not.toContain("CodexConnection")

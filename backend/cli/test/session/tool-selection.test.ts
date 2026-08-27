@@ -89,7 +89,7 @@ describe("tool selection", () => {
     ).toBe(true)
   })
 
-  test("keeps provenance recording out of ordinary analysis unless explicitly requested", () => {
+  test("keeps provenance recording out of the user-facing Research tool surface", () => {
     expect(
       ToolSelection.relevant("provenance_record", {
         agent: "research",
@@ -99,9 +99,15 @@ describe("tool selection", () => {
     expect(
       ToolSelection.relevant("provenance_record", {
         agent: "research",
+        message: "Select accessions by maximin diversity across genotype, provenance climate, and ancestry.",
+      }),
+    ).toBe(false)
+    expect(
+      ToolSelection.relevant("provenance_record", {
+        agent: "research",
         message: "Record the provenance and lineage for these analysis outputs.",
       }),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   test("recognizes only fresh self-contained conceptual questions as direct answers", () => {
@@ -331,6 +337,19 @@ describe("tool selection", () => {
     const message = "Use /scientific-schematics to improve the images and figures in this paper."
     expect(ToolSelection.slashInvocation(message)).toBe(true)
     expect(ToolSelection.relevant("generate_image", { agent: "research", message })).toBe(true)
+  })
+
+  test("does not add stale checklist ceremony to a long autonomous research request", () => {
+    const message =
+      "Autonomously execute a comprehensive, multi-step protein analysis and deliver a publication-quality report with figures, uncertainty, and validation."
+    expect(ToolSelection.relevant("todowrite", { agent: "research", message })).toBe(false)
+    expect(ToolSelection.relevant("todoread", { agent: "research", message })).toBe(false)
+    expect(
+      ToolSelection.relevant("todowrite", {
+        agent: "research",
+        message: `${message} Keep a concise task list while you work.`,
+      }),
+    ).toBe(true)
   })
 
   test("keeps normal research relevance filtering for a code-only minimal-profile request", () => {

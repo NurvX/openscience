@@ -142,7 +142,6 @@ export function ExecutionCard(props: { run: ExecutionRecord }): JSX.Element {
                   : "Not captured"
               }
             />
-            <Fact label="Provenance" value={props.run.provenance_id ?? "Not recorded yet"} mono />
             <Show when={captured(props.run.environment.kernel_id)}>
               {(value) => <Fact label="Runtime" value={value()} mono />}
             </Show>

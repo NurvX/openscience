@@ -839,8 +839,8 @@ function validateDownloadedFormat(target: DownloadTarget, response: Response, pr
   if (html && !htmlTarget) {
     throw new Error(
       `Downloaded response is HTML, not the requested ${extension || "data"} file. ` +
-        "This is usually a login, consent, access-denied, or publisher interstitial. No destination file was created; " +
-        "resolve the canonical download URL or required access instead of parsing the file.",
+        "The URL may be a landing page, an expired redirect, or a login/consent/access interstitial. " +
+        "No destination file was created; inspect the source metadata and resolve its canonical file URL instead of parsing this response.",
     )
   }
   if (!prefix.byteLength) return

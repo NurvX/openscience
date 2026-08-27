@@ -3,9 +3,18 @@ import { FirecrawlSearch } from "../src/research/firecrawl"
 import { ResearchRouting } from "../src/research/routing"
 
 test("research routing spends through managed search only for an unlocked Ace account", () => {
-  expect(ResearchRouting.select({ aceEnabled: true, managedUnlocked: true, firecrawl: true })).toBe("managed")
-  expect(ResearchRouting.select({ aceEnabled: false, managedUnlocked: true, firecrawl: true })).toBe("firecrawl_byok")
-  expect(ResearchRouting.select({ aceEnabled: true, managedUnlocked: false, firecrawl: false })).toBe("community")
+  expect(ResearchRouting.select({ mode: "managed", aceEnabled: true, managedUnlocked: true, firecrawl: true })).toBe(
+    "managed",
+  )
+  expect(ResearchRouting.select({ mode: "byok", aceEnabled: true, managedUnlocked: true, firecrawl: true })).toBe(
+    "firecrawl_byok",
+  )
+  expect(ResearchRouting.select({ mode: "managed", aceEnabled: false, managedUnlocked: true, firecrawl: true })).toBe(
+    "community",
+  )
+  expect(ResearchRouting.select({ mode: "managed", aceEnabled: true, managedUnlocked: false, firecrawl: false })).toBe(
+    "community",
+  )
 })
 
 test("Firecrawl BYOK uses the trusted header and returns bounded structured results", async () => {
@@ -66,4 +75,18 @@ test("Firecrawl failures never echo provider response bodies", async () => {
       },
     ),
   ).rejects.toThrow("Firecrawl search failed with HTTP 401")
+})
+
+test("Firecrawl requests settle when the provider transport never responds", async () => {
+  await expect(
+    FirecrawlSearch.search(
+      { query: "test", source: "web", mode: "fast", limit: 1, content: "snippets" },
+      {
+        key: "fc-hidden",
+        signal: new AbortController().signal,
+        timeoutMs: 5,
+        fetch: (() => new Promise<Response>(() => undefined)) as unknown as typeof fetch,
+      },
+    ),
+  ).rejects.toThrow("Firecrawl search timed out after 1 seconds")
 })

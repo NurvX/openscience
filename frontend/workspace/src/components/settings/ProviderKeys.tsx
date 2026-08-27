@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal } from "solid-js"
 import { Button } from "@synsci/ui/button"
 import { useDialog } from "@synsci/ui/context/dialog"
+import { Icon } from "@synsci/ui/icon"
 import { Select } from "@synsci/ui/select"
 import type { Provider } from "@synsci/sdk/v2/client"
 import { confirmDialog } from "@/atlas/dialogs"
@@ -68,6 +69,7 @@ export function ProviderKeys(props: { onError?: (error: string | undefined) => v
   const dialog = useDialog()
   const [provider, setProvider] = createSignal<string>(MODEL_PROVIDERS[0].id)
   const [key, setKey] = createSignal("")
+  const [adding, setAdding] = createSignal(false)
   const [saving, setSaving] = createSignal(false)
   const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
   const connected = createMemo(() =>
@@ -100,6 +102,7 @@ export function ProviderKeys(props: { onError?: (error: string | undefined) => v
     try {
       await sdk.client.auth.set({ providerID: provider(), auth: { type: "api", key: value } })
       setKey("")
+      setAdding(false)
       // The credential is on disk now. Re-enable the form before rebuilding
       // the large provider catalog; auth.set already invalidates the server's
       // provider map, so disposing every workspace here only added latency.
@@ -137,74 +140,106 @@ export function ProviderKeys(props: { onError?: (error: string | undefined) => v
   }
 
   return (
-    <div class="settings-card models-provider-keys">
-      <form
-        class="settings-provider-key-form models-provider-key-form"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void save()
-        }}
-      >
-        <label class="models-key-field">
-          <span class="text-12-medium text-text-weak">Provider</span>
-          <div class="models-provider-select">
-            <span class="models-provider-select__mark">
-              <ProviderLogo id={provider()} label={modelProvider(provider()).label} size="small" />
-            </span>
-            <Select
-              aria-label="Model provider"
-              class="models-provider-options"
-              options={[...MODEL_PROVIDERS]}
-              current={modelProvider(provider())}
-              value={(item) => item.id}
-              label={(item) => item.label}
-              disabled={saving()}
-              onSelect={(item) => item && setProvider(item.id)}
-              variant="secondary"
-              size="small"
-              triggerVariant="settings"
-              triggerStyle={{
-                width: "100%",
-                "justify-content": "space-between",
-                "padding-left": "34px",
-              }}
-            >
-              {(item) => (
-                <Show when={item}>
-                  {(entry) => (
-                    <span class="flex min-w-0 items-center gap-2.5">
-                      <ProviderLogo id={entry().id} label={entry().label} size="small" />
-                      <span class="min-w-0 truncate">{entry().label}</span>
-                    </span>
-                  )}
-                </Show>
-              )}
-            </Select>
+    <div class="models-provider-keys">
+      <div class="settings-row models-compact-row models-provider-key-heading">
+        <div class="models-provider-identity">
+          <span class="models-provider-key-heading__icon" aria-hidden="true">
+            <Icon name="link" size="small" />
+          </span>
+          <div class="models-provider-copy">
+            <span class="text-13-medium text-text-strong">Provider API keys</span>
+            <span class="text-11-regular text-text-weak">Stored in the owner-only local auth file.</span>
           </div>
-        </label>
-        <label class="models-key-field">
-          <span class="text-12-medium text-text-weak">API key</span>
-          <input
-            type="password"
-            autocomplete="off"
-            spellcheck={false}
+        </div>
+        <span class="models-row-action">
+          <Button
+            class="settings-panel-action models-secondary-action"
+            type="button"
+            size="small"
+            variant="secondary"
+            aria-expanded={adding()}
+            aria-controls="models-add-provider-key"
             disabled={saving()}
-            value={key()}
-            onInput={(event) => setKey(event.currentTarget.value)}
-            placeholder={modelProvider(provider()).placeholder}
-            class="settings-field settings-provider-key models-key-input"
-          />
-        </label>
-        <Button
-          class="settings-panel-action models-primary-action models-save-key"
-          type="submit"
-          size="small"
-          variant="primary"
-          disabled={saving() || !key().trim()}
+            onClick={() => {
+              if (adding()) setKey("")
+              setAdding((open) => !open)
+            }}
+          >
+            {adding() ? "Cancel" : "Add key"}
+          </Button>
+        </span>
+      </div>
+
+      <Show when={adding()}>
+        <form
+          id="models-add-provider-key"
+          class="settings-provider-key-form models-provider-key-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void save()
+          }}
         >
-          {saving() ? "Saving…" : "Save key"}
-        </Button>
-      </form>
+          <label class="models-key-field">
+            <span class="text-12-medium text-text-weak">Provider</span>
+            <div class="models-provider-select">
+              <span class="models-provider-select__mark">
+                <ProviderLogo id={provider()} label={modelProvider(provider()).label} size="small" />
+              </span>
+              <Select
+                aria-label="Model provider"
+                class="models-provider-options"
+                options={[...MODEL_PROVIDERS]}
+                current={modelProvider(provider())}
+                value={(item) => item.id}
+                label={(item) => item.label}
+                disabled={saving()}
+                onSelect={(item) => item && setProvider(item.id)}
+                variant="secondary"
+                size="small"
+                triggerVariant="settings"
+                triggerStyle={{
+                  width: "100%",
+                  "justify-content": "space-between",
+                  "padding-left": "34px",
+                }}
+              >
+                {(item) => (
+                  <Show when={item}>
+                    {(entry) => (
+                      <span class="flex min-w-0 items-center gap-2.5">
+                        <ProviderLogo id={entry().id} label={entry().label} size="small" />
+                        <span class="min-w-0 truncate">{entry().label}</span>
+                      </span>
+                    )}
+                  </Show>
+                )}
+              </Select>
+            </div>
+          </label>
+          <label class="models-key-field">
+            <span class="text-12-medium text-text-weak">API key</span>
+            <input
+              type="password"
+              autocomplete="off"
+              spellcheck={false}
+              disabled={saving()}
+              value={key()}
+              onInput={(event) => setKey(event.currentTarget.value)}
+              placeholder={modelProvider(provider()).placeholder}
+              class="settings-field settings-provider-key models-key-input"
+            />
+          </label>
+          <Button
+            class="settings-panel-action models-primary-action models-save-key"
+            type="submit"
+            size="small"
+            variant="primary"
+            disabled={saving() || !key().trim()}
+          >
+            {saving() ? "Saving…" : "Save key"}
+          </Button>
+        </form>
+      </Show>
 
       <Show when={connected().length > 0}>
         <div class="models-connected-providers">
@@ -253,9 +288,9 @@ export function ProviderKeys(props: { onError?: (error: string | undefined) => v
           </For>
         </div>
       </Show>
-      <Show when={connected().length === 0}>
+      <Show when={connected().length === 0 && !adding()}>
         <p class="models-provider-empty" role="status">
-          No provider API keys are connected yet.
+          No provider API keys connected.
         </p>
       </Show>
     </div>

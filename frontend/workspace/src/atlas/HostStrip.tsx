@@ -3,6 +3,7 @@ import { useSDK } from "@/context/sdk"
 import { hostReading, type Capacity } from "@/atlas/host-instruments"
 import { identify } from "@/atlas/poll-identity"
 import { createKernelRouteRequester, kernelAPI } from "@/atlas/kernel-api"
+import { IconCpu } from "@/atlas/shared/Icon"
 import "@/atlas/HostStrip.css"
 
 type HostStripProps = {
@@ -27,8 +28,13 @@ export function HostStrip(props: HostStripProps = {}): JSX.Element {
       })
   const [data, api] = createResource(load)
   const reading = createMemo(() => hostReading(data.latest))
-  const kernelCount = () => data.latest?.kernels.live
-  const runningCount = () => data.latest?.kernels.running
+  const memoryTotal = createMemo(() =>
+    reading().memory === "memory unavailable"
+      ? reading().memory
+      : reading()
+          .memory.replace(/^of /, "/ ")
+          .replace(/ memory$/, ""),
+  )
   const refresh = () => {
     if (document.hidden || data.loading) return
     void api.refetch()
@@ -42,36 +48,41 @@ export function HostStrip(props: HostStripProps = {}): JSX.Element {
 
   return (
     <section class="host-strip" aria-label="Current local compute" data-testid="host-strip" data-health={health()}>
-      <div class="host-strip__metric" data-host-tile="memory">
-        <span class="host-strip__label">Memory</span>
-        <p>
-          <strong class="host-strip__headline">{reading().headline}</strong>
-          <span class="host-strip__total">{reading().memory}</span>
-        </p>
-        <Meter value={reading().memoryFill} />
-      </div>
-
-      <div class="host-strip__metric" data-host-tile="cpu">
-        <span class="host-strip__label">CPU</span>
-        <p>
-          <strong class="host-strip__cores-value">{reading().cores}</strong>
-          <span class="host-strip__total">cores</span>
-        </p>
-        <Meter value={reading().cpuFill} />
-      </div>
-
-      <div class="host-strip__metric host-strip__metric--kernels" data-host-tile="kernels">
-        <span class="host-strip__label">Kernels</span>
-        <p aria-label={`${kernelCount() ?? "Unknown"} kernels, ${runningCount() ?? "unknown"} running`}>
-          <strong class="host-strip__kernels-value">{kernelCount() ?? "—"}</strong>
-        </p>
-        <span class="host-strip__kernel-state">
-          {kernelCount() === 1 ? "kernel" : "kernels"} · {runningCount() ?? "—"} running
+      <div class="host-strip__identity">
+        <span class="host-strip__glyph" aria-hidden="true">
+          <IconCpu size={16} strokeWidth={1.5} />
         </span>
+        <div class="host-strip__copy">
+          <strong>This computer</strong>
+          <span>
+            {health() === "loading"
+              ? "Reading compute…"
+              : health() === "unavailable"
+                ? "Usage unavailable"
+                : `${reading().live} active · ${reading().running} running`}
+          </span>
+        </div>
       </div>
-      <span class="host-strip__health" aria-live="polite">
-        {health() === "loading" ? "Reading usage…" : health() === "unavailable" ? "Usage unavailable" : ""}
-      </span>
+
+      <div class="host-strip__resources" aria-label="Local compute resources">
+        <div class="host-strip__metric" data-host-tile="memory">
+          <span class="host-strip__label">Memory</span>
+          <p>
+            <strong class="host-strip__headline">{reading().headline}</strong>
+            <span class="host-strip__total">{memoryTotal()}</span>
+          </p>
+          <Meter value={reading().memoryFill} />
+        </div>
+        <div class="host-strip__metric" data-host-tile="cpu">
+          <span class="host-strip__label">CPU</span>
+          <p>
+            <strong class="host-strip__cores-value">{reading().cores}</strong>
+            <span class="host-strip__total">cores</span>
+          </p>
+          <Meter value={reading().cpuFill} />
+        </div>
+      </div>
+      <span class="host-strip__health" aria-live="polite" aria-label={health()} />
     </section>
   )
 }

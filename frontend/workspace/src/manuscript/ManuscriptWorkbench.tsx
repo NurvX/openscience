@@ -20,24 +20,19 @@ import {
 } from "./model"
 import { localAssetPath } from "@/utils/markdown-assets"
 import { projectContains, projectFileQuery, rawFileQuery } from "@/utils/project-file"
+import {
+  normalizePublicationReview,
+  type PublicationReviewReport,
+  type PublicationReviewState,
+} from "@/artifacts/inspector"
 
-type Panel = "citations" | "figures" | "publish"
+type Panel = "citations" | "figures" | "review" | "publish"
 type PublicationFormat = "html" | "pdf" | "docx" | "latex" | "pptx"
 
 interface PublicationCapabilities {
   pandoc: boolean
   pdf_engine?: string
   formats: Record<PublicationFormat, boolean>
-}
-
-interface PublicationReview {
-  id: string
-  stale: boolean
-  finalized?: {
-    actor: string
-    at: number
-    artifactHash: string
-  }
 }
 
 interface PublicationResult {
@@ -65,6 +60,7 @@ export function ManuscriptWorkbench(props: {
   const [figureQuery, setFigureQuery] = createSignal("")
   const [alt, setAlt] = createSignal("")
   const [posting, setPosting] = createSignal<string>()
+  const [preflightAction, setPreflightAction] = createSignal<"run" | "finalize">()
   const [editor, setEditor] = createSignal<HTMLTextAreaElement>()
   const [reviewKey, setReviewKey] = createSignal(0)
   const manuscript = createMemo(() => parseManuscript(props.text))
@@ -129,7 +125,7 @@ export function ManuscriptWorkbench(props: {
       const response = await sdk.request("/file/reviews", undefined, query(props.path))
       if (response.status === 404) return
       if (!response.ok) throw new Error(`Publication preflight unavailable (${response.status})`)
-      return (await response.json()) as PublicationReview
+      return (await response.json()) as PublicationReviewReport & { stale: boolean }
     },
   )
 
@@ -155,6 +151,7 @@ export function ManuscriptWorkbench(props: {
       (format) => capabilities.latest?.formats[format],
     ),
   )
+  const preflight = createMemo(() => normalizePublicationReview("md", review.latest))
   const reviewed = createMemo(() => Boolean(review.latest?.finalized && !review.latest.stale && !props.dirty))
   const preview = createMemo(() =>
     rewritePreviewImages(manuscript().body, props.path, (path) => sdk.request.url("/file/raw", raw(path))),
@@ -203,10 +200,67 @@ export function ManuscriptWorkbench(props: {
     toast.success("figure inserted", figure.path)
   }
   const openReview = () => {
-    uiStore.setArtifactPaneTab("review")
+    setPanel("review")
     setReviewKey((value) => value + 1)
     void reviewApi.refetch()
-    toast.info("Preflight ready in Details")
+  }
+  const toggleReview = () => {
+    if (panel() === "review") {
+      setPanel(undefined)
+      return
+    }
+    openReview()
+  }
+  const mutatePreflight = async (action: "run" | "finalize", route: string, body: Record<string, unknown>) => {
+    if (preflightAction()) return false
+    setPreflightAction(action)
+    const response = await sdk
+      .request(
+        route,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        query(),
+      )
+      .catch(() => undefined)
+    setPreflightAction(undefined)
+    if (!response?.ok) {
+      const payload = (await response?.json().catch(() => undefined)) as { error?: unknown } | undefined
+      const detail =
+        typeof payload?.error === "string" ? payload.error : response ? `${response.status}` : "Request failed"
+      toast.error("Publication preflight failed", detail)
+      return false
+    }
+    await reviewApi.refetch()
+    return true
+  }
+  const runPreflight = async () => {
+    if (props.dirty || props.saving) {
+      toast.error("save before preflight", "Publication checks run against exact saved bytes.")
+      return
+    }
+    const ok = await mutatePreflight("run", "/file/reviews", {
+      path: props.path,
+      actor: "Local user",
+    })
+    if (ok) toast.success("Publication preflight complete")
+  }
+  const finalizePreflight = async () => {
+    const report = review.latest
+    if (!report || report.stale || props.dirty || props.saving) {
+      toast.error("preflight cannot be finalized", "Save the manuscript and run the current checks first.")
+      return
+    }
+    if (report.findings.some((finding) => finding.severity === "blocking" && finding.status === "open")) {
+      toast.error("preflight is blocked", "Resolve the blocking manuscript findings, then run the checks again.")
+      return
+    }
+    const ok = await mutatePreflight("finalize", `/file/reviews/${report.id}/finalize`, {
+      actor: "Local user",
+    })
+    if (ok) toast.success("Preflight-checked bytes finalized")
   }
   const publish = async (format: PublicationFormat, readiness: "draft" | "reviewed") => {
     if (props.dirty || props.saving) {
@@ -286,7 +340,7 @@ export function ManuscriptWorkbench(props: {
         <button type="button" style={toolButton(panel() === "figures")} onClick={() => toggle("figures")}>
           <IconFile size={11} /> Figures
         </button>
-        <button type="button" style={toolButton()} onClick={openReview}>
+        <button type="button" style={toolButton(panel() === "review")} onClick={toggleReview}>
           <IconCheckCircle size={11} /> Review
         </button>
         <button type="button" style={toolButton(panel() === "publish")} onClick={openPublish}>
@@ -384,6 +438,26 @@ export function ManuscriptWorkbench(props: {
         </BrowserShell>
       </Show>
 
+      <Show when={panel() === "review"}>
+        <BrowserShell
+          component="publication-preflight"
+          title="Publication preflight"
+          detail="Deterministic checks for exact saved bytes"
+        >
+          <div style={{ "grid-column": "2 / -1", "min-width": 0 }}>
+            <Show when={!review.loading} fallback={<Empty>Loading publication preflight…</Empty>}>
+              <PreflightControls
+                state={preflight()}
+                dirty={props.dirty || props.saving}
+                action={preflightAction()}
+                onRun={() => void runPreflight()}
+                onFinalize={() => void finalizePreflight()}
+              />
+            </Show>
+          </div>
+        </BrowserShell>
+      </Show>
+
       <Show when={panel() === "publish"}>
         <BrowserShell
           component="publication-controls"
@@ -425,7 +499,7 @@ export function ManuscriptWorkbench(props: {
                     when={reviewed()}
                     fallback={
                       <button type="button" style={reviewButton()} onClick={openReview}>
-                        open preflight
+                        review preflight
                       </button>
                     }
                   >
@@ -596,6 +670,90 @@ function ExportGroup(props: { title: string; detail: string; children: JSX.Eleme
       </div>
       <div style={{ display: "flex", gap: "4px", "flex-wrap": "wrap" }}>{props.children}</div>
     </div>
+  )
+}
+
+function PreflightControls(props: {
+  state: PublicationReviewState
+  dirty: boolean
+  action?: "run" | "finalize"
+  onRun: () => void
+  onFinalize: () => void
+}): JSX.Element {
+  const report = () => props.state.report
+  const blocking = () =>
+    report()?.findings.some((finding) => finding.severity === "blocking" && finding.status === "open") ?? false
+  const finalizeDisabled = () => Boolean(props.action || props.dirty || report()?.stale || blocking())
+  return (
+    <div style={{ display: "grid", gap: "8px" }}>
+      <div
+        style={{
+          display: "flex",
+          "align-items": "center",
+          gap: "10px",
+          "justify-content": "space-between",
+          "min-width": 0,
+        }}
+      >
+        <div style={{ display: "grid", gap: "2px", "min-width": 0 }}>
+          <strong style={{ "font-family": FONT_SANS, "font-size": "10px", color: "var(--color-text)" }}>
+            {props.state.title}
+          </strong>
+          <span style={{ "font-family": FONT_SANS, "font-size": "9px", color: "var(--color-text-faint)" }}>
+            {props.dirty ? "Save the manuscript before running checks." : props.state.detail}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: "5px", "flex-shrink": 0 }}>
+          <button
+            type="button"
+            disabled={Boolean(props.action || props.dirty)}
+            style={preflightButton(Boolean(props.action || props.dirty))}
+            onClick={props.onRun}
+          >
+            {props.action === "run" ? "Checking…" : report() ? "Run again" : "Run checks"}
+          </button>
+          <Show when={report() && !report()?.finalized}>
+            <button
+              type="button"
+              disabled={finalizeDisabled()}
+              style={preflightButton(finalizeDisabled(), true)}
+              onClick={props.onFinalize}
+            >
+              {props.action === "finalize" ? "Finalizing…" : "Finalize checked bytes"}
+            </button>
+          </Show>
+        </div>
+      </div>
+      <Show when={report()}>
+        {(current) => (
+          <div style={{ display: "flex", "align-items": "center", gap: "5px", "flex-wrap": "wrap" }}>
+            <PreflightMetric
+              label="blocking"
+              value={current().summary.blocking}
+              alert={current().summary.blocking > 0}
+            />
+            <PreflightMetric label="major" value={current().summary.major} />
+            <PreflightMetric label="minor" value={current().summary.minor} />
+            <PreflightMetric label="closed" value={current().summary.resolved + current().summary.overridden} />
+            <span style={{ ...keyBadge(), "margin-left": "auto" }}>sha256 {current().artifactHash.slice(0, 12)}</span>
+          </div>
+        )}
+      </Show>
+    </div>
+  )
+}
+
+function PreflightMetric(props: { label: string; value: number; alert?: boolean }): JSX.Element {
+  return (
+    <span
+      style={{
+        ...keyBadge(),
+        color: props.alert ? "var(--color-warning)" : "var(--color-text-muted)",
+        border: `1px solid ${props.alert ? "var(--color-warning)" : "transparent"}`,
+      }}
+    >
+      {props.value} {props.label}
+    </span>
   )
 }
 
@@ -798,6 +956,25 @@ function reviewButton(): JSX.CSSProperties {
     "font-family": FONT_MONO,
     "font-size": "9px",
     color: "var(--color-text-muted)",
+  }
+}
+
+function preflightButton(disabled: boolean, primary = false): JSX.CSSProperties {
+  return {
+    all: "unset",
+    cursor: disabled ? "not-allowed" : "pointer",
+    display: "inline-flex",
+    "align-items": "center",
+    height: "25px",
+    padding: "0 9px",
+    "border-radius": "5px",
+    border: "1px solid var(--color-border)",
+    background: primary ? "var(--color-text)" : "var(--color-bg)",
+    color: primary ? "var(--color-bg)" : "var(--color-text-muted)",
+    opacity: disabled ? 0.45 : 1,
+    "font-family": FONT_SANS,
+    "font-size": "9px",
+    "font-weight": "var(--font-weight-emphasis)",
   }
 }
 

@@ -145,4 +145,41 @@ describe("OpenScienceRuntime", () => {
     }, RuntimeEventCursorError)
     assert.equal(calls, 1)
   })
+
+  test("settles a rejecting stream cancellation when the caller aborts", async () => {
+    const controller = new AbortController()
+    let connected = false
+    const unhandled: unknown[] = []
+    const onUnhandled = (error: unknown) => unhandled.push(error)
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      const runtime = createOpenScienceRuntime({
+        baseUrl: "http://runtime.test",
+        runtimeReconnectDelayMs: 0,
+        fetch: async () => {
+          connected = true
+          return new Response(
+            new ReadableStream({
+              pull: () => new Promise<void>(() => {}),
+              cancel: () => Promise.reject(new Error("upstream cancel failed")),
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        },
+      })
+
+      const consuming = (async () => {
+        for await (const _ of runtime.events({ sessionID: "ses_abort", signal: controller.signal })) {
+          // No event is expected.
+        }
+      })()
+      while (!connected) await new Promise((resolve) => setTimeout(resolve, 1))
+      controller.abort()
+      await consuming
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.deepEqual(unhandled, [])
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
+  })
 })

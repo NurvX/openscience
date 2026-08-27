@@ -49,52 +49,69 @@ export namespace FirecrawlSearch {
 
   export async function search(
     input: ResearchSearchInput,
-    options: { key: string; signal: AbortSignal; fetch?: Fetch; baseURL?: string },
+    options: { key: string; signal: AbortSignal; fetch?: Fetch; baseURL?: string; timeoutMs?: number },
   ) {
     const request = options.fetch ?? globalThis.fetch
     const url = `${(options.baseURL ?? "https://api.firecrawl.dev").replace(/\/+$/, "")}/v2/search`
     const categories = input.source === "developer" ? [{ type: "github" }] : undefined
-    const response = await request(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${options.key}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        query: input.query,
-        limit: input.limit,
-        sources: ["web"],
-        categories,
-        includeDomains: input.include_domains,
-        excludeDomains: input.exclude_domains,
-        timeout: input.mode === "deep" ? 60_000 : 30_000,
-        ignoreInvalidURLs: true,
-        ...(input.content === "top" ? { scrapeOptions: { formats: ["markdown"], onlyMainContent: true } } : {}),
-      }),
-      signal: options.signal,
+    const timeoutMs = Math.max(1, options.timeoutMs ?? (input.mode === "deep" ? 60_000 : 30_000))
+    const timeoutController = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`Firecrawl search timed out after ${Math.ceil(timeoutMs / 1000)} seconds`)
+        timeoutController.abort(error)
+        reject(error)
+      }, timeoutMs)
     })
-    const raw = await response.json().catch(() => undefined)
-    if (!response.ok) {
-      throw new Error(`Firecrawl search failed with HTTP ${response.status}`)
-    }
-    const parsed = Response.parse(raw)
-    if (!parsed.success) throw new Error(parsed.error || "Firecrawl search did not complete")
-    const results = project(parsed.data?.web ?? [], input.content)
-    const warnings = [
-      ...(input.source === "web" || input.source === "developer"
-        ? []
-        : [`Firecrawl BYOK used general web results for the requested ${input.source} source.`]),
-      ...(input.published_after || input.published_before
-        ? ["Firecrawl BYOK did not enforce publication-date filters; verify dates in the cited sources."]
-        : []),
-    ]
-    return {
-      status: "completed" as const,
-      provider: "firecrawl_byok" as const,
-      funding: "byok" as const,
-      results,
-      ...(warnings.length ? { warnings } : {}),
+    try {
+      const response = await Promise.race([
+        request(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${options.key}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            query: input.query,
+            limit: input.limit,
+            sources: ["web"],
+            categories,
+            includeDomains: input.include_domains,
+            excludeDomains: input.exclude_domains,
+            timeout: timeoutMs,
+            ignoreInvalidURLs: true,
+            ...(input.content === "top" ? { scrapeOptions: { formats: ["markdown"], onlyMainContent: true } } : {}),
+          }),
+          signal: AbortSignal.any([options.signal, timeoutController.signal]),
+        }),
+        timeout,
+      ])
+      const raw = await response.json().catch(() => undefined)
+      if (!response.ok) {
+        throw new Error(`Firecrawl search failed with HTTP ${response.status}`)
+      }
+      const parsed = Response.parse(raw)
+      if (!parsed.success) throw new Error(parsed.error || "Firecrawl search did not complete")
+      const results = project(parsed.data?.web ?? [], input.content)
+      const warnings = [
+        ...(input.source === "web" || input.source === "developer"
+          ? []
+          : [`Firecrawl BYOK used general web results for the requested ${input.source} source.`]),
+        ...(input.published_after || input.published_before
+          ? ["Firecrawl BYOK did not enforce publication-date filters; verify dates in the cited sources."]
+          : []),
+      ]
+      return {
+        status: "completed" as const,
+        provider: "firecrawl_byok" as const,
+        funding: "byok" as const,
+        results,
+        ...(warnings.length ? { warnings } : {}),
+      }
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 }

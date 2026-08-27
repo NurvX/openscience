@@ -86,6 +86,34 @@ async function assertAbsent(filepath: string) {
   if (exists) throw new Error(`Refusing to overwrite an existing file: ${filepath}`)
 }
 
+function patchFailureSnapshot(filePath: string, content: string, chunks: Patch.UpdateFileChunk[]) {
+  const lines = content.split(/\r?\n/)
+  if (lines.at(-1) === "") lines.pop()
+
+  const candidates = chunks.flatMap((chunk) =>
+    [chunk.change_context, ...chunk.old_lines].filter((line): line is string => Boolean(line?.trim())),
+  )
+  const anchor = candidates.reduce((found, candidate) => {
+    if (found >= 0) return found
+    const exact = lines.findIndex((line) => line === candidate)
+    if (exact >= 0) return exact
+    return lines.findIndex((line) => line.trim() === candidate.trim())
+  }, -1)
+  const start = Math.max(0, anchor >= 0 ? anchor - 4 : 0)
+  const end = Math.min(lines.length, start + 20)
+  const preview = lines
+    .slice(start, end)
+    .map((line, index) => `${start + index + 1}: ${line}`)
+    .join("\n")
+  const sha256 = crypto.createHash("sha256").update(content).digest("hex")
+
+  return [
+    `Re-read ${filePath} before retrying; its current contents do not match the patch context.`,
+    `Current SHA-256: ${sha256}`,
+    preview ? `Current bounded context (lines ${start + 1}-${end}):\n${preview}` : "The current file is empty.",
+  ].join("\n")
+}
+
 async function assertApprovedFile(filepath: string, approved: ApprovedFile) {
   const current = await readApprovedFile(filepath).catch((error) => {
     throw new Error(`Refusing to edit ${filepath}: the file changed after approval: ${error}`)
@@ -363,7 +391,9 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
             const fileUpdate = Patch.deriveNewContentsFromChunks(filePath, hunk.chunks, oldContent)
             newContent = fileUpdate.content
           } catch (error) {
-            throw new Error(`apply_patch verification failed: ${error}`)
+            throw new Error(
+              `apply_patch verification failed: ${error}\n${patchFailureSnapshot(filePath, oldContent, hunk.chunks)}`,
+            )
           }
 
           const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))

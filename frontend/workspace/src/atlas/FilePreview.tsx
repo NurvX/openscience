@@ -29,6 +29,7 @@ import {
   describeFile,
   createFileRequestOwner,
   fileRequestKey,
+  fileReadRetryDelay,
   initialFileScope,
   missingFileFallback,
   PDF_PREVIEW_LIMIT,
@@ -45,7 +46,7 @@ import { resolveViewer } from "@/atlas/files/viewer-registry"
 import { assetUrl, localAssetPath } from "@/utils/markdown-assets"
 import { recoverFileDraft, rememberFileDraft } from "@/atlas/file-drafts"
 import { splitAlignedMarkdown } from "@/atlas/FilePreviewMarkdown"
-import { projectContains, rawFileQuery } from "@/utils/project-file"
+import { projectContains, rawFileQuery, resolveUniqueProjectFileReference } from "@/utils/project-file"
 import { CodeEditor } from "@/atlas/CodeEditor"
 import { HTML_STYLESHEET_BYTES, htmlStylesheets, loadHtmlStylesheets, rewriteHtmlAssets } from "@/utils/html-assets"
 import "./FilePreview.css"
@@ -121,21 +122,24 @@ export function FileView(props: {
   const directory = () => props.directory || sdk.directory || sync.data.path.directory || sync.project?.worktree || ""
   const activeSessionID = () => props.sessionID ?? (params.id && params.id !== "new" ? params.id : undefined)
   const [resolvedScope, setResolvedScope] = createSignal<ResolvedFileScope>(initialFileScope(props.scope))
+  const [resolvedPath, setResolvedPath] = createSignal(props.path)
   let scopeIdentity = ""
   createEffect(() => {
     const next = [props.scope ?? "project", directory(), props.path, activeSessionID() ?? ""].join("\n")
     if (next === scopeIdentity) return
     scopeIdentity = next
     setResolvedScope(initialFileScope(props.scope))
+    setResolvedPath(props.path)
   })
-  const requestPath = () => (resolvedScope() === "session" ? props.path : resolveArtifactPath(directory(), props.path))
+  const requestPath = () =>
+    resolvedScope() === "session" ? resolvedPath() : resolveArtifactPath(directory(), resolvedPath())
   const fileSessionID = () =>
     resolvedScope() === "session"
       ? activeSessionID()
       : projectContains(directory(), requestPath())
         ? undefined
         : activeSessionID()
-  const name = () => props.path.split("/").pop() || props.path
+  const name = () => resolvedPath().split("/").pop() || resolvedPath()
   const e = () => ext(name())
 
   const [view, setView] = createStore<ViewState>({
@@ -150,6 +154,8 @@ export function FileView(props: {
   const [htmlView, setHtmlView] = createStore<HtmlState>({ status: "idle", value: "" })
   const request = createFileRequestOwner()
   const readRetry = { key: "", count: 0 }
+  let readyKey = ""
+  let readRetryTimer: ReturnType<typeof setTimeout> | undefined
   const pdfRequest = { current: 0 }
   const pdfAbort = { current: undefined as AbortController | undefined }
   const htmlRequest = { current: 0 }
@@ -161,22 +167,35 @@ export function FileView(props: {
     const activeSession = fileSessionID()
     view.refresh
     const key = fileRequestKey({ projectID: sdk.projectID, directory: dir, sessionID: activeSession, path })
+    if (readRetryTimer) {
+      clearTimeout(readRetryTimer)
+      readRetryTimer = undefined
+    }
     if (readRetry.key !== key) {
       readRetry.key = key
       readRetry.count = 0
     }
     const ticket = request.begin(key)
-    setView({
-      status: "loading",
-      data: undefined,
-      error: undefined,
-      saveError: undefined,
-      source: false,
-      draft: "",
-      saved: "",
-      saving: false,
-      inspection: undefined,
-    })
+    const retained = readyKey === key && view.status === "ready" && view.data
+    if (retained) {
+      // A reconnect or explicit refresh must not blank a valid preview. Keep
+      // the rendered bytes and any unsaved draft while the replacement read
+      // happens in the background.
+      setView({ error: undefined, saveError: undefined, saving: false })
+    } else {
+      readyKey = ""
+      setView({
+        status: "loading",
+        data: undefined,
+        error: undefined,
+        saveError: undefined,
+        source: false,
+        draft: "",
+        saved: "",
+        saving: false,
+        inspection: undefined,
+      })
+    }
     if (!dir || !path) {
       setView({ status: "error", error: new Error("The file location is unavailable.") })
       return
@@ -193,16 +212,23 @@ export function FileView(props: {
     }).then((result) => {
       if (!request.owns(ticket, key)) return
       if (result.cancelled) {
-        // A transport reconnect can abort the active request even though the
-        // person did not leave the file. Retry once without ever rendering the
-        // browser's raw "signal is aborted" implementation detail.
-        if (readRetry.count === 0) {
-          readRetry.count++
-          queueMicrotask(() => {
+        const delay = fileReadRetryDelay(readRetry.count)
+        if (delay !== undefined) {
+          readRetry.count += 1
+          readRetryTimer = setTimeout(() => {
+            readRetryTimer = undefined
             if (request.owns(ticket, key)) setView("refresh", (value) => value + 1)
-          })
-        } else {
+          }, delay)
+        } else if (readyKey !== key || view.status !== "ready" || !view.data) {
           setView({ status: "interrupted", error: undefined, data: undefined })
+        } else {
+          // The last valid preview remains usable. Keep the transport detail in
+          // diagnostics rather than replacing the document with an error card.
+          console.warn("File preview transport remained interrupted after bounded retries", {
+            requestID: ticket.id,
+            requestKey: key,
+            retries: readRetry.count,
+          })
         }
         return
       }
@@ -216,12 +242,41 @@ export function FileView(props: {
           setResolvedScope(fallback)
           return
         }
+        const reference = resolvedPath()
+        if (
+          (props.scope ?? "project") === "auto" &&
+          resolvedScope() === "project" &&
+          !reference.includes("/") &&
+          !reference.includes("\\")
+        ) {
+          const limit = 200
+          const originalError = result.error
+          void sdk.client.find
+            .files({ query: reference, dirs: "false", type: "file", limit })
+            .then((response) => {
+              if (!request.owns(ticket, key)) return
+              const matches = response.data ?? []
+              const recovered = resolveUniqueProjectFileReference(reference, matches, {
+                complete: matches.length < limit,
+              })
+              if (recovered) {
+                setResolvedPath(recovered)
+                return
+              }
+              setView({ status: "error", error: originalError, data: undefined })
+            })
+            .catch(() => {
+              if (request.owns(ticket, key)) setView({ status: "error", error: originalError, data: undefined })
+            })
+          return
+        }
         setView({ status: "error", error: result.error, data: undefined })
         return
       }
       const data = result.data ?? {}
       readRetry.count = 0
       const text = data.encoding === "base64" ? "" : (data.content ?? "")
+      readyKey = key
       setView({
         status: "ready",
         data,
@@ -233,6 +288,7 @@ export function FileView(props: {
   })
 
   onCleanup(() => {
+    if (readRetryTimer) clearTimeout(readRetryTimer)
     request.dispose()
   })
 
@@ -248,7 +304,7 @@ export function FileView(props: {
     if (view.status !== "ready") return
     rememberFileDraft(
       directory(),
-      props.path,
+      resolvedPath(),
       view.draft,
       view.saved,
       resolvedScope() === "session" ? "session" : undefined,
@@ -293,10 +349,10 @@ export function FileView(props: {
     )
   const image = (src: string) =>
     assetUrl(src, {
-      base: props.path,
+      base: resolvedPath(),
       url: (path) => rawUrl(path),
     })
-  const file = (href: string) => localAssetPath(href, props.path)
+  const file = (href: string) => localAssetPath(href, resolvedPath())
   const openFile = (path: string) => uiStore.openFile(directory(), path, { scope: resolvedScope() })
   const html = () => htmlView.value
 
@@ -304,7 +360,7 @@ export function FileView(props: {
     const source = view.draft
     const dir = directory()
     const session = fileSessionID()
-    const base = props.path
+    const base = resolvedPath()
     const active = view.status === "ready" && kind() === "html" && !view.source
     const id = ++htmlRequest.current
     htmlAbort.current?.abort()
@@ -387,7 +443,7 @@ export function FileView(props: {
   const context = createMemo(() =>
     createArtifactContext({
       directory: directory(),
-      path: props.path,
+      path: resolvedPath(),
       format: badge(),
       scienceKind: scientific()?.kind,
       inspection: view.inspection,
@@ -593,8 +649,9 @@ export function FileView(props: {
 
   const location = () => {
     if (props.subtitle) return props.subtitle
-    const index = props.path.lastIndexOf("/")
-    return index > 0 ? props.path.slice(0, index) : resolvedScope() === "session" ? "Session files" : "Project files"
+    const path = resolvedPath()
+    const index = path.lastIndexOf("/")
+    return index > 0 ? path.slice(0, index) : resolvedScope() === "session" ? "Session files" : "Project files"
   }
 
   return (
