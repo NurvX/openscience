@@ -748,6 +748,53 @@ function createGlobalSync() {
     return promise
   }
 
+  /**
+   * The global SSE endpoint is intentionally ephemeral: reconnecting starts a
+   * fresh stream and cannot replay events emitted while the browser was
+   * disconnected. Rehydrate only transcripts that are already open/cached so
+   * a brief transport interruption cannot leave a live turn missing text or
+   * reasoning until the user reloads the page.
+   */
+  async function refreshLoadedMessages(directory: string) {
+    const existing = children[directory]
+    if (!existing) return
+    const [store, setStore] = existing
+    const loaded = Object.entries(store.message).filter(([, messages]) => messages.length > 0)
+    if (!loaded.length) return
+
+    const client = sdkFor(directory, store.project)
+    for (let index = 0; index < loaded.length; index += 2) {
+      const slice = loaded.slice(index, index + 2)
+      await Promise.all(
+        slice.map(async ([sessionID, current]) => {
+          // Keep all currently hydrated history and enough headroom for events
+          // missed during the disconnect. The endpoint returns the newest N.
+          const limit = Math.max(400, current.length + 64)
+          const response = await client.session.messages({ sessionID, limit })
+          const items = (response.data ?? []).filter((item) => !!item?.info?.id)
+          const messages = items
+            .map((item) => item.info)
+            .filter((message) => !!message?.id)
+            .sort((a, b) => a.id.localeCompare(b.id))
+
+          batch(() => {
+            setStore("message", sessionID, reconcile(messages, { key: "id" }))
+            for (const item of items) {
+              setStore(
+                "part",
+                item.info.id,
+                reconcile(
+                  item.parts.filter((part) => !!part?.id).sort((a, b) => a.id.localeCompare(b.id)),
+                  { key: "id" },
+                ),
+              )
+            }
+          })
+        }),
+      )
+    }
+  }
+
   const unsub = globalSDK.event.listen((e) => {
     const directory = e.name
     const event = e.details
@@ -757,7 +804,12 @@ function createGlobalSync() {
         case "server.connected": {
           if (!globalStore.ready) return
           refresh()
-          for (const directory of Object.keys(children)) push(directory)
+          for (const directory of Object.keys(children)) {
+            push(directory)
+            void refreshLoadedMessages(directory).catch((error) =>
+              console.warn("Failed to backfill loaded transcripts after reconnect", { directory, error }),
+            )
+          }
           return
         }
         case "global.disposed": {

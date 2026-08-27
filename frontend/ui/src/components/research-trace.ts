@@ -1,5 +1,5 @@
 import type { AssistantMessage, Part, ToolPart, ToolStateCompleted } from "@synsci/sdk/v2/client"
-import { reasoningDisplayText, skillName } from "./tool-display"
+import { reasoningDisplayText, reasoningTopic, skillName } from "./tool-display"
 
 export type ResearchTraceEntry = {
   message: AssistantMessage
@@ -86,7 +86,12 @@ function completedSkillLoad(entry: ResearchTraceEntry): entry is CompletedSkillE
 export function visibleResearchTrace(entries: ResearchTraceEntry[]): ResearchTraceEntry[] {
   const visible = entries.filter((entry) => {
     if (entry.hidden || lifecycle(entry.part)) return false
-    if (entry.part.type === "reasoning" && !reasoningDisplayText(entry.part.text ?? "")) return false
+    if (
+      entry.part.type === "reasoning" &&
+      !reasoningDisplayText(entry.part.text ?? "") &&
+      !reasoningTopic(entry.part.text ?? "")
+    )
+      return false
     return true
   })
   const result: ResearchTraceEntry[] = []

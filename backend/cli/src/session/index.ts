@@ -415,6 +415,10 @@ export namespace Session {
     }),
     async (input) => {
       await assertDirectory(input.sessionID)
+      // A reconnecting UI uses this endpoint as the authoritative backfill for
+      // SSE events it could not receive. Flush coalesced streaming text and
+      // reasoning first so the snapshot cannot lag behind the visible turn.
+      await flushPendingParts(input.sessionID)
       const result = [] as MessageV2.WithParts[]
       for await (const msg of MessageV2.stream(input.sessionID)) {
         if (input.limit && result.length >= input.limit) break

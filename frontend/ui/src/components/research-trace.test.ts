@@ -136,7 +136,7 @@ describe("research trace presentation", () => {
     expect(trace.map((item) => item.part.id)).toEqual(["fetch-1", "fetch-2", "fetch-3"])
   })
 
-  test("uses provider status-only reasoning in the live header without adding transcript rows", () => {
+  test("keeps provider status-only reasoning chronological instead of leaving a tool-only gap", () => {
     const trace = visibleResearchTrace([
       narrative("status-1", "reasoning", "Planning source retrieval", "msg-1"),
       entry("search", "websearch", "Find assay data", "completed", "msg-1"),
@@ -144,7 +144,7 @@ describe("research trace presentation", () => {
       entry("fetch", "webfetch", "Fetch assay data", "completed", "msg-2"),
     ])
 
-    expect(trace.map((item) => item.part.id)).toEqual(["search", "fetch"])
+    expect(trace.map((item) => item.part.id)).toEqual(["status-1", "search", "status-2", "fetch"])
   })
 
   test("omits deliberately hidden tools from the inline activity list", () => {

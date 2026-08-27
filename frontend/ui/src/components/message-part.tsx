@@ -53,6 +53,7 @@ import { createAutoScroll } from "../hooks"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import {
   reasoningDisplayText,
+  reasoningTopic,
   savedArtifact,
   scienceTaskLabel,
   sentenceCaseLabel,
@@ -936,12 +937,22 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
 PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
   const part = props.part as ReasoningPart
   const text = () => reasoningDisplayText(part.text)
+  const status = () => (text() ? undefined : reasoningTopic(part.text))
 
   return (
-    <Show when={text()}>
-      <div data-component="reasoning-part" data-origin="provider-reasoning">
-        <Markdown text={text()} cacheKey={part.id} />
-      </div>
+    <Show when={text() || status()}>
+      <Show
+        when={text()}
+        fallback={
+          <div data-component="reasoning-status-part" data-origin="provider-reasoning-status">
+            {status()}
+          </div>
+        }
+      >
+        <div data-component="reasoning-part" data-origin="provider-reasoning">
+          <Markdown text={text()} cacheKey={part.id} />
+        </div>
+      </Show>
     </Show>
   )
 }

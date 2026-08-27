@@ -73,6 +73,7 @@ test("activity keeps the full provider reasoning mounted while the turn streams"
   expect(source).toContain("return visibleResearchTrace(entries)")
   expect(parts).toContain("reasoningDisplayText")
   expect(parts).toContain('data-origin="provider-reasoning"')
+  expect(parts).toContain('data-origin="provider-reasoning-status"')
   expect(english).toContain('"ui.sessionTurn.steps.show": "Show reasoning and activity"')
   expect(english).not.toContain("model summaries are provider-generated")
 })
