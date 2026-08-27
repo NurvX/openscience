@@ -791,6 +791,8 @@ const entry = async (identity: KernelIdentity, options?: KernelStartOptions, han
         cwd: current.workspace,
         processOwnership,
         sandboxPolicy,
+        authorizedReadable: Object.freeze([...current.readable]),
+        authorizedWritable: Object.freeze([...current.writable]),
       })
       const registered = await KernelProcessIdentity.ensureRegistered(kernel.process, processOwnership)
       if (!registered) {

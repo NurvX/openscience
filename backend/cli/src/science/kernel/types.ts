@@ -123,6 +123,11 @@ export interface KernelStartOptions {
   /** Internal immutable sandbox snapshot authorized for this exact spawn.
    * Registry-owned: callers cannot override the final authority decision. */
   sandboxPolicy?: KernelSandboxPolicy
+  /** Immutable filesystem roots captured with the final execution-authority
+   * decision. Registry-owned: managers must not rebuild a narrower or newer
+   * grant set after the spawn boundary has been authorized. */
+  authorizedReadable?: readonly string[]
+  authorizedWritable?: readonly string[]
   /** Interpreter binary override (e.g. a specific python/Rscript path). */
   binary?: string
   /** Stable user-facing name for the selected interpreter environment. */

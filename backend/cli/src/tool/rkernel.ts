@@ -256,12 +256,16 @@ class RKernel implements Kernel {
     await Bun.write(configPath, "{}\n")
     this.scriptPath = scriptPath
     this.configPath = configPath
-    const workspace = opts?.sessionID
-      ? await SessionFilesystem.processWriteRoots(opts.sessionID)
-      : [Instance.directory, Instance.worktree]
-    const readable = opts?.sessionID
-      ? await SessionFilesystem.processReadRoots(opts.sessionID)
-      : [Instance.directory, Instance.worktree]
+    const workspace = opts?.authorizedWritable
+      ? [...opts.authorizedWritable]
+      : opts?.sessionID
+        ? await SessionFilesystem.processWriteRoots(opts.sessionID)
+        : [Instance.directory, Instance.worktree]
+    const readable = opts?.authorizedReadable
+      ? [...opts.authorizedReadable]
+      : opts?.sessionID
+        ? await SessionFilesystem.processReadRoots(opts.sessionID)
+        : [Instance.directory, Instance.worktree]
 
     // Confine the kernel to the workspace when the execution sandbox is on: the R
     // kernel runs arbitrary agent-authored code — the same threat model as the

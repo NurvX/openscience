@@ -27,7 +27,8 @@ Call `generate_image` with:
 
 - `prompt` (required): detailed generation or editing instructions.
 - `output_path`: destination in the connected workspace; default `generated-image.png`.
-- `input_path`: existing image for an edit.
+- `input_path`: existing image for an edit. Omit it entirely for a new image;
+  never create or pass a blank canvas, directory, `.` or `/dev/null`.
 - `model`: OpenRouter image model; default `google/gemini-3-pro-image` (Nano Banana Pro).
 - `aspect_ratio`: optional `1:1`, `3:2`, `2:3`, `4:3`, `3:4`, `16:9`, or `9:16`.
 
