@@ -89,6 +89,9 @@ export const dict = {
   "ui.common.submit": "送信",
 
   "ui.permission.deny": "拒否",
+  "ui.permission.required": "承認が必要です",
+  "ui.permission.chooseScope": "承認範囲を選択",
+  "ui.permission.actions": "承認操作",
   "ui.permission.allowAlways": "常に許可",
   "ui.permission.allowOnce": "今回のみ許可",
   "ui.permission.allow": "許可対象…",

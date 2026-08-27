@@ -89,6 +89,9 @@ export const dict = {
   "ui.common.submit": "إرسال",
 
   "ui.permission.deny": "رفض",
+  "ui.permission.required": "الموافقة مطلوبة",
+  "ui.permission.chooseScope": "اختر نطاق الموافقة",
+  "ui.permission.actions": "إجراءات الموافقة",
   "ui.permission.allowAlways": "السماح دائمًا",
   "ui.permission.allowOnce": "السماح مرة واحدة",
   "ui.permission.allow": "السماح لـ…",

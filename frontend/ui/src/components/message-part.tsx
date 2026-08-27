@@ -157,6 +157,8 @@ function PermissionActions(props: { respond: (response: PermissionReply) => void
     }
     const network = props.metadata?.network
     if (network?.host) return i18n.t("ui.permission.allowHost", { host: network.host })
+    const query = props.metadata?.query
+    if (typeof query === "string" && query.trim()) return `“${query.trim()}”`
     return undefined
   }
   return (
@@ -166,12 +168,23 @@ function PermissionActions(props: { respond: (response: PermissionReply) => void
           (mutation()?.plan_digest && mutation()),
       )}
       fallback={
-        <div data-component="permission-prompt">
-          <span data-slot="permission-origin">OpenScience approval</span>
-          <Show when={summary()}>
-            <div data-slot="permission-summary">{summary()}</div>
-          </Show>
-          <div data-slot="permission-actions">
+        <div data-component="permission-prompt" data-expanded={scopes()} aria-label={i18n.t("ui.permission.required")}>
+          <div data-slot="permission-context">
+            <Icon name="shield" size="small" />
+            <div data-slot="permission-copy">
+              <span data-slot="permission-origin">
+                {scopes() ? i18n.t("ui.permission.chooseScope") : i18n.t("ui.permission.required")}
+              </span>
+              <Show when={summary()}>
+                {(value) => (
+                  <span data-slot="permission-summary" title={value()}>
+                    {value()}
+                  </span>
+                )}
+              </Show>
+            </div>
+          </div>
+          <div data-slot="permission-actions" role="group" aria-label={i18n.t("ui.permission.actions")}>
             <Show
               when={scopes()}
               fallback={
@@ -179,7 +192,12 @@ function PermissionActions(props: { respond: (response: PermissionReply) => void
                   <Button variant="ghost" size="small" onClick={() => props.respond("reject")}>
                     {i18n.t("ui.permission.deny")}
                   </Button>
-                  <Button variant="secondary" size="small" onClick={() => setScopes(true)}>
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    aria-expanded="false"
+                    onClick={() => setScopes(true)}
+                  >
                     {i18n.t("ui.permission.allow")}
                   </Button>
                   <Button variant="primary" size="small" onClick={() => props.respond("once")}>

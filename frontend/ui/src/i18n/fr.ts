@@ -90,6 +90,9 @@ export const dict = {
   "ui.common.submit": "Soumettre",
 
   "ui.permission.deny": "Refuser",
+  "ui.permission.required": "Approbation requise",
+  "ui.permission.chooseScope": "Choisir la portée de l’autorisation",
+  "ui.permission.actions": "Actions d’autorisation",
   "ui.permission.allowAlways": "Toujours autoriser",
   "ui.permission.allowOnce": "Autoriser une fois",
   "ui.permission.allow": "Autoriser pour…",

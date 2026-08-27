@@ -93,6 +93,9 @@ export const dict = {
   "ui.common.submit": "提交",
 
   "ui.permission.deny": "拒绝",
+  "ui.permission.required": "需要批准",
+  "ui.permission.chooseScope": "选择批准范围",
+  "ui.permission.actions": "批准操作",
   "ui.permission.allowAlways": "始终允许",
   "ui.permission.allowOnce": "允许一次",
   "ui.permission.allow": "允许范围…",

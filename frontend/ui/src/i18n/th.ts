@@ -90,6 +90,9 @@ export const dict = {
   "ui.common.submit": "ส่ง",
 
   "ui.permission.deny": "ปฏิเสธ",
+  "ui.permission.required": "ต้องได้รับการอนุมัติ",
+  "ui.permission.chooseScope": "เลือกขอบเขตการอนุมัติ",
+  "ui.permission.actions": "การดำเนินการอนุมัติ",
   "ui.permission.allowAlways": "อนุญาตเสมอ",
   "ui.permission.allowOnce": "อนุญาตครั้งเดียว",
   "ui.permission.allow": "อนุญาตสำหรับ…",
