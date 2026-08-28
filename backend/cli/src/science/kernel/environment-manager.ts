@@ -29,6 +29,7 @@ const Manifest = z.object({
   kind: z.enum(["starter", "task"]),
   spec: z.string(),
   packages: z.string().array(),
+  pip_packages: z.string().array().optional(),
   channels: z.string().array(),
   created_at: z.string(),
   verified_at: z.string(),
@@ -61,6 +62,22 @@ const TaskName = z
   .max(64)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
   .refine((value) => value !== "python" && value !== "r", "Use a distinct task environment name")
+const TaskSpec = z
+  .object({
+    channels: z.array(z.string().trim().min(1)).min(1).max(8).default(["conda-forge"]),
+    packages: z.array(z.string().trim().min(1)).min(1).max(64).default(["python=3.11", "pip"]),
+    pip_packages: z
+      .array(
+        z
+          .string()
+          .trim()
+          .regex(/^[A-Za-z0-9_.-]+==[^=<>!~\s]+$/, "Task pip packages must use exact version pins"),
+      )
+      .max(100)
+      .default([]),
+  })
+  .strict()
+export type ManagedTaskSpec = z.infer<typeof TaskSpec>
 
 const root = () => path.join(Global.Path.data, "conda")
 const environmentRoot = () => path.join(root(), "envs")
@@ -228,32 +245,54 @@ async function ensureStarter(language: ManagedEnvironmentLanguage) {
   })
 }
 
-async function ensureTaskEnvironment(name: string) {
+async function ensureTaskEnvironment(name: string, raw?: ManagedTaskSpec) {
   const target = environmentPath(name)
   const binary = path.join(target, process.platform === "win32" ? "python.exe" : "bin/python")
+  const spec = TaskSpec.parse({
+    channels: raw?.channels ?? ["conda-forge"],
+    packages: raw?.packages ?? ["python=3.11", "pip"],
+    pip_packages: raw?.pip_packages ?? [],
+  })
+  const digest = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ channels: spec.channels, packages: spec.packages, pip_packages: spec.pip_packages }))
+    .digest("hex")
+  const current = Manifest.safeParse(
+    await Bun.file(path.join(target, ".openscience-environment.json"))
+      .json()
+      .catch(() => undefined),
+  )
   if (
     (await executable(binary)) &&
     (await run([binary, "-I", "-c", 'print("ok")'], { timeout: 30_000 }).then(
       () => true,
       () => false,
-    ))
+    )) &&
+    current.success &&
+    current.data.kind === "task" &&
+    current.data.spec === digest
   )
     return
   await state({ status: "installing", phase: `provisioning_task:${name}`, error: undefined })
   await replaceEnvironment(target, async () => {
-    await run([
-      await installMicromamba(),
-      "--no-rc",
-      "create",
-      "-y",
-      "-p",
-      target,
-      "-c",
-      "conda-forge",
-      "python=3.11",
-      "pip",
-    ])
+    const channels = spec.channels.flatMap((channel) => ["-c", channel])
+    await run([await installMicromamba(), "--no-rc", "create", "-y", "-p", target, ...channels, ...spec.packages])
     if (!(await executable(binary))) throw new Error(`Task environment '${name}' did not contain Python`)
+    if (spec.pip_packages.length) {
+      await run(
+        [
+          binary,
+          "-m",
+          "pip",
+          "install",
+          "--disable-pip-version-check",
+          "--no-cache-dir",
+          "--no-deps",
+          ...spec.pip_packages,
+        ],
+        { timeout: 45 * 60 * 1000 },
+      )
+    }
     await run([binary, "-I", "-c", 'print("ok")'], { timeout: 30_000 })
     const now = new Date().toISOString()
     await writeJson(path.join(target, ".openscience-environment.json"), {
@@ -261,9 +300,10 @@ async function ensureTaskEnvironment(name: string) {
       name,
       language: "python",
       kind: "task",
-      spec: crypto.createHash("sha256").update("python=3.11\npip").digest("hex"),
-      packages: ["python=3.11", "pip"],
-      channels: ["conda-forge"],
+      spec: digest,
+      packages: [...spec.packages],
+      pip_packages: [...spec.pip_packages],
+      channels: [...spec.channels],
       created_at: now,
       verified_at: now,
     } satisfies z.infer<typeof Manifest>)
@@ -355,13 +395,35 @@ export namespace ManagedEnvironments {
   /** Create a machine-wide named Python environment only after the caller has
    * obtained package-install approval. Subsequent projects and sessions reuse
    * it; normal execution never creates environments as a side effect. */
-  export async function ensureTask(name: string) {
+  export async function ensureTask(name: string, spec?: ManagedTaskSpec) {
     const parsed = TaskName.parse(name)
     if (process.env.OPENSCIENCE_TEST_HOME && process.env.OPENSCIENCE_TEST_MANAGED_ENVIRONMENTS !== "1") return
     await ensureMicromamba()
     await using lease = await FileLease.acquire(path.join(root(), `task-${parsed}.lock`), 45 * 60 * 1000)
-    await ensureTaskEnvironment(parsed)
+    await ensureTaskEnvironment(parsed, spec)
     await state({ status: "ready", phase: "ready", error: undefined })
+  }
+
+  export async function inspect(name: string) {
+    const parsed = TaskName.parse(name)
+    const target = environmentPath(parsed)
+    const binary = path.join(target, process.platform === "win32" ? "python.exe" : "bin/python")
+    const manifest = Manifest.safeParse(
+      await Bun.file(path.join(target, ".openscience-environment.json"))
+        .json()
+        .catch(() => undefined),
+    )
+    return {
+      name: parsed,
+      path: target,
+      ready:
+        (await executable(binary)) &&
+        (await run([binary, "-I", "-c", 'print("ok")'], { timeout: 30_000 }).then(
+          () => true,
+          () => false,
+        )),
+      manifest: manifest.success ? manifest.data : null,
+    }
   }
 
   export async function runtime(

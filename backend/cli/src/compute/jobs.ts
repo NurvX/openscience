@@ -128,6 +128,19 @@ export namespace ComputeJobs {
   export const SecretRef = ComputeSecrets.Ref
   export type SecretRef = ComputeSecrets.Ref
 
+  /** Trusted internal identity for a packaged scientific capability. This is
+   * never part of the model-facing compute_job schema. */
+  export const CapabilityBinding = z
+    .object({
+      id: z.string().regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+      version: z.string().regex(/^\d+\.\d+\.\d+$/),
+      manifest_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      profile: z.enum(["task", "smoke"]),
+      runtime_digest: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .strict()
+  export type CapabilityBinding = z.infer<typeof CapabilityBinding>
+
   export const Artifact = z.object({
     path: z.string(),
     size: z.number().int().nonnegative(),
@@ -207,6 +220,7 @@ export namespace ComputeJobs {
   export const Request = Input.extend({
     sessionID: z.string().startsWith("ses_"),
     default_uploads: z.boolean().optional(),
+    capability: CapabilityBinding.optional(),
   })
   export type Request = z.infer<typeof Request>
 
@@ -217,6 +231,7 @@ export namespace ComputeJobs {
     id: z.string(),
     name: z.string(),
     purpose: z.string().optional(),
+    capability: CapabilityBinding.optional(),
     command: z.string(),
     cwd: z.string().optional(),
     target: Target,
@@ -3207,6 +3222,7 @@ export namespace ComputeJobs {
       id,
       name: parsed.name,
       purpose: parsed.purpose ?? parsed.name,
+      capability: parsed.capability,
       command: parsed.command,
       cwd,
       target: parsed.target,
