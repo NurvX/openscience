@@ -28,7 +28,8 @@ export const CORE_SCIENCE_PACKAGES = [
  * release-tested cp312 platforms: macOS arm64 and glibc Linux arm64/x64.
  * Unsupported hosts fail closed instead of compiling mutable sdists.
  */
-export const CORE_SCIENCE_REQUIREMENTS = `biopython==1.88 --hash=sha256:43ce1fbed01c0ddb903fa426fa0f836062d973a09df15560ac8e895da24c1350 --hash=sha256:9384c30460832926e765319040d732d1252a713a05af1dd4cc8b19cb1d590439 --hash=sha256:fe2dccf88e309dc896e7c2cc974a47be7a7b96d59c7f2ffd74ffcc7cfbdebb0c
+export const CORE_SCIENCE_REQUIREMENTS =
+  `biopython==1.88 --hash=sha256:43ce1fbed01c0ddb903fa426fa0f836062d973a09df15560ac8e895da24c1350 --hash=sha256:9384c30460832926e765319040d732d1252a713a05af1dd4cc8b19cb1d590439 --hash=sha256:fe2dccf88e309dc896e7c2cc974a47be7a7b96d59c7f2ffd74ffcc7cfbdebb0c
 contourpy==1.3.3 --hash=sha256:4d00e655fcef08aba35ec9610536bfe90267d7ab5ba944f7032549c55a146da1 --hash=sha256:556dba8fb6f5d8742f2923fe9457dbdd51e1049c4a43fd3986a0b14a1d815fc6 --hash=sha256:92d9abc807cf7d0e047b95ca5d957cf4792fcd04e920ca70d48add15c1a90ea7
 cycler==0.12.1 --hash=sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30
 fonttools==4.63.0 --hash=sha256:37dd23e621e3b0aef1baa70a303b80aaf38449632cfc8fd2a55fb285bbccfc02 --hash=sha256:58dc6bb86a78d782f00f9190ca02c119cf5bbe2807536e361e18d42019f877d8 --hash=sha256:ef3048ef05dbb552b89817713d9cac912e00d0fde4a3105c00d29e52e10c89af
@@ -46,7 +47,7 @@ scikit-learn==1.9.0 --hash=sha256:056c92bb67ad4c28463c2f2653d9701449201e7e7a9e94
 scipy==1.18.1 --hash=sha256:3c085faa2cfa879c5141df483f836f4d691045a078224a670fa570fa01612d89 --hash=sha256:e708533e8b2ae2497d65346538a7dcc92814410b25b81432eac66de0f2af8265 --hash=sha256:f55fa87b6c612ecd6b058f167c53231b1d14e412efe361d3d6e38b3631c73218
 six==1.17.0 --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
 threadpoolctl==3.6.0 --hash=sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb
-`
+`.trim()
 
 const lockInput = {
   channels: ["conda-forge"],

@@ -648,6 +648,7 @@ describe("ComputeJobs local lifecycle", () => {
     const root = path.join(tmp.path, "state")
     const runtime = path.join(tmp.path, "runtime")
     await fs.mkdir(runtime, { recursive: true })
+    await fs.writeFile(path.join(runtime, "lock-marker"), "verified")
     const capability = ComputeJobs.CapabilityBinding.parse({
       id: "scipy",
       version: "2.0.0",
@@ -667,7 +668,7 @@ describe("ComputeJobs local lifecycle", () => {
         start(
           {
             name: "capability provenance",
-            command: "true",
+            command: `test "$(cat '${path.join(runtime, "lock-marker")}')" = verified`,
             target: { kind: "local" },
             capability,
             capability_execution: capabilityExecution,
@@ -680,7 +681,7 @@ describe("ComputeJobs local lifecycle", () => {
     const job = await start(
       {
         name: "capability provenance",
-        command: "true",
+        command: `test "$(cat '${path.join(runtime, "lock-marker")}')" = verified`,
         target: { kind: "local" },
         capability,
         capability_execution: capabilityExecution,
@@ -689,8 +690,14 @@ describe("ComputeJobs local lifecycle", () => {
     )
     const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
     const restarted = await ComputeJobs.get(job.id, { root, workspace: tmp.path })
+    const log = await ComputeJobs.log(job.id, { root, workspace: tmp.path })
 
-    expect(finished.status).toBe("succeeded")
+    expect({ status: finished.status, error: finished.error, log }).toEqual({
+      status: "succeeded",
+      error: undefined,
+      log: "",
+    })
+    expect(finished.sandbox).toMatchObject({ requested: true, enforced: true, network: "deny" })
     expect(restarted?.capability).toEqual(capability)
     expect(restarted?.capability_execution).toEqual(capabilityExecution)
     expect(restarted?.provenance?.scientific_capability).toEqual({

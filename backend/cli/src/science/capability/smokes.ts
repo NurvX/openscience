@@ -86,10 +86,22 @@ export type CoreSmokeID = keyof typeof scripts
 
 export const CORE_SMOKES: Record<CoreSmokeID, CapabilitySmoke> = {
   scipy: contract("scipy", [RESULT], ["BFGS converges", "x is approximately 3", "objective is approximately 2"]),
-  matplotlib: contract("matplotlib", [RESULT, "capability-figure.png"], ["PNG signature", "300 by 200 pixels", "nonzero variance"]),
-  "scikit-learn": contract("scikit-learn", [RESULT], ["38 predictions", "all three Iris classes", "accuracy at least 0.89"]),
+  matplotlib: contract(
+    "matplotlib",
+    [RESULT, "capability-figure.png"],
+    ["PNG signature", "300 by 200 pixels", "nonzero variance"],
+  ),
+  "scikit-learn": contract(
+    "scikit-learn",
+    [RESULT],
+    ["38 predictions", "all three Iris classes", "accuracy at least 0.89"],
+  ),
   biopython: contract("biopython", [RESULT], ["one FASTA record", "exact reverse complement", "exact translation"]),
-  rdkit: contract("rdkit", [RESULT, "capability-molecule.sdf"], ["caffeine formula", "molecular weight range", "SDF round trip"]),
+  rdkit: contract(
+    "rdkit",
+    [RESULT, "capability-molecule.sdf"],
+    ["caffeine formula", "molecular weight range", "SDF round trip"],
+  ),
 }
 
 export const smokeProfiles: Record<CoreSmokeID, SmokeProfile> = {

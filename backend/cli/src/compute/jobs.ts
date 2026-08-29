@@ -1558,6 +1558,9 @@ export namespace ComputeJobs {
     await fs.mkdir(logsOf(scope.root), { recursive: true })
     await fs.writeFile(exitOf(scope.root, job.id), "", { mode: 0o600 })
     const wrapped = `(${job.command}\n); code=$?; printf %s "$code" > ${quote(exitOf(scope.root, job.id))}; exit "$code"`
+    const sandboxOptions = job.capability_execution
+      ? { ...authority.sandbox, enabled: true, network: "deny" as const }
+      : authority.sandbox
     const planned = Sandbox.wrapArgv({
       file: Shell.acceptable(),
       args: ["-lc", wrapped],
@@ -1568,7 +1571,7 @@ export namespace ComputeJobs {
       ],
       extraWritable: [exitOf(scope.root, job.id)],
       unreadable: OpenScience.kernelSensitivePaths(),
-      options: job.capability_execution ? { ...authority.sandbox, enabled: true, network: "deny" } : authority.sandbox,
+      options: sandboxOptions,
     })
     if (job.capability_execution && !planned.sandboxed) {
       Sandbox.cleanup(planned)
@@ -1578,10 +1581,10 @@ export namespace ComputeJobs {
       argv: [planned.file, ...planned.args],
       temporary: planned.temporary,
       sandbox: {
-        requested: authority.sandbox.enabled,
+        requested: sandboxOptions.enabled,
         enforced: planned.sandboxed,
         backend: planned.backend,
-        network: authority.sandbox.network,
+        network: sandboxOptions.network,
         warning: planned.warning,
       },
     }

@@ -195,10 +195,10 @@ await Instance.provide({
           })
           const session = await Session.create({})
           let requests = 0
-          globalThis.fetch = ((async () => {
+          globalThis.fetch = (async () => {
             requests++
             throw new Error("socket hang up")
-          }) as unknown) as typeof fetch
+          }) as unknown as typeof fetch
           await expect(
             BioNemoHosted.start("boltz2", session.id, {
               polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKK" }],

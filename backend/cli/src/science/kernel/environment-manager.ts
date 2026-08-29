@@ -196,9 +196,7 @@ async function run(command: string[], options: { cwd?: string; timeout?: number 
 async function installMicromamba() {
   const selectedPlatform = platform()
   const locked = MICROMAMBA[selectedPlatform]
-  if ((await executable(micromamba())) && (await sha256(micromamba()).catch(() => "")) === locked.binary) {
-    return micromamba()
-  }
+  if (await installedMicromambaIsLocked()) return micromamba()
   await state({ status: "installing", phase: "installing_micromamba", error: undefined })
   const archive = path.join(stagingRoot(), `micromamba-${crypto.randomUUID()}.tar.bz2`)
   const extracted = path.join(stagingRoot(), `micromamba-${crypto.randomUUID()}`)
