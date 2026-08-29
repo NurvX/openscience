@@ -893,6 +893,16 @@ async function fixtureOwnership() {
     z.null(),
     z
       .object({
+        kind: z.literal("symlink"),
+        digest: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        linkTarget: z.string().min(1),
+      })
+      .strict(),
+    z
+      .object({
         digest: z.string().regex(/^[a-f0-9]{64}$/),
         size: z.number().int().nonnegative(),
         canonical: z.literal("macho_unsigned"),
@@ -923,9 +933,11 @@ async function fixtureOwnership() {
     const owned =
       typeof value === "string"
         ? { kind: "file" as const, digest: value }
-        : value
-          ? { kind: "file" as const, ...value }
-          : { kind: "file" as const }
+        : value && "kind" in value
+          ? value
+          : value
+            ? { kind: "file" as const, ...value }
+            : { kind: "file" as const }
     if (!safe || !own(ownership, safe, owned)) return undefined
   }
   for (const relative of parsed.data.scripts) {
@@ -1050,10 +1062,11 @@ async function verifyOwnership(prefix: string, ownership: Ownership, options: { 
         // directory symlinks is package-specific and is not a link-byte hash.
         continue
       }
+      // A Conda softlink's paths.json digest can describe the target present
+      // in the source package's build environment. Authenticate the exact
+      // link text and the currently locked, in-prefix target independently.
       const record = entry.isSymbolicLink() ? ownership.files.get(resolvedRelative ?? "") : expected
       if (!record || record.kind !== "file") return reject("resolved target is not archive-owned", relative)
-      if (entry.isSymbolicLink() && expected.digest && expected.digest !== (record.archiveDigest ?? record.digest))
-        return reject("symlink and target archive identity differ", relative)
       const bytes = await openedBytes(resolved)
       if (!bytes) return reject("owned bytes changed while reading", relative)
       if (!record.digest) continue
