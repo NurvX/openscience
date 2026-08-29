@@ -579,3 +579,13 @@ test("native Windows file tests keep the repository test timeout", async () => {
     "bun test --timeout 15000 test/file/safe-io.test.ts test/file/rename.test.ts test/file/trash.test.ts",
   )
 })
+
+test("the full CI test job budgets for preflights and the exhaustive suite", async () => {
+  const workflow = await Bun.file(path.join(import.meta.dir, "../../../../.github/workflows/ci.yml")).text()
+  const job = workflow.slice(workflow.indexOf("\n  test:"), workflow.indexOf("\n  build:"))
+
+  expect(job).toContain("timeout-minutes: 30")
+  expect(job).toContain("Exercise real OpenSSH dispatch and recovery")
+  expect(job).toContain("Build embedded web assets for server tests")
+  expect(job).toContain("bun run --cwd backend/cli test")
+})
