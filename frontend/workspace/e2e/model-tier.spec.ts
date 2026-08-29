@@ -45,8 +45,8 @@ test("model speed toggles through Research tools and reaches the prompt request"
     )
 
   const standard = await send()
-  await expect(page).toHaveURL(/\/session\/[^/?#]+/, { timeout: 30_000 })
-  const sessionID = /\/session\/([^/?#]+)/.exec(page.url())?.[1]
+  await expect(page).toHaveURL(/\/session\/ses[^/?#]+/, { timeout: 30_000 })
+  const sessionID = /\/session\/(ses[^/?#]+)/.exec(page.url())?.[1]
   if (!sessionID) throw new Error(`Failed to parse session id from url: ${page.url()}`)
   try {
     await expect.poll(() => output(sessionID), { timeout: 20_000 }).toContain(standard)

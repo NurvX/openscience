@@ -102,12 +102,13 @@ function toolCallFor(body: ChatRequest): { call: ToolCall; sentinel: string } | 
         function: {
           name: "question",
           arguments: JSON.stringify({
+            reason: "consequential",
             questions: [
               {
                 header: "E2E choice",
                 question: "How should the deterministic E2E request continue?",
                 options: [
-                  { label: "Continue", description: "Reply to the real pending question" },
+                  { label: "Continue (Recommended)", description: "Reply to the real pending question" },
                   { label: "Stop", description: "Choose the alternate response" },
                 ],
                 multiple: false,
@@ -180,6 +181,14 @@ export function fakeModelConfig(baseURL: string) {
     model: MODEL_ID,
     small_model: MODEL_ID,
     enabled_providers: ["e2e", "openai"],
+    // The checked-in project config enables Context7 for real development.
+    // Packaged E2E must stay deterministic and must not start external MCPs,
+    // which can delay server teardown and retain shared settings locks.
+    mcp: {
+      context7: {
+        enabled: false,
+      },
+    },
     command: {
       "e2e-tier-override": {
         description: "Exercise command model and service mode isolation",

@@ -13,7 +13,7 @@ test("skills can be searched and disabled", async ({ page, gotoSession }) => {
   await gotoSession()
   const dialog = await openSkills(page)
 
-  await expect(dialog.getByText(/\d+ enabled/).first()).toBeVisible()
+  await expect(dialog.getByText(/\d+ allowed/).first()).toBeVisible()
 
   const search = dialog.getByPlaceholder("Search skills")
   // Exercise search against the catalog the runtime actually returned. Skill
