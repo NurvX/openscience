@@ -301,7 +301,7 @@ export default function Download() {
                 <>
                   <Copy command={MAC} primary />
                   <div className="mt-3 text-[12.5px] leading-5 text-foreground/55">
-                    Verified installer · detects your Mac · no Security Settings
+                    Checksum-verified before install. The app is ad-hoc signed and not Apple-notarized.
                   </div>
                   <div className="mt-7 border border-border/60 bg-background/60 p-4 text-left sm:p-5">
                     <div className="text-[13px] text-foreground">Finish in Terminal</div>
@@ -326,8 +326,9 @@ export default function Download() {
                     </summary>
                     <div className="border border-border/50 bg-background/40 p-4 text-[12.5px] leading-5 text-foreground/55">
                       <p>
-                        The disk image is ad-hoc signed and cannot be notarized without an Apple Developer ID. macOS
-                        will require approval in Privacy &amp; Security. Use the installer above to avoid that screen.
+                        The app is ad-hoc signed and not Apple-notarized because this release does not use an Apple
+                        Developer ID. macOS will require approval in Privacy &amp; Security. Use the installer above to
+                        avoid that screen.
                       </p>
                       <a
                         href={`${RELEASE}/${download.file}`}
@@ -352,7 +353,9 @@ export default function Download() {
                     Download for {download.label} ({download.detail})
                   </a>
                   <div className="mt-3 text-[12.5px] leading-5 text-foreground/55">
-                    {download.kind} · latest release · free and open source
+                    {download.platform === "windows"
+                      ? "Unsigned Windows installer. Microsoft SmartScreen may show a warning."
+                      : `${download.kind} · latest release · free and open source`}
                   </div>
                 </>
               )}
@@ -425,7 +428,7 @@ export default function Download() {
                   "01",
                   "Install",
                   download.platform === "mac"
-                    ? "Copy the verified installer, paste it in Terminal, and OpenScience launches automatically."
+                    ? "Copy the installer command, paste it in Terminal, and OpenScience verifies the download before launching."
                     : "Open the download and follow your operating system's install prompt.",
                 ],
                 ["02", "Connect", "Sign in or choose your own model provider during onboarding."],
