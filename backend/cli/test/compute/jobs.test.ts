@@ -1439,6 +1439,7 @@ describe("ComputeJobs Modal governance", () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
     const gate = Promise.withResolvers<void>()
+    const releases = { count: 0 }
     const provider = modalProvider({
       run: async (_context, spec, hooks) => {
         await hooks.created(`sandbox-${spec.id}`)
@@ -1446,6 +1447,9 @@ describe("ComputeJobs Modal governance", () => {
         return { code: 0, outputs: [] }
       },
       close: async () => gate.resolve(),
+      release: async () => {
+        releases.count++
+      },
     })
     const request = {
       name: "held modal job",
@@ -1501,6 +1505,12 @@ describe("ComputeJobs Modal governance", () => {
     expect((refused[0] as PromiseRejectedResult).reason.message).toContain("Modal concurrency limit reached")
     const first = (started[0] as PromiseFulfilledResult<ComputeJobs.Job>).value
     expect(first.modal?.volume).toStartWith("test-")
+    const startedRelease = Date.now()
+    await expect(ComputeJobs.release(first.id, { root, workspace: tmp.path, credentials, provider })).rejects.toThrow(
+      `Cancel compute job ${first.id} before releasing its resources`,
+    )
+    expect(Date.now() - startedRelease).toBeLessThan(1_000)
+    expect(releases.count).toBe(0)
 
     await ComputeJobs.cancel(first.id, { root, workspace: tmp.path, credentials, provider })
   })
@@ -1696,6 +1706,72 @@ describe("ComputeJobs Modal governance", () => {
     expect(released.cleanup_error).toBeUndefined()
     expect(released.error).toBeUndefined()
   })
+
+  test("release waits for the exact Modal job lease before checking active recovery", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const blocked = Promise.withResolvers<void>()
+    const deactivating = Promise.withResolvers<void>()
+    const calls = { release: 0 }
+    await using _testing = ComputeJobs.testing({
+      beforeModalDeactivate: async () => {
+        deactivating.resolve()
+        await blocked.promise
+      },
+    })
+    const provider = modalProvider({
+      run: async () => {
+        throw new Error("synthetic Modal launch failure")
+      },
+      release: async () => {
+        calls.release++
+      },
+    })
+    const request = {
+      name: "failed Modal handoff",
+      command: "true",
+      target: { kind: "modal" as const },
+      gpu: "none",
+    }
+    const prepared = await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const session = await Session.create({})
+        const plan = await ComputeJobs.plan({ ...request, sessionID: session.id }, { root, workspace: tmp.path, modal })
+        return { session, plan }
+      },
+    })
+    const job = await Instance.provide({
+      directory: tmp.path,
+      fn: () =>
+        ComputeJobs.start(
+          { ...request, sessionID: prepared.session.id, approval: prepared.plan.digest },
+          { root, workspace: tmp.path, modal, credentials, provider },
+        ),
+    })
+    await deactivating.promise
+    expect((await ComputeJobs.get(job.id, { root, workspace: tmp.path }))?.status).toBe("failed")
+    const releasing = ComputeJobs.release(job.id, { root, workspace: tmp.path, credentials, provider }).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    )
+
+    try {
+      const pending = await Promise.race([releasing.then(() => false), Bun.sleep(25).then(() => true)])
+      expect(pending).toBe(true)
+      expect(calls.release).toBe(0)
+    } finally {
+      blocked.resolve()
+    }
+
+    const result = await releasing
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw result.error
+    expect(result.value.status).toBe("failed")
+    expect(result.value.lifecycle?.resource).toBe("closed")
+    expect(calls.release).toBe(1)
+  }, 15_000)
 
   test("retries delivery from the durable Modal resource without rerunning the command", async () => {
     await using tmp = await tmpdir()
