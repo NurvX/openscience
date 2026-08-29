@@ -68,6 +68,7 @@ type Metadata = {
     id?: string
     maturity?: "verified" | "experimental" | "blocked"
     dispatched: boolean
+    stale_binding?: boolean
     verification?: unknown
   }
   compute_job?: unknown
@@ -112,7 +113,7 @@ function computeMetadata(result: { metadata: Record<string, unknown> }) {
   }
 }
 
-async function governedJob(input: { jobID: string; expectedID?: string; ctx: Tool.Context }) {
+async function governedJob(input: { jobID: string; expectedID?: string; ctx: Tool.Context; requireCurrent?: boolean }) {
   const tool = await compute()
   const status = await tool.execute({ action: "status", job_id: input.jobID }, input.ctx)
   const metadata = status.metadata as Record<string, unknown>
@@ -121,18 +122,35 @@ async function governedJob(input: { jobID: string; expectedID?: string; ctx: Too
   if (!job.capability) throw new Error(`Compute job ${job.id} was not created by scientific_capability`)
   if (input.expectedID && job.capability.id !== input.expectedID)
     throw new Error(`Compute job ${job.id} belongs to ${job.capability.id}, not ${input.expectedID}`)
-  const item = await manifest(job.capability.id)
-  if (!item.runtime) throw new Error(`${item.name} no longer exposes a governed runtime`)
-  const expected = CapabilityRegistry.binding({ manifest: item, profile: job.capability.profile })
-  if (!sameBinding(job.capability, expected))
-    throw new Error(
-      `Compute job ${job.id} is bound to a stale ${item.name} manifest and cannot be operated as current evidence`,
-    )
-  return { item, job, expected, status }
+  const item = CapabilityRegistry.describe(job.capability.id)
+  const expected = item?.runtime
+    ? CapabilityRegistry.binding({ manifest: item, profile: job.capability.profile })
+    : undefined
+  const stale = !item?.runtime || !expected || !sameBinding(job.capability, expected)
+  if (input.requireCurrent) {
+    if (!item)
+      throw new Error(`Unknown scientific capability: ${job.capability.id}. Call scientific_capability list first.`)
+    if (!item.runtime) throw new Error(`${item.name} no longer exposes a governed runtime`)
+    if (stale) {
+      throw new Error(
+        `Compute job ${job.id} is bound to a stale ${item.name} manifest and cannot be operated as current evidence`,
+      )
+    }
+  }
+  return {
+    item,
+    job,
+    expected: expected ?? job.capability,
+    status,
+    stale_binding: stale,
+    id: job.capability.id,
+    name: item?.name ?? job.capability.id,
+    maturity: item?.maturity,
+  }
 }
 
 async function lifecycle(args: z.infer<typeof ScientificCapabilityParameters>, ctx: Tool.Context) {
-  const checked = await governedJob({ jobID: args.job_id!, expectedID: args.id, ctx })
+  const checked = await governedJob({ jobID: args.job_id!, expectedID: args.id, ctx, requireCurrent: false })
   if (args.action === "status") return { result: checked.status, checked }
   const tool = await compute()
   const result = await tool.execute(
@@ -158,7 +176,7 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
     description: [
       "One governed gateway for the versioned scientific capability catalog.",
       "Use list/describe/doctor before setup or spend. plan never dispatches. setup may create the exact pinned local pack; start dispatches a packaged workload or sends a strict BYOK NVIDIA NIM request. smoke dispatches a bounded canonical local/Modal check, and verify validates its captured artifacts before recording evidence.",
-      "status/wait/logs/artifacts/cancel/retry_delivery/release accept only jobs created by the current scientific capability manifest. Callers cannot override pinned packages, images, GPU, or secrets.",
+      "status/wait/logs/artifacts/cancel/retry_delivery/release accept only jobs created by scientific_capability and may report stale_binding when the catalog changed. Callers cannot override pinned packages, images, GPU, or secrets.",
     ].join(" "),
     parameters: ScientificCapabilityParameters,
     async execute(args, ctx) {
@@ -181,15 +199,16 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
       if (LIFECYCLE.has(args.action)) {
         const { result, checked } = await lifecycle(args, ctx)
         return {
-          title: `Capability ${args.action}: ${checked.item.name}`,
+          title: `Capability ${args.action}: ${checked.name}`,
           output: result.output,
           attachments: result.attachments,
           metadata: {
             scientific_capability: {
               action: args.action,
-              id: checked.item.id,
-              maturity: checked.item.maturity,
+              id: checked.id,
+              maturity: checked.maturity,
               dispatched: args.action === "cancel" || args.action === "retry_delivery" || args.action === "release",
+              stale_binding: checked.stale_binding,
             },
             ...computeMetadata(result),
           },
@@ -282,9 +301,10 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
           }
         }
         const result = await CapabilityRegistry.compileTask(item.id, workload(args))
+        const { execution: _execution, ...publicResult } = result
         return {
           title: `Capability plan: ${item.name}`,
-          output: json({ ...result, next: "Review this exact plan, then call start with the same workload." }),
+          output: json({ ...publicResult, next: "Review this exact plan, then call start with the same workload." }),
           metadata: { scientific_capability: base },
         }
       }
@@ -299,11 +319,38 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
           await ctx.ask({
             permission: "network",
             patterns: [host],
-            always: [host],
+            always: [],
             metadata: {
               url: preview.endpoint,
               network: { host },
-              scientific_capability: { id: item.id, request_sha256: preview.request_sha256 },
+              scientific_capability: {
+                id: item.id,
+                capability: item.name,
+                provider: preview.provider,
+                endpoint: preview.endpoint,
+                model_version: preview.model_version,
+              },
+            },
+          })
+          await ctx.ask({
+            permission: "remote_compute",
+            patterns: [preview.approval_sha256],
+            always: [],
+            metadata: {
+              scientific_capability: {
+                id: item.id,
+                capability: item.name,
+                provider: preview.provider,
+                endpoint: preview.endpoint,
+                request_sha256: preview.request_sha256,
+                approval_sha256: preview.approval_sha256,
+                model_version: preview.model_version,
+                payload_bytes: preview.payload_bytes,
+                terms_url: preview.terms_url,
+                method: preview.method,
+                warning: preview.warning,
+                dispatched: false,
+              },
             },
           })
           const result = await BioNemoHosted.start(item.hosted.adapter_id, ctx.sessionID, args.payload)
@@ -319,7 +366,14 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
         const tool = await compute()
         const result = await tool.execute(
           { action: "start", ...input },
-          { ...ctx, extra: { ...ctx.extra, scientificCapability: proposal.binding } },
+          {
+            ...ctx,
+            extra: {
+              ...ctx.extra,
+              scientificCapability: proposal.binding,
+              scientificCapabilityExecution: proposal.execution,
+            },
+          },
         )
         return {
           title: `Capability run: ${item.name}`,
@@ -346,7 +400,14 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
         const tool = await compute()
         const result = await tool.execute(
           { action: "start", ...input },
-          { ...ctx, extra: { ...ctx.extra, scientificCapability: proposal.binding } },
+          {
+            ...ctx,
+            extra: {
+              ...ctx.extra,
+              scientificCapability: proposal.binding,
+              scientificCapabilityExecution: proposal.execution,
+            },
+          },
         )
         return {
           title: `Capability smoke: ${item.name}`,
@@ -356,7 +417,7 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
         }
       }
 
-      const checked = await governedJob({ jobID: args.job_id!, expectedID: item.id, ctx })
+      const checked = await governedJob({ jobID: args.job_id!, expectedID: item.id, ctx, requireCurrent: true })
       if (checked.expected.profile !== "smoke")
         throw new Error(`Compute job ${checked.job.id} is a task, not a bounded smoke`)
       const validation = await validateCapabilitySmoke({

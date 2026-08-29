@@ -12,12 +12,16 @@ export const CapabilityEvidenceRecord = z
       id: z.string(),
       version: z.string(),
       manifest_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      profile: z.literal("smoke"),
       runtime_digest: z.string().regex(/^[a-f0-9]{64}$/),
     }),
     target: z.enum(["local", "modal"]),
     job_id: z.string(),
     app_version: z.string(),
-    release_sha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+    release_sha: z
+      .string()
+      .regex(/^[a-f0-9]{40}$/)
+      .optional(),
     verified_at: z.string(),
     metrics: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
     artifacts: z.array(
@@ -69,6 +73,7 @@ export namespace CapabilityEvidence {
         id: input.binding.id,
         version: input.binding.version,
         manifest_sha256: input.binding.manifest_sha256,
+        profile: "smoke",
         runtime_digest: input.binding.runtime_digest,
       },
       target: input.target,

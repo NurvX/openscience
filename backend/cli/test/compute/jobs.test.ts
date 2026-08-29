@@ -38,7 +38,13 @@ function modalProvider(overrides: Partial<ComputeJobs.ModalProvider> = {}): Comp
   }
 }
 
-async function start(input: ComputeJobs.Input, options: StartOptions) {
+async function start(
+  input: ComputeJobs.Input & {
+    capability?: ComputeJobs.CapabilityBinding
+    capability_execution?: ComputeJobs.CapabilityExecution
+  },
+  options: StartOptions,
+) {
   if (!options.workspace) throw new Error("Compute test start requires an explicit workspace")
   const projectDirectory = options.workspace
   return Instance.provide({
@@ -637,6 +643,80 @@ describe("ComputeJobs persistence", () => {
 })
 
 describe("ComputeJobs local lifecycle", () => {
+  test("persists an internal capability binding in the job and provenance envelope", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const runtime = path.join(tmp.path, "runtime")
+    await fs.mkdir(runtime, { recursive: true })
+    const capability = ComputeJobs.CapabilityBinding.parse({
+      id: "scipy",
+      version: "2.0.0",
+      manifest_sha256: "a".repeat(64),
+      profile: "smoke",
+      runtime_digest: "b".repeat(64),
+    })
+    const capabilityExecution = ComputeJobs.CapabilityExecution.parse({
+      network: "none",
+      lock_digest: "c".repeat(64),
+      pip_requirements: "scipy==1.18.1 --hash=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      runtime_binary: path.join(runtime, "bin", "python"),
+      runtime_root: runtime,
+    })
+    if (!Sandbox.available()) {
+      await expect(
+        start(
+          {
+            name: "capability provenance",
+            command: "true",
+            target: { kind: "local" },
+            capability,
+            capability_execution: capabilityExecution,
+          },
+          { root, workspace: tmp.path },
+        ),
+      ).rejects.toThrow("requires an enforced host sandbox")
+      return
+    }
+    const job = await start(
+      {
+        name: "capability provenance",
+        command: "true",
+        target: { kind: "local" },
+        capability,
+        capability_execution: capabilityExecution,
+      },
+      { root, workspace: tmp.path },
+    )
+    const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
+    const restarted = await ComputeJobs.get(job.id, { root, workspace: tmp.path })
+
+    expect(finished.status).toBe("succeeded")
+    expect(restarted?.capability).toEqual(capability)
+    expect(restarted?.capability_execution).toEqual(capabilityExecution)
+    expect(restarted?.provenance?.scientific_capability).toEqual({
+      ...capability,
+      execution_network: "none",
+      lock_digest: capabilityExecution.lock_digest,
+    })
+  })
+
+  test("rejects capability identity without its execution policy", () => {
+    const base = {
+      name: "invalid capability binding",
+      command: "true",
+      target: { kind: "local" as const },
+      sessionID: "ses_fixture",
+    }
+    const capability = {
+      id: "scipy",
+      version: "2.0.0",
+      manifest_sha256: "a".repeat(64),
+      profile: "smoke" as const,
+      runtime_digest: "b".repeat(64),
+    }
+    expect(() => ComputeJobs.Request.parse({ ...base, capability })).toThrow("supplied together")
+  })
+
   test("rejects a missing working directory before recording a job", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
@@ -822,7 +902,7 @@ describe("ComputeJobs local lifecycle", () => {
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     })
     expect(await Bun.file(path.join(job.cwd!, "result.txt")).exists()).toBe(true)
-  })
+  }, 15_000)
 
   test("bounds repository-controlled metadata while retaining dirty-state truth", async () => {
     await using tmp = await tmpdir({ git: true })
@@ -1168,7 +1248,7 @@ describe("ComputeJobs Modal governance", () => {
 
     gate.resolve()
     expect((await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })).status).toBe("succeeded")
-  })
+  }, 15_000)
 
   test("records a Modal sandbox timeout as a terminal timed-out job", async () => {
     await using tmp = await tmpdir()

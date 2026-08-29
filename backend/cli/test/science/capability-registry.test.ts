@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { CORE_SCIENCE_RUNTIME } from "../../src/science/capability/pack"
+import crypto from "node:crypto"
+import { CORE_SCIENCE_REQUIREMENTS, CORE_SCIENCE_RUNTIME } from "../../src/science/capability/pack"
 import { CapabilityRegistry } from "../../src/science/capability/registry"
 import { CapabilityWorkload } from "../../src/science/capability/schema"
 
@@ -38,6 +39,27 @@ describe("scientific capability registry", () => {
     expect(CORE_SCIENCE_RUNTIME.packages.every((item) => /^[A-Za-z0-9_.-]+==[^=<>!~\s]+$/.test(item))).toBe(true)
     expect(CORE_SCIENCE_RUNTIME.image).toMatch(/@sha256:[a-f0-9]{64}$/)
     expect(CORE_SCIENCE_RUNTIME.lock_digest).toMatch(/^[a-f0-9]{64}$/)
+    expect(CORE_SCIENCE_RUNTIME.local_platforms).toEqual(["darwin-arm64", "linux-arm64", "linux-x64"])
+    expect(CORE_SCIENCE_RUNTIME.network).toEqual({ build: "package_index_only", execution: "none" })
+    expect(CORE_SCIENCE_REQUIREMENTS.trim().split("\n")).toHaveLength(18)
+    expect(
+      CORE_SCIENCE_REQUIREMENTS.trim()
+        .split("\n")
+        .every((line) => line.includes("--hash=sha256:")),
+    ).toBe(true)
+    expect(CORE_SCIENCE_RUNTIME.lock_digest).toBe(
+      crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify({
+            channels: ["conda-forge"],
+            packages: ["python=3.12.11", "pip=25.1.1"],
+            pip_packages: CORE_SCIENCE_RUNTIME.packages,
+            pip_requirements: CORE_SCIENCE_REQUIREMENTS,
+          }),
+        )
+        .digest("hex"),
+    )
     for (const id of ["scipy", "matplotlib", "scikit-learn", "biopython", "rdkit"]) {
       expect(CapabilityRegistry.describe(id)?.runtime).toEqual(CORE_SCIENCE_RUNTIME)
     }
@@ -53,6 +75,13 @@ describe("scientific capability registry", () => {
     })
     expect(result.tool).toBe("compute_job")
     expect(result.binding).toMatchObject({ id: "scipy", version: "2.0.0", profile: "task" })
+    expect(result.execution).toMatchObject({
+      network: "none",
+      lock_digest: CORE_SCIENCE_RUNTIME.lock_digest,
+      pip_requirements: CORE_SCIENCE_REQUIREMENTS.trimEnd(),
+      runtime_binary: undefined,
+      runtime_root: undefined,
+    })
     expect(result.input).toMatchObject({
       action: "plan",
       target: { kind: "modal" },
@@ -76,6 +105,7 @@ describe("scientific capability registry", () => {
   test("compiles canonical zero-input smokes and enforces resource ceilings", async () => {
     const smoke = await CapabilityRegistry.compileSmoke("rdkit", "modal", "scientific-capabilities/rdkit/test")
     expect(smoke.binding.profile).toBe("smoke")
+    expect(smoke.execution.network).toBe("none")
     expect(smoke.input.uploads).toEqual([])
     expect(smoke.input.artifacts).toContain("capability-result.json")
     expect(smoke.input.command).toContain("base64")

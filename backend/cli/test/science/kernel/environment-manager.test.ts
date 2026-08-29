@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import crypto from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -18,7 +19,7 @@ async function profile() {
   const pythonLog = path.join(root, "python-probes.log")
   const rLog = path.join(root, "r-probes.log")
   const prefixLog = path.join(root, "prefixes.log")
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENSCIENCE_TEST_HOME: root,
     OPENSCIENCE_TEST_MANAGED_ENVIRONMENTS: "1",
@@ -30,8 +31,9 @@ async function profile() {
     OPENSCIENCE_R_PROBE_LOG: rLog,
     OPENSCIENCE_PREFIX_LOG: prefixLog,
   }
+  const micromamba = path.join(conda, "bin", process.platform === "win32" ? "micromamba.exe" : "micromamba")
   await executable(
-    path.join(conda, "bin", process.platform === "win32" ? "micromamba.exe" : "micromamba"),
+    micromamba,
     `#!/usr/bin/env bun
 import fs from "node:fs"
 import path from "node:path"
@@ -46,6 +48,10 @@ fs.writeFileSync(binary, "#!/bin/sh\\necho probe >> \\\"" + log + "\\\"\\necho o
 fs.chmodSync(binary, 0o755)
 `,
   )
+  env.OPENSCIENCE_TEST_MICROMAMBA_SHA256 = crypto
+    .createHash("sha256")
+    .update(Buffer.from(await Bun.file(micromamba).arrayBuffer()))
+    .digest("hex")
   await executable(
     path.join(conda, "envs", "python", "bin", "python"),
     `#!/bin/sh\necho probe >> "${pythonLog}"\necho '{"ok":true}'\n`,

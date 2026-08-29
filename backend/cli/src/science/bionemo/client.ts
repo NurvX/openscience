@@ -4,9 +4,11 @@ import path from "node:path"
 import { OpenScience } from "@/openscience"
 import { resolveCredentialFields } from "@/server/routes/settings/credentials"
 import { SessionFilesystem } from "@/session/filesystem"
+import { BioNemoHostedDispatch, BioNemoHostedPreview, BioNemoHostedResult } from "./dispatch"
 import { BioNemoCapabilityID, parseBioNemoInput, type BioNemoCapabilityID as ID } from "./schema"
 
 const TERMS = "https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA_API_Trial_Service_Terms.pdf"
+const REDIRECT = new Set([301, 302, 303, 307, 308])
 const specs = {
   boltz2: {
     endpoint: "https://health.api.nvidia.com/v1/biology/mit/boltz2/predict",
@@ -78,6 +80,48 @@ function artifacts(value: unknown) {
   return output
 }
 
+function prepare(id: ID, raw: unknown) {
+  const selected = specs[BioNemoCapabilityID.parse(id)]
+  const payload = parseBioNemoInput(id, raw)
+  const bodyText = JSON.stringify(payload)
+  const request_sha256 = crypto.createHash("sha256").update(bodyText).digest("hex")
+  const payload_bytes = Buffer.byteLength(bodyText)
+  const approval_sha256 = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        provider: "nvidia",
+        endpoint: selected.endpoint,
+        model_version: selected.version,
+        request_sha256,
+        terms_url: TERMS,
+        payload_bytes,
+      }),
+    )
+    .digest("hex")
+  return {
+    selected,
+    payload,
+    bodyText,
+    preview: BioNemoHostedPreview.parse({
+      capability: id,
+      provider: "nvidia",
+      configured: false,
+      method: "POST",
+      endpoint: selected.endpoint,
+      model_version: selected.version,
+      request_sha256,
+      approval_sha256,
+      payload_bytes,
+      payload,
+      terms_url: TERMS,
+      warning:
+        "NVIDIA trial-service terms apply. Do not submit regulated or restricted data unless your NVIDIA agreement permits it.",
+      dispatched: false,
+    }),
+  }
+}
+
 export namespace BioNemoHosted {
   export function spec(id: ID) {
     return specs[BioNemoCapabilityID.parse(id)]
@@ -93,88 +137,145 @@ export namespace BioNemoHosted {
       model_version: selected.version,
       docs_url: selected.docs,
       terms_url: TERMS,
-      state: fields?.api_key?.trim() ? "ready" : "setup_needed",
+      // Credential presence is not an entitlement or endpoint health check.
+      // Reserve `ready` for evidence from an actual bounded live request.
+      state: fields?.api_key?.trim() ? "configured" : "setup_needed",
       live_request_sent: false,
     }
   }
   export async function plan(id: ID, raw: unknown) {
-    const selected = spec(id),
-      payload = parseBioNemoInput(id, raw),
-      state = await doctor(id)
-    return {
-      capability: id,
-      provider: "nvidia",
-      configured: state.configured,
-      method: "POST",
-      endpoint: selected.endpoint,
-      model_version: selected.version,
-      request_sha256: crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex"),
-      payload,
-      terms_url: TERMS,
-      warning:
-        "NVIDIA trial-service terms apply. Do not submit regulated or restricted data unless your NVIDIA agreement permits it.",
-      dispatched: false,
-    }
+    const built = prepare(id, raw)
+    const state = await doctor(id)
+    return { ...built.preview, configured: state.configured }
   }
   export async function start(id: ID, sessionID: string, raw: unknown) {
-    const selected = spec(id),
-      payload = parseBioNemoInput(id, raw),
-      fields = await resolveCredentialFields("nvidia"),
-      key = fields?.api_key?.trim()
+    const built = prepare(id, raw)
+    const { selected, bodyText, preview } = built
+    const existing = await BioNemoHostedDispatch.begin({ preview, sessionID })
+    if (existing.existing?.status === "succeeded" && existing.existing.result) return existing.existing.result
+    if (existing.existing?.status === "pending" || existing.existing?.status === "unknown") {
+      throw new Error(
+        `OpenScience previously recorded this exact hosted ${id} request and cannot prove whether NVIDIA received it before the earlier process stopped. It will not resend automatically. Dispatch ${existing.existing.dispatch_id} is still ${existing.existing.status}.`,
+      )
+    }
+    const fields = await resolveCredentialFields("nvidia")
+    const key = fields?.api_key?.trim()
     if (!key) throw new Error(`NVIDIA NIM credential is not configured for ${id}`)
-    const started = new Date().toISOString(),
+    const started = new Date().toISOString()
+    let response: Response | undefined
+    let provider_request_id: string | undefined
+    try {
       response = await fetch(selected.endpoint, {
         method: "POST",
         headers: { accept: "application/json", authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify(payload),
+        body: bodyText,
+        redirect: "error",
         signal: AbortSignal.timeout(10 * 60 * 1000),
       })
-    const text = await body(response)
-    if (!response.ok)
-      throw new Error(
-        OpenScience.redactSecrets(`NVIDIA ${id} returned HTTP ${response.status}: ${text.slice(0, 2_000)}`),
-      )
-    let result: unknown
-    try {
-      result = JSON.parse(text)
-    } catch {
-      throw new Error(`NVIDIA ${id} returned a non-JSON success response`)
-    }
-    const relative = path.join("scientific-capabilities", `${id}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`),
-      root = path.join(await SessionFilesystem.workspace(sessionID), relative)
-    await fs.mkdir(root, { recursive: true, mode: 0o700 })
-    const files = [path.join(root, "response.json")]
-    await Bun.write(files[0], JSON.stringify(result, null, 2), { mode: 0o600 })
-    for (const [index, item] of artifacts(result).entries()) {
-      const target = path.join(root, `artifact-${index + 1}.${item.extension}`)
-      await Bun.write(target, item.content, { mode: 0o600 })
-      files.push(target)
-    }
-    return {
-      capability: id,
-      provider: "nvidia",
-      endpoint: selected.endpoint,
-      model_version: selected.version,
-      request_sha256: crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex"),
-      started_at: started,
-      completed_at: new Date().toISOString(),
-      root: relative.split(path.sep).join("/"),
-      artifacts: await Promise.all(
-        files.map(async (file) => ({
-          path: path.relative(root, file).split(path.sep).join("/"),
-          size: (await fs.stat(file)).size,
-          sha256: new Bun.CryptoHasher("sha256").update(await Bun.file(file).arrayBuffer()).digest("hex"),
-          mime: file.endsWith(".json")
-            ? "application/json"
-            : file.endsWith(".pdb")
-              ? "chemical/x-pdb"
-              : file.endsWith(".cif")
-                ? "chemical/x-mmcif"
-                : file.endsWith(".sdf")
-                  ? "chemical/x-mdl-sdfile"
-                  : "text/plain",
-        })),
-      ),
+      provider_request_id = BioNemoHostedDispatch.providerRequestID(response.headers)
+      if (response.redirected || REDIRECT.has(response.status)) {
+        await BioNemoHostedDispatch.fail({
+          preview,
+          sessionID,
+          status: "failed",
+          error: `Refused redirect from NVIDIA ${id} endpoint`,
+          http_status: response.status,
+          provider_request_id,
+        })
+        throw new Error(`NVIDIA ${id} returned a redirect, which OpenScience refuses for hosted scientific dispatches`)
+      }
+      const text = await body(response)
+      if (!response.ok) {
+        await BioNemoHostedDispatch.fail({
+          preview,
+          sessionID,
+          status: response.status >= 500 ? "unknown" : "failed",
+          error: OpenScience.redactSecrets(`NVIDIA ${id} returned HTTP ${response.status}: ${text.slice(0, 2_000)}`),
+          http_status: response.status,
+          provider_request_id,
+        })
+        throw new Error(
+          OpenScience.redactSecrets(`NVIDIA ${id} returned HTTP ${response.status}: ${text.slice(0, 2_000)}`),
+        )
+      }
+      let result: unknown
+      try {
+        result = JSON.parse(text)
+      } catch {
+        await BioNemoHostedDispatch.fail({
+          preview,
+          sessionID,
+          status: "failed",
+          error: `NVIDIA ${id} returned a non-JSON success response`,
+          http_status: response.status,
+          provider_request_id,
+        })
+        throw new Error(`NVIDIA ${id} returned a non-JSON success response`)
+      }
+      const relative = path.join("scientific-capabilities", `${id}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`)
+      const root = path.join(await SessionFilesystem.workspace(sessionID), relative)
+      await fs.mkdir(root, { recursive: true, mode: 0o700 })
+      const files = [path.join(root, "response.json")]
+      await Bun.write(files[0], JSON.stringify(result, null, 2), { mode: 0o600 })
+      for (const [index, item] of artifacts(result).entries()) {
+        const target = path.join(root, `artifact-${index + 1}.${item.extension}`)
+        await Bun.write(target, item.content, { mode: 0o600 })
+        files.push(target)
+      }
+      const completed = BioNemoHostedResult.parse({
+        capability: id,
+        provider: "nvidia",
+        endpoint: selected.endpoint,
+        model_version: selected.version,
+        request_sha256: preview.request_sha256,
+        approval_sha256: preview.approval_sha256,
+        payload_bytes: preview.payload_bytes,
+        started_at: started,
+        completed_at: new Date().toISOString(),
+        root: relative.split(path.sep).join("/"),
+        artifacts: await Promise.all(
+          files.map(async (file) => ({
+            path: path.relative(root, file).split(path.sep).join("/"),
+            size: (await fs.stat(file)).size,
+            sha256: new Bun.CryptoHasher("sha256").update(await Bun.file(file).arrayBuffer()).digest("hex"),
+            mime: file.endsWith(".json")
+              ? "application/json"
+              : file.endsWith(".pdb")
+                ? "chemical/x-pdb"
+                : file.endsWith(".cif")
+                  ? "chemical/x-mmcif"
+                  : file.endsWith(".sdf")
+                    ? "chemical/x-mdl-sdfile"
+                    : "text/plain",
+          })),
+        ),
+        provider_request_id,
+      })
+      await BioNemoHostedDispatch.succeed({
+        preview,
+        sessionID,
+        result: completed,
+        http_status: response.status,
+        provider_request_id,
+      })
+      return completed
+    } catch (error) {
+      if (!(error instanceof Error)) throw error
+      if (
+        !/previously recorded this exact hosted|returned HTTP|non-JSON success response|returned a redirect/.test(
+          error.message,
+        )
+      ) {
+        await BioNemoHostedDispatch.fail({
+          preview,
+          sessionID,
+          status: "unknown",
+          error: OpenScience.redactSecrets(error.message),
+          http_status: response?.status,
+          provider_request_id,
+        })
+      }
+      throw error
     }
   }
 }

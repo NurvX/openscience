@@ -499,6 +499,7 @@ async function request(
   sessionID: string,
   options: ResolvedOptions,
   capability?: JobBroker.CapabilityBinding,
+  capabilityExecution?: JobBroker.CapabilityExecution,
 ): Promise<PreparedRequest> {
   const uploads =
     input.uploads ??
@@ -521,6 +522,7 @@ async function request(
     value: {
       sessionID,
       capability,
+      capability_execution: capabilityExecution,
       name: input.name,
       purpose: input.purpose,
       command: input.command,
@@ -620,7 +622,14 @@ export function createComputeJobTool(base?: JobBroker.Options) {
       if (input.action === "plan" || input.action === "start") {
         const resolved = await options(ctx.sessionID, base)
         const capability = JobBroker.CapabilityBinding.safeParse(ctx.extra?.scientificCapability)
-        const prepared = await request(input, ctx.sessionID, resolved, capability.success ? capability.data : undefined)
+        const capabilityExecution = JobBroker.CapabilityExecution.safeParse(ctx.extra?.scientificCapabilityExecution)
+        const prepared = await request(
+          input,
+          ctx.sessionID,
+          resolved,
+          capability.success ? capability.data : undefined,
+          capabilityExecution.success ? capabilityExecution.data : undefined,
+        )
         const value = prepared.value
         const plan = await JobBroker.plan(value, resolved)
         const metadata: Metadata = {

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import z from "zod"
+import { Instance } from "../../src/project/instance"
+import { CredentialsRoutes } from "../../src/server/routes/settings/credentials"
+import { executionSession, tmpdir } from "../fixture/fixture"
 import { ScientificCapabilityParameters, ScientificCapabilityTool } from "../../src/tool/scientific-capability"
 
 const context = {
@@ -85,6 +88,7 @@ describe("scientific_capability tool", () => {
     const proposal = JSON.parse(planned.output) as {
       tool: string
       input: { action: string; packages: string[]; image: string; uploads: string[]; gpu: string }
+      execution?: unknown
     }
     expect(proposal.tool).toBe("compute_job")
     expect(proposal.input.action).toBe("plan")
@@ -92,6 +96,7 @@ describe("scientific_capability tool", () => {
     expect(proposal.input.image).toMatch(/@sha256:/)
     expect(proposal.input.uploads).toEqual([])
     expect(proposal.input.gpu).toBe("none")
+    expect(proposal.execution).toBeUndefined()
     expect(planned.metadata.scientific_capability.dispatched).toBe(false)
   })
 
@@ -129,5 +134,79 @@ describe("scientific_capability tool", () => {
       executable: false,
       dispatched: false,
     })
+  })
+
+  test("hosted start asks for separate host access and exact non-standing remote approval", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const originalFetch = globalThis.fetch
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const app = CredentialsRoutes()
+          const saved = await app.request("/nvidia", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ fields: { api_key: "nvapi-hosted-test-secret" } }),
+          })
+          expect(saved.ok).toBe(true)
+          const tool = await ScientificCapabilityTool.init()
+          const session = await executionSession()
+          const asked: Array<{
+            permission: string
+            patterns: string[]
+            always: string[]
+            metadata: Record<string, unknown>
+          }> = []
+          globalThis.fetch = (async () =>
+            new Response(
+              JSON.stringify({
+                structure: "HEADER    TEST\nATOM      1  CA  ALA A   1      0.000   0.000   0.000\n",
+              }),
+              { headers: { "content-type": "application/json" } },
+            )) as unknown as typeof fetch
+          await tool.execute(
+            {
+              action: "start",
+              id: "boltz2",
+              payload: { polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKKQQ" }] },
+            },
+            {
+              ...context,
+              sessionID: session.id,
+              async ask(request) {
+                asked.push(request as never)
+              },
+            },
+          )
+          expect(asked).toHaveLength(2)
+          expect(asked[0]).toMatchObject({
+            permission: "network",
+            patterns: ["health.api.nvidia.com"],
+            always: [],
+          })
+          expect(asked[1]).toMatchObject({
+            permission: "remote_compute",
+            always: [],
+          })
+          expect(asked[1]?.patterns[0]).toMatch(/^[a-f0-9]{64}$/)
+          expect(asked[1]?.metadata.scientific_capability).toMatchObject({
+            id: "boltz2",
+            provider: "nvidia",
+            endpoint: "https://health.api.nvidia.com/v1/biology/mit/boltz2/predict",
+            model_version: "2.2.1",
+            method: "POST",
+          })
+          expect((asked[1]?.metadata.scientific_capability as { payload_bytes: number }).payload_bytes).toBeGreaterThan(
+            0,
+          )
+          expect((asked[1]?.metadata.scientific_capability as { terms_url: string }).terms_url).toContain(
+            "NVIDIA_API_Trial_Service_Terms.pdf",
+          )
+        },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

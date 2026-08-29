@@ -75,6 +75,11 @@ const TaskSpec = z
       )
       .max(100)
       .default([]),
+    pip_requirements: z.string().trim().min(1).max(100_000).optional(),
+    lock_digest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .strict()
 export type ManagedTaskSpec = z.infer<typeof TaskSpec>
@@ -89,6 +94,30 @@ const micromamba = () => path.join(root(), "bin", executableName())
 const environmentPath = (name: string) => path.join(environmentRoot(), name)
 const manifestPath = (name: string) => path.join(environmentPath(name), ".openscience-environment.json")
 
+const MICROMAMBA_VERSION = "2.9.0"
+const MICROMAMBA = {
+  "osx-arm64": {
+    archive: "500f5074feb8d02c4296ef9921c3650ed2874171805a9fbb8fbb53896433646b",
+    binary: "ec2a072f028e1a7cf20f3e2e74d5a8127cf5a5f27636375b5359811565f4e5be",
+  },
+  "osx-64": {
+    archive: "0426ecdc41636d369f57b8fe6acbf4385a69eca45b56d9ee7d3a840a9965d44f",
+    binary: "1e71054bb3ac9a076e21f7ec48acfef536f9b3f1408f371a942784bf5ef83d8a",
+  },
+  "linux-aarch64": {
+    archive: "e705ffeed90ce0659eb546e4b1e1028c9eaf0bc9cc854867b19ac5ce0ba5852f",
+    binary: "9f93b974adcb4d166996af969b6cd371287d1a3e52733704727884d9b74cb7a7",
+  },
+  "linux-64": {
+    archive: "8761c382127e6363bd9e0a2451aa3ef90d071a79133f736e2f759a3bf13040dd",
+    binary: "366cd9cd8be14df1ab8ed50352a82111082a36686b2d389fdb79a92c3fafb3e3",
+  },
+  "win-64": {
+    archive: "97a336f4ab794bd96a6a4da5e6ed63e75a1d31830414a182419b23d3b36f3fe0",
+    binary: "a6d804394b2418991c4e29562853eaace2f2ce9d9da661a98e74e02e8dbb44b0",
+  },
+} as const
+
 const platform = () => {
   if (process.platform === "darwin" && process.arch === "arm64") return "osx-arm64"
   if (process.platform === "darwin" && process.arch === "x64") return "osx-64"
@@ -96,6 +125,21 @@ const platform = () => {
   if (process.platform === "linux" && process.arch === "x64") return "linux-64"
   if (process.platform === "win32" && process.arch === "x64") return "win-64"
   throw new Error(`Managed scientific environments are not available on ${process.platform}/${process.arch}`)
+}
+
+async function sha256(file: string) {
+  const bytes = await Bun.file(file).arrayBuffer()
+  return new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+}
+
+async function installedMicromambaIsLocked() {
+  const selectedPlatform = platform()
+  const fixtureDigest =
+    process.env.OPENSCIENCE_TEST_HOME && process.env.OPENSCIENCE_TEST_MANAGED_ENVIRONMENTS === "1"
+      ? process.env.OPENSCIENCE_TEST_MICROMAMBA_SHA256
+      : undefined
+  const expected = fixtureDigest?.match(/^[a-f0-9]{64}$/u) ? fixtureDigest : MICROMAMBA[selectedPlatform].binary
+  return (await executable(micromamba())) && (await sha256(micromamba()).catch(() => "")) === expected
 }
 
 async function executable(file: string) {
@@ -150,33 +194,73 @@ async function run(command: string[], options: { cwd?: string; timeout?: number 
 }
 
 async function installMicromamba() {
-  if (await executable(micromamba())) return micromamba()
+  const selectedPlatform = platform()
+  const locked = MICROMAMBA[selectedPlatform]
+  if ((await executable(micromamba())) && (await sha256(micromamba()).catch(() => "")) === locked.binary) {
+    return micromamba()
+  }
   await state({ status: "installing", phase: "installing_micromamba", error: undefined })
   const archive = path.join(stagingRoot(), `micromamba-${crypto.randomUUID()}.tar.bz2`)
   const extracted = path.join(stagingRoot(), `micromamba-${crypto.randomUUID()}`)
-  await fs.mkdir(extracted, { recursive: true })
-  const response = await fetch(`https://micro.mamba.pm/api/micromamba/${platform()}/latest`, {
-    redirect: "follow",
-    signal: AbortSignal.timeout(60_000),
-  })
-  if (!response.ok) throw new Error(`Micromamba download failed with HTTP ${response.status}`)
-  await Bun.write(archive, await response.arrayBuffer(), { mode: 0o600 })
-  await run(["tar", "-xf", archive, "-C", extracted], { timeout: 60_000 })
-  const candidates = [
-    path.join(extracted, "bin", "micromamba"),
-    path.join(extracted, "Library", "bin", "micromamba.exe"),
-    path.join(extracted, "micromamba.exe"),
-  ]
-  const source = (
-    await Promise.all(candidates.map(async (file) => ((await executable(file)) ? file : undefined)))
-  ).find((file): file is string => !!file)
-  if (!source) throw new Error("The official micromamba archive did not contain the expected executable")
-  await fs.mkdir(path.dirname(micromamba()), { recursive: true })
-  await fs.copyFile(source, micromamba())
-  if (process.platform !== "win32") await fs.chmod(micromamba(), 0o755)
-  await fs.rm(archive, { force: true }).catch(() => undefined)
-  await fs.rm(extracted, { recursive: true, force: true }).catch(() => undefined)
-  return micromamba()
+  const replacement = `${micromamba()}.${process.pid}.${crypto.randomUUID()}.tmp`
+  const previous = `${micromamba()}.${process.pid}.${crypto.randomUUID()}.previous`
+  let preservePrevious = false
+  try {
+    await fs.mkdir(extracted, { recursive: true })
+    const response = await fetch(`https://micro.mamba.pm/api/micromamba/${selectedPlatform}/${MICROMAMBA_VERSION}`, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(60_000),
+    })
+    if (!response.ok) throw new Error(`Micromamba download failed with HTTP ${response.status}`)
+    await Bun.write(archive, await response.arrayBuffer(), { mode: 0o600 })
+    if ((await sha256(archive)) !== locked.archive) {
+      throw new Error(`Micromamba ${MICROMAMBA_VERSION} archive failed its ${selectedPlatform} checksum`)
+    }
+    await run(["tar", "-xf", archive, "-C", extracted], { timeout: 60_000 })
+    const candidates = [
+      path.join(extracted, "bin", "micromamba"),
+      path.join(extracted, "Library", "bin", "micromamba.exe"),
+      path.join(extracted, "micromamba.exe"),
+    ]
+    const source = (
+      await Promise.all(candidates.map(async (file) => ((await executable(file)) ? file : undefined)))
+    ).find((file): file is string => !!file)
+    if (!source) throw new Error("The official micromamba archive did not contain the expected executable")
+    if ((await sha256(source)) !== locked.binary) {
+      throw new Error(`Micromamba ${MICROMAMBA_VERSION} executable failed its ${selectedPlatform} checksum`)
+    }
+    await fs.mkdir(path.dirname(micromamba()), { recursive: true })
+    await fs.copyFile(source, replacement)
+    if (process.platform !== "win32") await fs.chmod(replacement, 0o755)
+    const hadPrevious = !!(await fs.stat(micromamba()).catch(() => undefined))
+    if (hadPrevious) await fs.rename(micromamba(), previous)
+    try {
+      await fs.rename(replacement, micromamba())
+    } catch (error) {
+      if (hadPrevious) {
+        try {
+          await fs.rename(previous, micromamba())
+        } catch (restoreError) {
+          preservePrevious = true
+          throw new AggregateError(
+            [error, restoreError],
+            `Micromamba replacement failed and the previous verified binary remains at ${previous}`,
+          )
+        }
+      }
+      throw error
+    }
+    if (hadPrevious)
+      await fs.rm(previous, { force: true }).catch((error) => {
+        log.warn("failed to remove replaced micromamba rollback", { previous, error: String(error) })
+      })
+    return micromamba()
+  } finally {
+    await fs.rm(archive, { force: true }).catch(() => undefined)
+    await fs.rm(extracted, { recursive: true, force: true }).catch(() => undefined)
+    await fs.rm(replacement, { force: true }).catch(() => undefined)
+    if (!preservePrevious) await fs.rm(previous, { force: true }).catch(() => undefined)
+  }
 }
 
 async function probe(language: ManagedEnvironmentLanguage, prefix = environmentPath(language)) {
@@ -252,11 +336,23 @@ async function ensureTaskEnvironment(name: string, raw?: ManagedTaskSpec) {
     channels: raw?.channels ?? ["conda-forge"],
     packages: raw?.packages ?? ["python=3.11", "pip"],
     pip_packages: raw?.pip_packages ?? [],
+    pip_requirements: raw?.pip_requirements,
+    lock_digest: raw?.lock_digest,
   })
   const digest = crypto
     .createHash("sha256")
-    .update(JSON.stringify({ channels: spec.channels, packages: spec.packages, pip_packages: spec.pip_packages }))
+    .update(
+      JSON.stringify({
+        channels: spec.channels,
+        packages: spec.packages,
+        pip_packages: spec.pip_packages,
+        pip_requirements: spec.pip_requirements,
+      }),
+    )
     .digest("hex")
+  if (spec.lock_digest && spec.lock_digest !== digest) {
+    throw new Error(`Task environment '${name}' lock digest does not match its hashed package specification`)
+  }
   const current = Manifest.safeParse(
     await Bun.file(path.join(target, ".openscience-environment.json"))
       .json()
@@ -279,19 +375,44 @@ async function ensureTaskEnvironment(name: string, raw?: ManagedTaskSpec) {
     await run([await installMicromamba(), "--no-rc", "create", "-y", "-p", target, ...channels, ...spec.packages])
     if (!(await executable(binary))) throw new Error(`Task environment '${name}' did not contain Python`)
     if (spec.pip_packages.length) {
-      await run(
-        [
-          binary,
-          "-m",
-          "pip",
-          "install",
-          "--disable-pip-version-check",
-          "--no-cache-dir",
-          "--no-deps",
-          ...spec.pip_packages,
-        ],
-        { timeout: 45 * 60 * 1000 },
-      )
+      if (!spec.pip_requirements) {
+        await run(
+          [
+            binary,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-cache-dir",
+            "--no-deps",
+            ...spec.pip_packages,
+          ],
+          { timeout: 45 * 60 * 1000 },
+        )
+      } else {
+        const requirements = path.join(stagingRoot(), `requirements-${crypto.randomUUID()}.txt`)
+        await Bun.write(requirements, spec.pip_requirements, { mode: 0o600 })
+        try {
+          await run(
+            [
+              binary,
+              "-m",
+              "pip",
+              "install",
+              "--disable-pip-version-check",
+              "--no-cache-dir",
+              "--no-deps",
+              "--only-binary=:all:",
+              "--require-hashes",
+              "-r",
+              requirements,
+            ],
+            { timeout: 45 * 60 * 1000 },
+          )
+        } finally {
+          await fs.rm(requirements, { force: true }).catch(() => undefined)
+        }
+      }
     }
     await run([binary, "-I", "-c", 'print("ok")'], { timeout: 30_000 })
     const now = new Date().toISOString()
@@ -314,10 +435,10 @@ const micromambaSetup: { value?: Promise<void> } = {}
 const starterSetup: Partial<Record<ManagedEnvironmentLanguage, Promise<void>>> = {}
 
 async function ensureMicromamba() {
-  if (await executable(micromamba())) return
+  if (await installedMicromambaIsLocked()) return
   if (micromambaSetup.value) {
     await micromambaSetup.value
-    if (await executable(micromamba())) return
+    if (await installedMicromambaIsLocked()) return
     micromambaSetup.value = undefined
   }
   const current = (async () => {

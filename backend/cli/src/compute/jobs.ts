@@ -141,6 +141,19 @@ export namespace ComputeJobs {
     .strict()
   export type CapabilityBinding = z.infer<typeof CapabilityBinding>
 
+  /** Trusted execution material resolved only by scientific_capability. It is
+   * not exposed by the model-facing compute_job schema. */
+  export const CapabilityExecution = z
+    .object({
+      network: z.literal("none"),
+      lock_digest: z.string().regex(/^[a-f0-9]{64}$/),
+      pip_requirements: z.string().trim().min(1).max(100_000),
+      runtime_binary: z.string().trim().min(1).refine(path.isAbsolute).optional(),
+      runtime_root: z.string().trim().min(1).refine(path.isAbsolute).optional(),
+    })
+    .strict()
+  export type CapabilityExecution = z.infer<typeof CapabilityExecution>
+
   export const Artifact = z.object({
     path: z.string(),
     size: z.number().int().nonnegative(),
@@ -184,6 +197,8 @@ export namespace ComputeJobs {
     resources: Resources.optional(),
     artifact_patterns: z.string().array(),
     checkpoint: z.string().optional(),
+    capability_runtime_digest: z.string().length(64).optional(),
+    network: z.literal("deny").optional(),
     warning: z.string(),
   })
   export type LocalPlan = z.infer<typeof LocalPlan>
@@ -221,6 +236,26 @@ export namespace ComputeJobs {
     sessionID: z.string().startsWith("ses_"),
     default_uploads: z.boolean().optional(),
     capability: CapabilityBinding.optional(),
+    capability_execution: CapabilityExecution.optional(),
+  }).superRefine((value, ctx) => {
+    if (Boolean(value.capability) !== Boolean(value.capability_execution)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["capability_execution"],
+        message: "Scientific capability identity and execution policy must be supplied together",
+      })
+    }
+    if (
+      value.capability_execution &&
+      value.target.kind === "local" &&
+      (!value.capability_execution.runtime_binary || !value.capability_execution.runtime_root)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["capability_execution", "runtime_root"],
+        message: "Local scientific capabilities require a trusted runtime binary and root",
+      })
+    }
   })
   export type Request = z.infer<typeof Request>
 
@@ -232,6 +267,7 @@ export namespace ComputeJobs {
     name: z.string(),
     purpose: z.string().optional(),
     capability: CapabilityBinding.optional(),
+    capability_execution: CapabilityExecution.optional(),
     command: z.string(),
     cwd: z.string().optional(),
     target: Target,
@@ -284,6 +320,10 @@ export namespace ComputeJobs {
         environment: z.string().optional(),
         image: z.string(),
         packages: z.array(z.string()).default([]),
+        package_lock: z
+          .object({ digest: z.string().length(64), requirements: z.string().trim().min(1).max(100_000) })
+          .strict()
+          .optional(),
         secret_refs: SecretRef.array().default([]),
         gpu: z.string(),
         network: z.enum(["unrestricted", "none"]),
@@ -1522,11 +1562,18 @@ export namespace ComputeJobs {
       file: Shell.acceptable(),
       args: ["-lc", wrapped],
       workspace: authority.writable,
-      readable: authority.readable,
+      readable: [
+        ...authority.readable,
+        ...(job.capability_execution?.runtime_root ? [job.capability_execution.runtime_root] : []),
+      ],
       extraWritable: [exitOf(scope.root, job.id)],
       unreadable: OpenScience.kernelSensitivePaths(),
-      options: authority.sandbox,
+      options: job.capability_execution ? { ...authority.sandbox, enabled: true, network: "deny" } : authority.sandbox,
     })
+    if (job.capability_execution && !planned.sandboxed) {
+      Sandbox.cleanup(planned)
+      throw new Error("Scientific local capability execution requires an enforced host sandbox")
+    }
     return {
       argv: [planned.file, ...planned.args],
       temporary: planned.temporary,
@@ -1642,7 +1689,7 @@ export namespace ComputeJobs {
     if (checkpoint) await outputPath(root, checkpoint, "Checkpoint path")
   }
 
-  async function modal(input: Request, cwd: string, context?: ModalAdapter.Config) {
+  async function modal(input: Request, cwd: string, context?: ModalAdapter.Config): Promise<ModalPlan.Prepared> {
     if (!context) throw new Error("Modal is not enabled or connected")
     if (!input.gpu) throw new Error("A Modal GPU type is required")
     if (input.modules?.length) throw new Error("Environment modules are only supported by SSH compute")
@@ -1659,6 +1706,12 @@ export namespace ComputeJobs {
       workspaceCwd: input.cwd,
       image: input.image ?? context.image,
       packages: input.packages ?? [],
+      packageLock: input.capability_execution
+        ? {
+            digest: input.capability_execution.lock_digest,
+            requirements: input.capability_execution.pip_requirements,
+          }
+        : undefined,
       secretRefs: input.secret_refs ?? [],
       gpu: input.gpu,
       resources: input.resources
@@ -1672,7 +1725,7 @@ export namespace ComputeJobs {
       uploads: input.uploads ?? [],
       deniedUploads: input.default_uploads ? "skip" : "error",
       outputs: patterns,
-      context,
+      context: input.capability_execution ? { ...context, network: "none" } : context,
     })
   }
 
@@ -1689,6 +1742,7 @@ export namespace ComputeJobs {
       command: job.command,
       image: job.modal.image,
       packages: job.modal.packages,
+      packageLock: job.modal.package_lock,
       gpu: job.modal.gpu,
       gpus: job.resources?.gpus,
       cpus: job.resources?.cpus,
@@ -1845,6 +1899,13 @@ export namespace ComputeJobs {
       createdAt: job.created_at,
       startedAt: job.started_at,
       completedAt: job.completed_at,
+      scientificCapability: job.capability
+        ? {
+            ...job.capability,
+            execution_network: job.capability_execution?.network,
+            lock_digest: job.capability_execution?.lock_digest,
+          }
+        : undefined,
     })
   }
 
@@ -3125,7 +3186,11 @@ export namespace ComputeJobs {
         resources: parsed.resources,
         artifact_patterns: parsed.artifacts ?? [],
         checkpoint: parsed.checkpoint,
-        warning: "This detached job runs on this computer inside the active session sandbox.",
+        capability_runtime_digest: parsed.capability?.runtime_digest,
+        network: parsed.capability_execution ? ("deny" as const) : undefined,
+        warning: parsed.capability_execution
+          ? "This scientific capability runs inside an enforced, network-denied session sandbox with its locked runtime mounted read-only."
+          : "This detached job runs on this computer inside the active session sandbox.",
       }
       const digest = new Bun.CryptoHasher("sha256").update(JSON.stringify(value)).digest("hex")
       return LocalPlan.parse({ digest, ...value })
@@ -3223,6 +3288,7 @@ export namespace ComputeJobs {
       name: parsed.name,
       purpose: parsed.purpose ?? parsed.name,
       capability: parsed.capability,
+      capability_execution: parsed.capability_execution,
       command: parsed.command,
       cwd,
       target: parsed.target,
@@ -3237,6 +3303,7 @@ export namespace ComputeJobs {
             environment: prepared.plan.environment,
             image: prepared.plan.image,
             packages: prepared.plan.packages,
+            package_lock: prepared.plan.package_lock,
             secret_refs: prepared.plan.secret_refs,
             gpu: prepared.plan.gpu,
             network: prepared.plan.network,

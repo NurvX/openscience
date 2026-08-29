@@ -10,6 +10,7 @@ import {
   type CapabilityRuntime,
 } from "./schema"
 import { capabilitySmokeScript } from "./smokes"
+import { capabilityPlatform } from "./pack"
 
 export type CapabilityBinding = JobBroker.CapabilityBinding
 export type CapabilitySummary = {
@@ -63,15 +64,37 @@ function bounded(runtime: CapabilityRuntime, requested?: { cpus?: number; memory
   return { cpus, memory_gb: memory, time_minutes: time, gpus: 0 }
 }
 async function environment(runtime: CapabilityRuntime) {
+  const current = capabilityPlatform()
+  if (!current || !runtime.local_platforms.includes(current))
+    throw new Error(
+      `${runtime.pack_id} has no release-locked local wheel set for ${current ?? `${process.platform}-${process.arch}`}`,
+    )
   const state = await ManagedEnvironments.inspect(runtime.pack_id)
   if (
     !state.ready ||
     !state.manifest ||
+    state.manifest.spec !== runtime.lock_digest ||
     !same(state.manifest.packages, [`python=${runtime.python}`, "pip=25.1.1"]) ||
     !same(state.manifest.pip_packages, runtime.packages)
   )
     throw new Error(`${runtime.pack_id} is not installed at the manifest lock. Run scientific_capability setup first.`)
   return ManagedEnvironments.runtime("python", runtime.pack_id)
+}
+
+function execution(
+  runtime: CapabilityRuntime,
+  local?: Awaited<ReturnType<typeof ManagedEnvironments.runtime>>,
+): JobBroker.CapabilityExecution {
+  if (local && (!local.binary || !local.env?.CONDA_PREFIX)) {
+    throw new Error("Managed capability environment did not expose its trusted binary and root")
+  }
+  return JobBroker.CapabilityExecution.parse({
+    network: runtime.network.execution,
+    lock_digest: runtime.lock_digest,
+    pip_requirements: runtime.pip_requirements,
+    runtime_binary: local?.binary,
+    runtime_root: local?.env?.CONDA_PREFIX,
+  })
 }
 function activate(command: string, runtime: Awaited<ReturnType<typeof ManagedEnvironments.runtime>>) {
   if (!runtime.env?.CONDA_PREFIX || !runtime.env.PATH)
@@ -116,7 +139,8 @@ export namespace CapabilityRegistry {
     if (!item.runtime.targets.includes(work.target))
       throw new Error(`${item.name} supports ${item.runtime.targets.join(" and ")}, not ${work.target}`)
     const capability = binding({ manifest: item, profile: "task" })
-    const command = work.target === "local" ? activate(work.command, await environment(item.runtime)) : work.command
+    const local = work.target === "local" ? await environment(item.runtime) : undefined
+    const command = local ? activate(work.command, local) : work.command
     const input = JobBroker.Input.parse({
       name: work.name,
       purpose:
@@ -138,6 +162,7 @@ export namespace CapabilityRegistry {
       tool: "compute_job" as const,
       capability: summary(item),
       binding: capability,
+      execution: execution(item.runtime, local),
       input: { action: "plan" as const, ...input },
     }
   }
@@ -153,7 +178,8 @@ export namespace CapabilityRegistry {
       capability = binding({ manifest: item, profile: "smoke" })
     const code = `import base64;exec(compile(base64.b64decode(${JSON.stringify(encoded)}), ${JSON.stringify(`${item.id}-smoke.py`)}, 'exec'))`
     let command = `python -I -c ${quote(code)}`
-    if (target === "local") command = activate(command, await environment(item.runtime))
+    const local = target === "local" ? await environment(item.runtime) : undefined
+    if (local) command = activate(command, local)
     const input = JobBroker.Input.parse({
       name: `${item.name} bounded smoke`,
       purpose: `${item.smoke.summary} [capability:${capability.id}@${capability.version}:smoke:${capability.manifest_sha256.slice(0, 12)}]`,
@@ -175,6 +201,7 @@ export namespace CapabilityRegistry {
       tool: "compute_job" as const,
       capability: summary(item),
       binding: capability,
+      execution: execution(item.runtime, local),
       input: { action: "plan" as const, ...input },
     }
   }
