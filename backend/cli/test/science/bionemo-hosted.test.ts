@@ -70,11 +70,18 @@ await Instance.provide({
     const result = await BioNemoHosted.start("boltz2", session.id, {
       polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKK" }],
     })
-    if (requests !== 1 || result.artifacts.length !== 2) throw new Error("unexpected hosted capture")
+    if (requests !== 1 || result.artifacts.length !== 2 || !result.dispatch_id)
+      throw new Error("unexpected hosted capture")
     const cached = await BioNemoHosted.start("boltz2", session.id, {
       polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKK" }],
     })
     if (requests !== 1 || cached.request_sha256 !== result.request_sha256) throw new Error("exact success did not replay locally")
+    const sibling = await Session.create({})
+    const siblingResult = await BioNemoHosted.start("boltz2", sibling.id, {
+      polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKK" }],
+    })
+    if (requests !== 2 || siblingResult.dispatch_id === result.dispatch_id || siblingResult.root === result.root)
+      throw new Error("hosted dispatch leaked across sessions")
     if (JSON.stringify(result).includes(secret)) throw new Error("result leaked NVIDIA credential")
     const root = path.join(await SessionFilesystem.workspace(session.id), result.root)
     const response = await fs.readFile(path.join(root, "response.json"), "utf8")
@@ -210,6 +217,60 @@ await Instance.provide({
             }),
           ).rejects.toThrow("previously recorded this exact hosted")
           expect(requests).toBe(1)
+        },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("does not persist a pending dispatch before NVIDIA credentials are configured", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const originalFetch = globalThis.fetch
+    try {
+      const { CredentialsRoutes } = await import("../../src/server/routes/settings/credentials")
+      const { Instance } = await import("../../src/project/instance")
+      const { ProjectTrust } = await import("../../src/project/trust")
+      const { Session } = await import("../../src/session")
+      const { BioNemoHosted } = await import("../../src/science/bionemo/client")
+      await Instance.provide({
+        directory: tmp.path,
+        init: async () => {
+          const current = await ProjectTrust.status(Instance.project)
+          await ProjectTrust.update(Instance.project, { trusted: true, root: current.root })
+        },
+        fn: async () => {
+          await CredentialsRoutes().request("/nvidia", { method: "DELETE" })
+          const session = await Session.create({})
+          const preview = await BioNemoHosted.plan("boltz2", {
+            polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKKAA" }],
+          })
+          let requests = 0
+          globalThis.fetch = (async () => {
+            requests++
+            return new Response(JSON.stringify({ structure: "HEADER    TEST\nATOM      1  CA  ALA A   1\n" }), {
+              headers: { "content-type": "application/json" },
+            })
+          }) as unknown as typeof fetch
+          await expect(
+            BioNemoHosted.start("boltz2", session.id, {
+              polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKKAA" }],
+            }),
+          ).rejects.toThrow("credential is not configured")
+          expect(
+            await BioNemoHostedDispatch.get({ approvalSha256: preview.approval_sha256, sessionID: session.id }),
+          ).toBeUndefined()
+          const app = CredentialsRoutes()
+          await app.request("/nvidia", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ fields: { api_key: "nvapi-hosted-test-secret" } }),
+          })
+          const result = await BioNemoHosted.start("boltz2", session.id, {
+            polymers: [{ molecule_type: "protein", sequence: "MVLTIYPDELVQIVSDKKAA" }],
+          })
+          expect(requests).toBe(1)
+          expect(result.dispatch_id).toBeTruthy()
         },
       })
     } finally {

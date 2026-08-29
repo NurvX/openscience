@@ -16,6 +16,7 @@ export const BioNemoHostedArtifact = z
 
 export const BioNemoHostedResult = z
   .object({
+    dispatch_id: z.string().optional(),
     capability: BioNemoCapabilityID,
     provider: z.literal("nvidia"),
     endpoint: z.string().url(),
@@ -79,7 +80,7 @@ export type BioNemoHostedPreview = z.infer<typeof BioNemoHostedPreview>
 export type BioNemoHostedResult = z.infer<typeof BioNemoHostedResult>
 
 const file = () => path.join(Global.Path.data, "scientific-capability-hosted-dispatches.json")
-const key = (approval: string) => `nvidia:${approval}`
+const key = (sessionID: string, approval: string) => `nvidia:${sessionID}:${approval}`
 const requestID = (headers: Headers) =>
   headers.get("nvcf-request-id") ?? headers.get("x-request-id") ?? headers.get("request-id") ?? undefined
 
@@ -105,9 +106,9 @@ function base(input: { preview: BioNemoHostedPreview; sessionID: string; attempt
 }
 
 export namespace BioNemoHostedDispatch {
-  export async function get(approvalSha256: string) {
+  export async function get(input: { approvalSha256: string; sessionID: string }) {
     const data = await JsonStore.read(file())
-    const parsed = BioNemoDispatchRecord.safeParse(data[key(approvalSha256)])
+    const parsed = BioNemoDispatchRecord.safeParse(data[key(input.sessionID, input.approvalSha256)])
     return parsed.success ? parsed.data : undefined
   }
 
@@ -115,7 +116,7 @@ export namespace BioNemoHostedDispatch {
     let existing: BioNemoDispatchRecord | undefined
     let created: BioNemoDispatchRecord | undefined
     await JsonStore.update(file(), (data) => {
-      const current = BioNemoDispatchRecord.safeParse(data[key(input.preview.approval_sha256)]).data
+      const current = BioNemoDispatchRecord.safeParse(data[key(input.sessionID, input.preview.approval_sha256)]).data
       if (current?.status === "pending" || current?.status === "unknown" || current?.status === "succeeded") {
         existing = current
         return
@@ -128,7 +129,7 @@ export namespace BioNemoHostedDispatch {
         }),
         status: "pending",
       })
-      data[key(input.preview.approval_sha256)] = created
+      data[key(input.sessionID, input.preview.approval_sha256)] = created
     })
     return { existing, created: created! }
   }
@@ -143,7 +144,7 @@ export namespace BioNemoHostedDispatch {
   }) {
     let record: BioNemoDispatchRecord | undefined
     await JsonStore.update(file(), (data) => {
-      const current = BioNemoDispatchRecord.safeParse(data[key(input.preview.approval_sha256)]).data
+      const current = BioNemoDispatchRecord.safeParse(data[key(input.sessionID, input.preview.approval_sha256)]).data
       record = BioNemoDispatchRecord.parse({
         ...(current ??
           base({
@@ -158,7 +159,7 @@ export namespace BioNemoHostedDispatch {
         provider_request_id: input.provider_request_id,
         error: input.error,
       })
-      data[key(input.preview.approval_sha256)] = record
+      data[key(input.sessionID, input.preview.approval_sha256)] = record
     })
     return record!
   }
@@ -172,7 +173,7 @@ export namespace BioNemoHostedDispatch {
   }) {
     let record: BioNemoDispatchRecord | undefined
     await JsonStore.update(file(), (data) => {
-      const current = BioNemoDispatchRecord.safeParse(data[key(input.preview.approval_sha256)]).data
+      const current = BioNemoDispatchRecord.safeParse(data[key(input.sessionID, input.preview.approval_sha256)]).data
       record = BioNemoDispatchRecord.parse({
         ...(current ??
           base({
@@ -186,9 +187,9 @@ export namespace BioNemoHostedDispatch {
         http_status: input.http_status,
         provider_request_id: input.provider_request_id,
         error: undefined,
-        result: input.result,
+        result: { ...input.result, dispatch_id: current?.dispatch_id ?? input.result.dispatch_id },
       })
-      data[key(input.preview.approval_sha256)] = record
+      data[key(input.sessionID, input.preview.approval_sha256)] = record
     })
     return record!
   }

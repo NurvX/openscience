@@ -1208,6 +1208,56 @@ describe("ComputeJobs local lifecycle", () => {
 })
 
 describe("ComputeJobs Modal governance", () => {
+  test("binds scientific wheel locks and no-network execution into the Modal approval", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "state")
+    const capability = ComputeJobs.CapabilityBinding.parse({
+      id: "scipy",
+      version: "2.0.0",
+      manifest_sha256: "a".repeat(64),
+      profile: "smoke",
+      runtime_digest: "b".repeat(64),
+    })
+    const capability_execution = ComputeJobs.CapabilityExecution.parse({
+      network: "none",
+      lock_digest: "c".repeat(64),
+      pip_requirements: `scipy==1.18.1 --hash=sha256:${"d".repeat(64)}`,
+    })
+    const plan = await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await trustProject()
+        const session = await Session.create({})
+        return ComputeJobs.plan(
+          {
+            sessionID: session.id,
+            name: "locked scientific Modal smoke",
+            command: "python -I smoke.py",
+            target: { kind: "modal" },
+            image: "python:3.12-slim@sha256:" + "e".repeat(64),
+            packages: ["scipy==1.18.1"],
+            gpu: "none",
+            uploads: [],
+            capability,
+            capability_execution,
+          },
+          { root, workspace: tmp.path, modal: { ...modal, network: "unrestricted" } },
+        )
+      },
+    })
+
+    expect(plan).toMatchObject({
+      provider: "modal",
+      network: "none",
+      package_lock: {
+        digest: capability_execution.lock_digest,
+        requirements: capability_execution.pip_requirements,
+      },
+      uploads: [],
+      upload_bytes: 0,
+    })
+  })
+
   test("returns the approved dispatch before the remote workload finishes", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
@@ -1572,16 +1622,32 @@ describe("ComputeJobs Modal governance", () => {
     const entered = Promise.withResolvers<void>()
     const finish = Promise.withResolvers<void>()
     const calls = { run: 0, recover: 0, release: 0 }
+    const executionNetworks: ModalAdapter.Context["network"][] = []
+    const unrestrictedCredentials = { ...credentials, network: "unrestricted" as const }
+    const capability = ComputeJobs.CapabilityBinding.parse({
+      id: "scipy",
+      version: "2.0.0",
+      manifest_sha256: "a".repeat(64),
+      profile: "smoke",
+      runtime_digest: "b".repeat(64),
+    })
+    const capability_execution = ComputeJobs.CapabilityExecution.parse({
+      network: "none",
+      lock_digest: "c".repeat(64),
+      pip_requirements: `scipy==1.18.1 --hash=sha256:${"d".repeat(64)}`,
+    })
     const provider = modalProvider({
-      run: async (_context, spec, hooks) => {
+      run: async (context, spec, hooks) => {
         calls.run++
+        executionNetworks.push(context.network)
         await hooks.created(`sandbox-${spec.id}`)
         entered.resolve()
         await finish.promise
         return { code: 0, outputs: [{ path: "../escape", staging: tmp.path, size: 0 }] }
       },
-      recover: async (_context, spec, id, hooks) => {
+      recover: async (context, spec, id, hooks) => {
         calls.recover++
+        executionNetworks.push(context.network)
         expect(id).toBe(`sandbox-${spec.id}`)
         expect(await ComputeJobs.log(spec.id, { root, workspace: tmp.path })).toBe("last visible output\n")
         await hooks.output("recovered output\n")
@@ -1599,6 +1665,8 @@ describe("ComputeJobs Modal governance", () => {
       target: { kind: "modal" as const },
       gpu: "none",
       artifacts: ["result.txt"],
+      capability,
+      capability_execution,
     }
     const prepared = await Instance.provide({
       directory: tmp.path,
@@ -1614,14 +1682,19 @@ describe("ComputeJobs Modal governance", () => {
       fn: () =>
         ComputeJobs.start(
           { ...request, sessionID: prepared.session.id, approval: prepared.plan.digest },
-          { root, workspace: tmp.path, modal, credentials, provider },
+          { root, workspace: tmp.path, modal, credentials: unrestrictedCredentials, provider },
         ),
     })
     await entered.promise
     expect(calls).toEqual({ run: 1, recover: 0, release: 0 })
 
     await Bun.write(path.join(root, "jobs", `${job.id}.log`), "last visible output\n")
-    const retry = ComputeJobs.retry(job.id, { root, workspace: tmp.path, credentials, provider })
+    const retry = ComputeJobs.retry(job.id, {
+      root,
+      workspace: tmp.path,
+      credentials: unrestrictedCredentials,
+      provider,
+    })
     const beforeFinish = await Promise.race([
       retry.then(
         () => "settled" as const,
@@ -1646,6 +1719,7 @@ describe("ComputeJobs Modal governance", () => {
     expect(await ComputeJobs.log(job.id, { root, workspace: tmp.path })).toBe("recovered output\n")
     expect(await Bun.file(path.join(job.cwd!, "result.txt")).text()).toBe("recovered")
     expect(calls).toEqual({ run: 1, recover: 1, release: 1 })
+    expect(executionNetworks).toEqual(["none", "none"])
   })
 
   test("retains a completed Modal Volume when its first control-plane download fails", async () => {

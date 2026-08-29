@@ -151,16 +151,20 @@ export namespace BioNemoHosted {
   export async function start(id: ID, sessionID: string, raw: unknown) {
     const built = prepare(id, raw)
     const { selected, bodyText, preview } = built
-    const existing = await BioNemoHostedDispatch.begin({ preview, sessionID })
-    if (existing.existing?.status === "succeeded" && existing.existing.result) return existing.existing.result
-    if (existing.existing?.status === "pending" || existing.existing?.status === "unknown") {
-      throw new Error(
-        `OpenScience previously recorded this exact hosted ${id} request and cannot prove whether NVIDIA received it before the earlier process stopped. It will not resend automatically. Dispatch ${existing.existing.dispatch_id} is still ${existing.existing.status}.`,
-      )
-    }
     const fields = await resolveCredentialFields("nvidia")
     const key = fields?.api_key?.trim()
     if (!key) throw new Error(`NVIDIA NIM credential is not configured for ${id}`)
+    const dispatch = await BioNemoHostedDispatch.begin({ preview, sessionID })
+    if (dispatch.existing?.status === "succeeded" && dispatch.existing.result)
+      return BioNemoHostedResult.parse({
+        ...dispatch.existing.result,
+        dispatch_id: dispatch.existing.result.dispatch_id ?? dispatch.existing.dispatch_id,
+      })
+    if (dispatch.existing?.status === "pending" || dispatch.existing?.status === "unknown") {
+      throw new Error(
+        `OpenScience previously recorded this exact hosted ${id} request and cannot prove whether NVIDIA received it before the earlier process stopped. It will not resend automatically. Dispatch ${dispatch.existing.dispatch_id} is still ${dispatch.existing.status}.`,
+      )
+    }
     const started = new Date().toISOString()
     let response: Response | undefined
     let provider_request_id: string | undefined
@@ -223,6 +227,7 @@ export namespace BioNemoHosted {
         files.push(target)
       }
       const completed = BioNemoHostedResult.parse({
+        dispatch_id: dispatch.created.dispatch_id,
         capability: id,
         provider: "nvidia",
         endpoint: selected.endpoint,

@@ -378,6 +378,10 @@ export namespace ComputeJobs {
     return context
   }
 
+  function modalExecutionContext(job: Pick<Job, "capability_execution">, context: ModalAdapter.Context) {
+    return job.capability_execution ? { ...context, network: "none" as const } : context
+  }
+
   type Runtime = {
     process?: ChildProcess
     detached: boolean
@@ -2796,6 +2800,7 @@ export namespace ComputeJobs {
     provider: ModalProvider,
     secrets?: Record<string, string>,
   ): Promise<void> {
+    const executionContext = modalExecutionContext(job, context)
     const log = path.join(logsOf(scope.root), `${job.id}.log`)
     await fs.mkdir(logsOf(scope.root), { recursive: true })
     await event(scope.root, job.id, "Dispatching governed job to Modal")
@@ -2805,7 +2810,7 @@ export namespace ComputeJobs {
       const draft = move(jobs[index]!, { type: "start" }, { started_at: new Date().toISOString() })
       jobs[index] = Job.parse({ ...draft, provenance: provenance(draft) })
     })
-    const result = await provider.run(context, modalSpec(job, files, scope, secrets), {
+    const result = await provider.run(executionContext, modalSpec(job, files, scope, secrets), {
       created: async (id) => {
         const started = await change(scope.root, (jobs) => {
           const index = jobs.findIndex((item) => item.id === job.id)
@@ -2823,7 +2828,7 @@ export namespace ComputeJobs {
         await (mode === "append" ? appendSnapshot(log, value) : snapshot(log, value))
       },
     })
-    await completeModal(job, scope, context, result, provider)
+    await completeModal(job, scope, executionContext, result, provider)
   }
 
   async function recoverModal(
@@ -2833,11 +2838,12 @@ export namespace ComputeJobs {
     provider: ModalProvider,
     attached?: () => void,
   ): Promise<void> {
+    const executionContext = modalExecutionContext(job, context)
     const log = path.join(logsOf(scope.root), `${job.id}.log`)
     await fs.mkdir(logsOf(scope.root), { recursive: true })
     await event(scope.root, job.id, "Recovering Modal job after OpenScience restart")
     const spec = modalSpec(job, [], scope)
-    const id = job.remote_id ?? (await provider.find(context, job.id, spec.project))
+    const id = job.remote_id ?? (await provider.find(executionContext, job.id, spec.project))
     if (id && !job.remote_id) {
       await change(scope.root, (jobs) => {
         const index = jobs.findIndex((item) => item.id === job.id)
@@ -2855,7 +2861,7 @@ export namespace ComputeJobs {
       })
     }
     attached?.()
-    const result = await provider.recover(context, spec, id, {
+    const result = await provider.recover(executionContext, spec, id, {
       log: async (value) => {
         await event(scope.root, job.id, value)
       },
@@ -2863,7 +2869,7 @@ export namespace ComputeJobs {
         await (mode === "append" ? appendSnapshot(log, value) : snapshot(log, value))
       },
     })
-    await completeModal(Job.parse({ ...job, remote_id: id }), scope, context, result, provider)
+    await completeModal(Job.parse({ ...job, remote_id: id }), scope, executionContext, result, provider)
   }
 
   async function collectCancelledModal(
@@ -2872,16 +2878,17 @@ export namespace ComputeJobs {
     context: ModalAdapter.Context,
     provider: ModalProvider,
   ): Promise<void> {
+    const executionContext = modalExecutionContext(job, context)
     const expected = [...(job.artifact_patterns ?? []), ...(job.checkpoint_path ? [job.checkpoint_path] : [])]
     if (!expected.length) return
     const log = path.join(logsOf(scope.root), `${job.id}.log`)
     const spec = modalSpec(job, [], scope)
     const result = await (provider.collect
-      ? provider.collect(context, spec, {
+      ? provider.collect(executionContext, spec, {
           log: async (value) => event(scope.root, job.id, value),
           output: async (value, mode) => (mode === "append" ? appendSnapshot(log, value) : snapshot(log, value)),
         })
-      : provider.recover(context, spec, undefined, {
+      : provider.recover(executionContext, spec, undefined, {
           log: async (value) => event(scope.root, job.id, value),
           output: async (value, mode) => (mode === "append" ? appendSnapshot(log, value) : snapshot(log, value)),
         }))
