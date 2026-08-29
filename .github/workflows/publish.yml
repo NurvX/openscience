@@ -791,6 +791,33 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Notarize and staple signed macOS disk image
+        if: steps.existing.outputs.found != 'true' && inputs.release_mode == 'signed' && matrix.signing == 'mac'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          OPENSCIENCE_DMG: frontend/desktop/dist/${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          [[ -s "$OPENSCIENCE_DMG" ]] || {
+            echo "::error::electron-builder did not produce $OPENSCIENCE_DMG"
+            exit 1
+          }
+          codesign --verify --strict --verbose=2 "$OPENSCIENCE_DMG"
+          details="$(codesign -dv --verbose=4 "$OPENSCIENCE_DMG" 2>&1)"
+          grep -Fq 'Authority=Developer ID Application:' <<<"$details"
+          grep -Fxq "TeamIdentifier=$APPLE_TEAM_ID" <<<"$details"
+          xcrun notarytool submit "$OPENSCIENCE_DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+          xcrun stapler staple "$OPENSCIENCE_DMG"
+          xcrun stapler validate "$OPENSCIENCE_DMG"
+          spctl -a -t open --context context:primary-signature -vv "$OPENSCIENCE_DMG"
+
       - name: Build unsigned desktop installer
         if: steps.existing.outputs.found != 'true' && (inputs.release_mode == 'unsigned' || (inputs.release_mode == 'signed' && matrix.signing == 'windows' && steps.windows-signing.outputs.enabled != 'true'))
         shell: bash
