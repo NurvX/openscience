@@ -372,6 +372,24 @@ export namespace ComputeJobs {
     provider?: ModalProvider
   }
 
+  type TestHooks = {
+    beforeModalDeactivate?: (id: string) => void | Promise<void>
+  }
+
+  const hooks = { value: undefined as TestHooks | undefined }
+
+  /** Deterministic lifecycle barriers for Modal lease handoff regressions. */
+  export function testing(input: TestHooks) {
+    if (!process.env.OPENSCIENCE_TEST_HOME) throw new Error("Compute job test hooks are disabled outside tests")
+    const prior = hooks.value
+    hooks.value = input
+    return {
+      [Symbol.dispose]() {
+        if (hooks.value === input) hooks.value = prior
+      },
+    }
+  }
+
   async function modalContext(options: Options, message: string): Promise<ModalAdapter.Context> {
     const context = options.credentials ?? (await options.resolveCredentials?.())
     if (!context) throw new Error(message)
@@ -3137,8 +3155,13 @@ export namespace ComputeJobs {
   export async function release(id: string, options: Options = {}): Promise<Job> {
     const scope = await scoped(options)
     const key = keyOf(scope.root, id)
-    if (active.has(key)) throw new Error(`Compute job ${id} still has an active recovery`)
     const stored = await get(id, { root: scope.root, workspace: scope.workspace })
+    if (stored?.target.kind !== "modal" && active.has(key)) {
+      throw new Error(`Compute job ${id} still has an active recovery`)
+    }
+    if (stored?.target.kind === "modal" && !terminal.has(stored.status)) {
+      throw new Error(`Cancel compute job ${id} before releasing its resources`)
+    }
     if (stored?.target.kind === "ssh") {
       if (!terminal.has(stored.status)) throw new Error(`Cancel compute job ${id} before releasing its resources`)
       if (stored.status === "cancelled" && stored.lifecycle?.resource !== "closed") return cancelSsh(stored, scope)
@@ -3163,6 +3186,7 @@ export namespace ComputeJobs {
     return await operation.during(async () => {
       await using lease = await FileLease.acquire(modalLeaseOf(scope.root, id))
       return await lease.during(async () => {
+        if (active.has(key)) throw new Error(`Compute job ${id} still has an active recovery`)
         const job = await get(id, { root: scope.root, workspace: scope.workspace })
         if (!job) throw new Error(`Compute job ${id} was not found`)
         if (job.target.kind !== "modal" || !job.modal || !job.cwd) {
@@ -3436,7 +3460,13 @@ export namespace ComputeJobs {
               throw error
             } finally {
               setup.resolve()
-              if (activated) await deactivate(key)
+              if (activated) {
+                try {
+                  await hooks.value?.beforeModalDeactivate?.(job.id)
+                } finally {
+                  await deactivate(key)
+                }
+              }
             }
           })
           .finally(() => releaseLease(lease))
