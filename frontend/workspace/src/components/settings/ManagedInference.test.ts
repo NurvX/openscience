@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test"
-import { canSelectManaged, commitBilling, formatCreditBalance, walletBalanceLabel } from "./ManagedInference"
+import {
+  canSelectManaged,
+  commitBilling,
+  formatCreditBalance,
+  refreshAccount,
+  walletBalanceLabel,
+} from "./ManagedInference"
 
 const source = await Bun.file(new URL("./ManagedInference.tsx", import.meta.url)).text()
 
@@ -89,6 +95,19 @@ test("does not redirect the Managed choice and gives an explicit zero-balance ac
   expect(source).toContain('return "Turn on Ace"')
   expect(source).toContain('option.value === "managed" && !canSelectManaged(wallet())')
   expect(source).toContain("Add Wallet funds or turn on Ace to use Managed models")
+})
+
+test("refreshes wallet, billing, and providers immediately when the funding account changes", async () => {
+  const calls: string[] = []
+  await refreshAccount(
+    async () => calls.push("wallet"),
+    async () => calls.push("billing"),
+    async () => calls.push("providers"),
+  )
+
+  expect(calls).toEqual(["wallet", "billing", "providers"])
+  expect(source).toContain('window.addEventListener("openscience:account-changed", account)')
+  expect(source).toContain('window.removeEventListener("openscience:account-changed", account)')
 })
 
 // The provider catalog is intentionally not part of this helper. It is a
