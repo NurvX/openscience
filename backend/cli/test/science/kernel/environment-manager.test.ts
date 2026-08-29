@@ -149,6 +149,26 @@ fs.chmodSync(binary, 0o755)
 	    size: canonical.length,
 	    canonical: "macho_unsigned",
 	  }
+	  if (process.env.OPENSCIENCE_TEST_CROSS_PACKAGE_SOFTLINK === "1") {
+	    const targetRelative = path.join("bin", "locked-link-target")
+	    fs.writeFileSync(path.join(prefix, targetRelative), "locked target\\n")
+	    files[targetRelative.split(path.sep).join("/")] = crypto
+	      .createHash("sha256")
+	      .update(fs.readFileSync(path.join(prefix, targetRelative)))
+	      .digest("hex")
+	    const linkRelative = path.join("compiler_compat", "ld")
+	    fs.mkdirSync(path.dirname(path.join(prefix, linkRelative)), { recursive: true })
+	    const linkTarget = "../bin/locked-link-target"
+	    fs.symlinkSync(linkTarget, path.join(prefix, linkRelative))
+	    files[linkRelative.split(path.sep).join("/")] = {
+	      kind: "symlink",
+	      // Conda softlink metadata can describe the target used when the
+	      // source package was built rather than the target selected by this
+	      // exact multi-package lock.
+	      digest: "0".repeat(64),
+	      linkTarget,
+	    }
+	  }
 	  fs.writeFileSync(process.env.OPENSCIENCE_TEST_TRUSTED_OWNERSHIP, JSON.stringify({ version: 1, files, scripts: [] }))
 	}
 `,
@@ -353,6 +373,20 @@ test.skipIf(!capabilityPlatform())("attests the Conda prefix before isolated pip
     await current.dispose()
   }
 })
+
+test.skipIf(!capabilityPlatform())(
+  "accepts an exact cross-package softlink when its build-time target digest differs",
+  async () => {
+    const current = await profile()
+    try {
+      current.env.OPENSCIENCE_TEST_CROSS_PACKAGE_SOFTLINK = "1"
+      const inspected = JSON.parse((await run("task", current.env)).trim()) as { ready: boolean }
+      expect(inspected.ready).toBe(true)
+    } finally {
+      await current.dispose()
+    }
+  },
+)
 
 test.skipIf(!capabilityPlatform())("rejects an unowned .pth planted before the first Python invocation", async () => {
   const current = await profile()
