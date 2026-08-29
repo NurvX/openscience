@@ -76,7 +76,7 @@ openscience login          # connect this device once
 openscience wallet         # check Ace and the purchased wallet balance
 ```
 
-Ace is one optional on/off authorization, not a scheduled monthly plan. Turning it on is a **$0 authorization** backed by the selected saved card; it does not buy credits or change the Wallet. One credit is $1 shared by credit-backed model calls and enhanced search. Usage is debited at the underlying OpenRouter provider price plus a 2% service margin. While Ace is on, a purchased Wallet balance below **5 credits** triggers one fixed **20-credit** reload plus the disclosed processing fee. Turning Ace off stops future charges and preserves saved Stripe cards, Wallet value, and billing history. There is no separate auto-reload control. BYOK, local-model, and eligible ChatGPT/Codex usage remain separate and never debit the Wallet.
+Ace is one optional on/off authorization, not a scheduled monthly plan. Turning it on is a **$0 authorization** backed by the selected saved card; it does not buy credits or change the Wallet. One credit is $1 shared by credit-backed model calls and enhanced search. Usage is debited at the underlying OpenRouter provider price plus a 2% service margin. While Ace is on, a purchased Wallet balance below **5 credits** triggers one fixed reload of **20 credits** plus the disclosed processing fee. Turning Ace off stops future charges and preserves saved Stripe cards, Wallet value, and billing history. There is no separate auto-reload control. BYOK, local-model, and eligible ChatGPT/Codex usage remain separate and never debit the Wallet.
 
 ## How it works
 
