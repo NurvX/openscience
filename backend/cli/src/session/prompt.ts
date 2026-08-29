@@ -85,6 +85,7 @@ import { Auth } from "@/auth"
 import { SafeFileIO } from "@/file/safe-io"
 import { OutboundTelemetry } from "@/telemetry/outbound"
 import { resolveTelemetryRoute } from "./billing-gate"
+import { UpdateQuiescence } from "@/process/update-quiescence"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -207,6 +208,13 @@ export namespace SessionPrompt {
     }
   }
 
+  const processActive = new Set<string>()
+  const activityKey = (sessionID: string) => `${Instance.project.id}:${sessionID}`
+
+  export function activeCount() {
+    return processActive.size
+  }
+
   const state = Instance.state(
     () => {
       const data: Record<
@@ -222,7 +230,8 @@ export namespace SessionPrompt {
       return data
     },
     async (current) => {
-      for (const item of Object.values(current)) {
+      for (const [sessionID, item] of Object.entries(current)) {
+        processActive.delete(activityKey(sessionID))
         item.abort.abort()
         for (const callback of item.callbacks) {
           callback.reject()
@@ -473,6 +482,7 @@ export namespace SessionPrompt {
       abort: controller,
       callbacks: [],
     }
+    processActive.add(activityKey(sessionID))
     return controller.signal
   }
 
@@ -492,6 +502,7 @@ export namespace SessionPrompt {
       item.reject()
     }
     delete s[sessionID]
+    processActive.delete(activityKey(sessionID))
     // Flush any coalesced (debounced) streaming part writes now, so the final
     // text/reasoning content is durable the moment the turn goes idle. cancel()
     // is sync (invoked from a `using` disposer), so this can't be awaited; log
@@ -1157,6 +1168,7 @@ export namespace SessionPrompt {
             await PermissionNext.ask({
               ...req,
               sessionID: sessionID,
+              mode: (await ProjectAccess.status(Instance.project)).mode,
               ruleset: PermissionNext.merge(taskAgent.permission, session.permission ?? []),
             })
           },
@@ -1634,7 +1646,14 @@ export namespace SessionPrompt {
 
   export const loop = fn(Identifier.schema("session"), async (sessionID) => {
     const session = await Session.get(sessionID)
-    const abort = start(sessionID)
+    const abort = await AuthoritySignal.exclusive(async () => {
+      const release = UpdateQuiescence.enter()
+      try {
+        return start(sessionID)
+      } finally {
+        release()
+      }
+    })
     if (!abort) {
       return new Promise<MessageV2.WithParts>((resolve, reject) => {
         const callbacks = state()[sessionID].callbacks
@@ -1645,7 +1664,7 @@ export namespace SessionPrompt {
     using _ = defer(() => cancel(sessionID, abort))
 
     await using lease = await FileLease.acquire(loopLeasePath(session.projectID, sessionID), LOOP_LEASE_TIMEOUT, abort)
-    return lease.during(async () => {
+    return await lease.during(async () => {
       try {
         return await execute(sessionID, session, abort)
       } finally {
@@ -1806,11 +1825,13 @@ export namespace SessionPrompt {
         input.processor.toolMetadata(options.toolCallId, args, val)
       },
       async ask(req) {
+        const ruleset = await currentPermission()
         await PermissionNext.ask({
           ...req,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: await currentPermission(),
+          mode: accessAuthority.mode,
+          ruleset,
         })
       },
     })
@@ -2065,6 +2086,34 @@ export namespace SessionPrompt {
     return { profile: "execute" as const }
   }
 
+  export function decisionPolicy(autonomy: MessageV2.DelegationSettings["autonomy"]) {
+    if (autonomy === "interactive") {
+      return {
+        routine: "decide",
+        consequential: "ask",
+        blocked: "ask",
+        instruction:
+          "At planning and consequential choice points, pause and use the question tool with reason planning or consequential. Put one recommended option first, explain its impact, and keep routine implementation details moving.",
+      } as const
+    }
+    if (autonomy === "autonomous") {
+      return {
+        routine: "decide",
+        consequential: "decide",
+        blocked: "ask",
+        instruction:
+          "Choose the recommended path for routine and consequential decisions, record the assumption in the trace, and use the question tool only with reason missing_authority when required authority or input makes progress impossible.",
+      } as const
+    }
+    return {
+      routine: "decide",
+      consequential: "ask",
+      blocked: "ask",
+      instruction:
+        "Choose safe, reversible options yourself. Use the question tool with reason consequential only when ambiguity materially changes scope or outcome, and put one recommended option first with its impact.",
+    } as const
+  }
+
   export function researchEffortReminder(value: unknown, delegation?: unknown, enabled?: boolean) {
     const effort = MessageV2.resolveResearchEffort(value)
     const settings = MessageV2.resolveDelegationSettings(delegation, { effort, enabled })
@@ -2080,16 +2129,11 @@ export namespace SessionPrompt {
           : settings.level === "high"
             ? "Delegation is High. Aggressively parallelize independent research and verification when useful."
             : "Delegation is Normal. Naturally parallelize genuinely independent work when it improves the result."
-    const interaction =
-      settings.autonomy === "interactive"
-        ? "Ask one concise clarification when a meaningful ambiguity could change the scope or deliverable; do not ask about routine details."
-        : settings.autonomy === "autonomous"
-          ? "Complete the task within current permissions, state important assumptions, and ask only when blocked or missing authority or required input."
-          : "Proceed with safe, reversible assumptions and ask only before consequential or materially scope-changing choices."
+    const interaction = decisionPolicy(settings.autonomy)
     return [
       `Research effort: ${effort.toUpperCase()}. ${posture}`,
       `${delegationPosture} The model may use as many useful workers as available machine capacity permits, and must integrate their findings in the lead response.`,
-      `Independence: ${settings.autonomy}. ${interaction} Apply this posture to the lead and workers. It never overrides the permission mode.`,
+      `Independence: ${settings.autonomy}. ${interaction.instruction} Apply this posture to the lead and workers. It never overrides the permission mode.`,
     ].join("\n")
   }
 
@@ -2161,11 +2205,13 @@ export namespace SessionPrompt {
   async function createUserMessage(input: PromptInput) {
     const agent = await Agent.get(input.agent ?? (await Agent.defaultAgent()))
     const session = await Session.get(input.sessionID)
+    const access = await ProjectAccess.status(Instance.project)
     const ruleset = PermissionNext.merge(agent.permission, session.permission ?? [])
     const ask = async (req: Omit<PermissionNext.Request, "id" | "sessionID" | "tool">) => {
       await PermissionNext.ask({
         ...req,
         sessionID: input.sessionID,
+        mode: access.mode,
         ruleset,
       })
     }
@@ -3437,6 +3483,7 @@ or internal reasoning. Call plan_exit when the plan is ready for approval.`)
                   await PermissionNext.ask({
                     ...req,
                     sessionID: input.sessionID,
+                    mode: (await ProjectAccess.status(Instance.project)).mode,
                     ruleset: PermissionNext.merge(commandAgent.permission, session.permission ?? []),
                   })
                 },

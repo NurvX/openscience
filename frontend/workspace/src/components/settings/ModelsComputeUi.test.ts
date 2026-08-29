@@ -18,13 +18,14 @@ describe("models and compute settings UI contract", () => {
     expect(source).not.toContain("managed-inference-${option.value")
     expect(source).toContain("aria-pressed=")
     expect(source).toContain("setMode(value)")
-    expect(source).toContain("setBusy(false)")
-    expect(source.indexOf("setBusy(false)")).toBeLessThan(source.indexOf(".refreshProviders()"))
+    const update = source.slice(source.indexOf("const update ="), source.indexOf("// The mode can change"))
+    expect(update).toContain("setBusy(false)")
+    expect(update.indexOf("setBusy(false)")).toBeLessThan(update.indexOf("void sync("))
 
     expect(source.indexOf('title: "BYOK / Subscription"')).toBeLessThan(source.indexOf('title: "Managed"'))
     for (const description of [
       "Use connected provider keys or models included with an eligible subscription.",
-      "Use your Ace balance for supported models without configuring a provider key.",
+      "Use your purchased Wallet balance for supported models without configuring a provider key.",
     ]) {
       expect(source.split(description)).toHaveLength(2)
     }
@@ -75,6 +76,7 @@ describe("models and compute settings UI contract", () => {
     expect(models).toContain("`saved:${modelRouteValue(selected)}`")
     expect(models).toContain("· {provider()}")
     expect(models).toContain("delegation_worker_model: option.model ?? null")
+    expect(models).toContain("if (sameDelegationModel(previous.delegation_worker_model, option.model)) return")
     expect(models).toContain("publishCapabilityPreferences(saved)")
     expect(models).toContain("<Show when={catalogOpen()}>")
     expect(models).toContain("<SearchInput")
@@ -120,6 +122,9 @@ describe("models and compute settings UI contract", () => {
     expect(source).toContain('{environment("python")?.ready ? "Ready" : "Setup needed"}')
     expect(source).toContain('{environment("r")?.ready ? "Ready" : "Setup needed"}')
     expect(source).toContain("Choose where agent-managed Python, R, shell, and batch work runs.")
+    expect(source).toContain("Test connection admits only administrator-managed executables")
+    expect(source).toContain("ordinary Homebrew and pip installs remain credential-only")
+    expect(source).not.toContain("Enabled for a provider-specific native broker")
     expect(source).not.toContain("Coming soon")
     expect(source).toContain("Pin a host key, then dispatch staged jobs through your active SSH agent.")
     expect(source).toContain("Ready to dispatch")

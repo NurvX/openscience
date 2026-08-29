@@ -107,6 +107,37 @@ describe("Storage Settings integration", () => {
     await script(workspace, source)
   })
 
+  test("refresh=1 bypasses a fresh usage result without starting duplicate background scans", async () => {
+    const workspace = await root()
+    const source = [
+      `import { StorageRoutes } from ${JSON.stringify(routes)}`,
+      `import { Global } from ${JSON.stringify(globalModule)}`,
+      'import fs from "node:fs/promises"',
+      'import path from "node:path"',
+      'const first = path.join(Global.Path.data, "first")',
+      "await fs.mkdir(first, { recursive: true })",
+      'await fs.writeFile(path.join(first, "payload.bin"), Buffer.alloc(4096, 1))',
+      'const settle = async (url = "/") => {',
+      "  let body = await (await StorageRoutes().request(url)).json()",
+      "  const deadline = Date.now() + 10_000",
+      '  while (body.scanning && Date.now() < deadline) { await Bun.sleep(10); body = await (await StorageRoutes().request("/")).json() }',
+      '  if (body.scanning) throw new Error("usage scan did not settle")',
+      "  return body",
+      "}",
+      "const initial = await settle()",
+      'if (!initial.entries.some((item) => item.name === "first")) throw new Error("initial entry missing")',
+      'const second = path.join(Global.Path.data, "second")',
+      "await fs.mkdir(second)",
+      'await fs.writeFile(path.join(second, "payload.bin"), Buffer.alloc(4096, 2))',
+      'const cached = await (await StorageRoutes().request("/")).json()',
+      'if (cached.scanning) throw new Error("fresh cache unexpectedly started another scan")',
+      'if (cached.entries.some((item) => item.name === "second")) throw new Error("fresh cache unexpectedly changed")',
+      'const refreshed = await settle("/?refresh=1")',
+      'if (!refreshed.entries.some((item) => item.name === "second")) throw new Error("explicit refresh did not bypass the fresh result TTL")',
+    ].join("\n")
+    await script(workspace, source)
+  })
+
   test("reports scan failures instead of presenting unreadable storage as empty", async () => {
     if (process.platform === "win32") return
     const workspace = await root()
@@ -126,6 +157,13 @@ describe("Storage Settings integration", () => {
       '  if (body.scanning) throw new Error("usage scan did not settle")',
       '  if (!body.scan_error) throw new Error("unreadable storage was silently reported as a successful scan")',
       "} finally { await fs.chmod(blocked, 0o700) }",
+      'const cached = await (await StorageRoutes().request("/")).json()',
+      'if (cached.scanning || !cached.scan_error) throw new Error("the ordinary request did not honor the error retry TTL")',
+      'let retried = await (await StorageRoutes().request("/?refresh=1")).json()',
+      'if (!retried.scanning || retried.scan_error) throw new Error("explicit retry did not start a truthful fresh scan")',
+      "const deadline = Date.now() + 10_000",
+      'while (retried.scanning && Date.now() < deadline) { await Bun.sleep(20); retried = await (await StorageRoutes().request("/")).json() }',
+      'if (retried.scanning || retried.scan_error) throw new Error("explicit retry did not recover after the directory became readable")',
     ].join("\n")
     await script(workspace, source)
   })
@@ -141,6 +179,93 @@ describe("Storage Settings integration", () => {
       "if (nested.status !== 409) throw new Error(`expected nested 409, got ${nested.status}: ${await nested.text()}`)",
     ].join("\n")
     await script(workspace, source)
+  })
+
+  test("rejects a destination without copy capacity plus the safety reserve before staging", async () => {
+    const workspace = await root()
+    const target = path.join(workspace, "relocated")
+    const source = [
+      `import { StorageRoutes } from ${JSON.stringify(routes)}`,
+      `import { Global } from ${JSON.stringify(globalModule)}`,
+      'import fs from "node:fs/promises"',
+      'import path from "node:path"',
+      "const target = process.argv.at(-1)",
+      "const volume = await fs.statfs(path.dirname(target))",
+      "const available = Number(volume.bavail) * Number(volume.bsize)",
+      'const sparse = path.join(Global.Path.data, "capacity-preflight.sparse")',
+      'await fs.writeFile(sparse, "")',
+      "await fs.truncate(sparse, available + 512 * 1024 * 1024)",
+      'const response = await StorageRoutes().request("/location", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: target }) })',
+      "if (response.status !== 409) throw new Error(`expected capacity rejection, got ${response.status}: ${await response.text()}`)",
+      "const body = await response.text()",
+      'if (!body.includes("safety reserve")) throw new Error(`capacity error was not actionable: ${body}`)',
+      'if (await Bun.file(path.join(Global.Path.config, "data-relocation.json")).exists()) throw new Error("capacity failure created a transaction journal")',
+      'if ((await fs.readdir(path.dirname(target))).some((name) => name.startsWith(".relocated.openscience-"))) throw new Error("capacity failure created a staging directory")',
+    ].join("\n")
+    await script(workspace, source, [target])
+  })
+
+  test("resumes a durably published transaction after the original owner disappears", async () => {
+    const workspace = await root()
+    const target = path.join(workspace, "relocated")
+    const source = [
+      `import { StorageRoutes } from ${JSON.stringify(routes)}`,
+      `import { Global } from ${JSON.stringify(globalModule)}`,
+      'import fs from "node:fs/promises"',
+      'import path from "node:path"',
+      "const requested = process.argv.at(-1)",
+      "const target = path.join(await fs.realpath(path.dirname(requested)), path.basename(requested))",
+      "const sourceRoot = await fs.realpath(Global.Path.data)",
+      'await fs.mkdir(path.join(sourceRoot, "storage"), { recursive: true })',
+      'await fs.writeFile(path.join(sourceRoot, "storage", "recovered.json"), JSON.stringify({ recovered: true }))',
+      "const id = crypto.randomUUID()",
+      "const stage = path.join(path.dirname(target), `.${path.basename(target)}.openscience-${id}`)",
+      "await fs.cp(sourceRoot, stage, { recursive: true, dereference: false })",
+      "const now = new Date().toISOString()",
+      'await fs.writeFile(path.join(Global.Path.config, "data-relocation.json"), JSON.stringify({ version: 1, id, mode: "relocate", source: sourceRoot, target, stage, phase: "publishing", replace_empty: false, copied: { files: 1, bytes: 18 }, created_at: now, updated_at: now, owner: { pid: 999999, identity: "0".repeat(64) } }))',
+      'let usage = await (await StorageRoutes().request("/")).json()',
+      'if (usage.relocation?.phase !== "publishing" || usage.relocation?.active !== false) throw new Error(`interrupted transaction state was not exposed: ${JSON.stringify(usage.relocation)}`)',
+      'const response = await StorageRoutes().request("/location", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: target }) })',
+      "if (response.status !== 200) throw new Error(`recovery failed ${response.status}: ${await response.text()}`)",
+      'if ((await Global.Path.dataTarget) !== await fs.realpath(target)) throw new Error("recovery did not switch the active root")',
+      'if (!(await Bun.file(path.join(Global.Path.data, "storage", "recovered.json")).json()).recovered) throw new Error("recovered data is missing")',
+      'usage = await (await StorageRoutes().request("/")).json()',
+      'if (usage.relocation !== null) throw new Error("completed recovery left a transaction journal")',
+    ].join("\n")
+    await script(workspace, source, [target])
+  })
+
+  test("recovers an interrupted reset without losing the previous default or custom safety copy", async () => {
+    const workspace = await root()
+    const custom = path.join(workspace, "custom")
+    const source = [
+      `import { StorageRoutes } from ${JSON.stringify(routes)}`,
+      `import { Global } from ${JSON.stringify(globalModule)}`,
+      'import fs from "node:fs/promises"',
+      'import path from "node:path"',
+      "const requested = process.argv.at(-1)",
+      "const custom = path.join(await fs.realpath(path.dirname(requested)), path.basename(requested))",
+      'await fs.writeFile(path.join(Global.Path.data, "old-default.txt"), "old default")',
+      'let response = await StorageRoutes().request("/location", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: custom }) })',
+      "if (response.status !== 200) throw new Error(`setup move failed: ${await response.text()}`)",
+      'await fs.writeFile(path.join(Global.Path.data, "custom-era.txt"), "custom era")',
+      "const sourceRoot = await fs.realpath(Global.Path.data)",
+      'const target = await fs.realpath(path.join(Global.Path.home, ".openscience"))',
+      "const id = crypto.randomUUID()",
+      "const stage = path.join(path.dirname(target), `.${path.basename(target)}.openscience-${id}`)",
+      "await fs.cp(sourceRoot, stage, { recursive: true, dereference: false })",
+      "const backup = `${target}.pre-reset-test-${id}`",
+      "const now = new Date().toISOString()",
+      'await fs.writeFile(path.join(Global.Path.config, "data-relocation.json"), JSON.stringify({ version: 1, id, mode: "reset", source: sourceRoot, target, stage, phase: "publishing", replace_empty: false, copied: { files: 2, bytes: 20 }, backup, created_at: now, updated_at: now, owner: { pid: 999999, identity: "0".repeat(64) } }))',
+      'response = await StorageRoutes().request("/location", { method: "DELETE" })',
+      "if (response.status !== 200) throw new Error(`reset recovery failed: ${await response.text()}`)",
+      "const body = await response.json()",
+      "if (body.backup !== backup) throw new Error(`wrong recovery backup: ${JSON.stringify(body)}`)",
+      'if (await Bun.file(path.join(Global.Path.data, "custom-era.txt")).text() !== "custom era") throw new Error("custom-era data was lost")',
+      'if (await Bun.file(path.join(backup, "old-default.txt")).text() !== "old default") throw new Error("previous default was lost")',
+      'if (await Bun.file(path.join(custom, "custom-era.txt")).text() !== "custom era") throw new Error("custom safety copy was removed")',
+    ].join("\n")
+    await script(workspace, source, [custom])
   })
 
   test("preserves workspace lockfiles and SQLite journals while dropping app transients", async () => {

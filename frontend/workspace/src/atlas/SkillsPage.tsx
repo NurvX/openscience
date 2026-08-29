@@ -15,16 +15,25 @@ import {
 } from "solid-js"
 import { Switch } from "@synsci/ui/switch"
 import { Icon } from "@synsci/ui/icon"
-import type { IconProps } from "@synsci/ui/icon"
 import { showToast } from "@synsci/ui/toast"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { usePlatform } from "@/context/platform"
 import { useGlobalSync } from "@/context/global-sync"
 import type { Config } from "@synsci/sdk/v2/client"
 import { installFromGit } from "./skills-settings"
-import { restoreExactSkillPermission, skillAction, skillPermissionChange, visibleSkills } from "./skill-permissions"
+import {
+  restoreExactSkillPermission,
+  setSkillPinned,
+  skillCatalogSnapshot,
+  skillPermissionChange,
+  skillPreferences,
+  SKILL_PREFERENCES_EVENT,
+} from "./skill-permissions"
 import "./skills-page.css"
 import { SearchInput, FilterMenu, AddMenu, EmptyState, FormField, FormButton } from "@/components/settings/_shared"
+import { skillIconFor } from "./skill-icon"
+
+export { skillIconFor } from "./skill-icon"
 
 interface Skill {
   name: string
@@ -34,6 +43,8 @@ interface Skill {
   category?: string
   tags?: string[]
   entry?: boolean
+  permission_action?: "allow" | "ask" | "deny"
+  recommended?: boolean
 }
 
 const SKILL_CACHE_KEY = "openscience.skills.catalog.v1"
@@ -91,59 +102,6 @@ function sourceOf(skill: Skill): Source {
   return "default"
 }
 
-type SkillIdentity = Pick<Skill, "name" | "description" | "category" | "tags">
-
-const CATEGORY_ICON: Record<string, IconProps["name"]> = {
-  biology: "activity",
-  chemistry: "flask",
-  physics: "atom",
-  quantum: "sparkles",
-  "ml-training": "cpu",
-  "ml-inference": "models",
-  databases: "server",
-  "llm-tools": "brain",
-  coding: "code",
-  writing: "pencil-line",
-  research: "magnifying-glass",
-  "data-engineering": "braces",
-  "cloud-compute": "cloud",
-  visualization: "layout-grid",
-}
-
-const SKILL_ICON_RULES: Array<{ terms: string[]; icon: IconProps["name"] }> = [
-  { terms: ["microscopy", "bioimage", "imaging", "vision", "image"], icon: "photo" },
-  { terms: ["clinical", "decision support", "health", "medical"], icon: "checklist" },
-  { terms: ["genomic", "genome", "sequence", "biopython", "protein", "gene"], icon: "braces" },
-  { terms: ["literature", "citation", "paper", "publication"], icon: "book-open" },
-  { terms: ["plot", "chart"], icon: "layout-grid" },
-  { terms: ["database", "sql", "registry", "warehouse"], icon: "server" },
-  { terms: ["security", "safety", "permission", "audit"], icon: "shield" },
-  { terms: ["benchmark", "evaluation", "test", "review"], icon: "checklist" },
-  { terms: ["github", "git", "repository"], icon: "github" },
-  { terms: ["web", "browser", "scrape", "crawl"], icon: "window-cursor" },
-  { terms: ["notebook", "python", "r-language", "shell", "script"], icon: "console" },
-  { terms: ["presentation", "slide", "poster"], icon: "layout-grid" },
-]
-
-const FALLBACK_ICONS: IconProps["name"][] = ["book-open", "task", "code-lines", "flask", "models", "folder-tree"]
-
-/**
- * Prefer a specific subject icon, then the declared category, and finally a
- * stable name-derived fallback. The catalog therefore remains scannable even
- * when third-party skills omit optional metadata.
- */
-export function skillIconFor(skill: SkillIdentity): IconProps["name"] {
-  const category = skill.category?.trim().toLowerCase()
-  const signature = [skill.name, skill.description, ...(skill.tags ?? [])].filter(Boolean).join(" ").toLowerCase()
-  const specific = SKILL_ICON_RULES.find((rule) => rule.terms.some((term) => signature.includes(term)))
-  if (specific) return specific.icon
-  if (category && CATEGORY_ICON[category]) return CATEGORY_ICON[category]
-
-  let hash = 0
-  for (const char of category || skill.name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
-  return FALLBACK_ICONS[hash % FALLBACK_ICONS.length]!
-}
-
 function displayLabel(value: string) {
   const words = value.replace(/[-_]+/g, " ").trim()
   const label = /[A-Z]/.test(words) && words === words.toUpperCase() ? words.toLowerCase() : words
@@ -178,6 +136,10 @@ export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
   const [view, setView] = createSignal<View>("list")
   const [busy, setBusy] = createSignal(false)
   const [visibleRows, setVisibleRows] = createSignal(INITIAL_SKILL_ROWS)
+  const storage = typeof localStorage === "undefined" ? undefined : localStorage
+  const initialPreferences = skillPreferences(storage)
+  const [pinned, setPinned] = createSignal(initialPreferences.pinned)
+  const [recent, setRecent] = createSignal(initialPreferences.recent)
   const [permissionPending, setPermissionPending] = createSignal<Record<string, number>>({})
   const permissionVersions = new Map<string, number>()
   let permissionWrites = Promise.resolve()
@@ -187,7 +149,14 @@ export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
   // Enable/disable is the real `permission.skill` config: a skill an agent can
   // load is one whose skill-permission isn't "deny" (the skill tool filters the
   // rest), so this toggle is effective, not cosmetic.
-  const enabled = (name: string) => skillAction(sync.data.config.permission, name) !== "deny"
+  const catalog = createMemo(() =>
+    skillCatalogSnapshot(skills() ?? initialSkills, {
+      permission: sync.data.config.permission,
+      pinned: pinned(),
+      recent: recent(),
+    }),
+  )
+  const enabled = (name: string) => catalog().action(name) !== "deny"
 
   function markPermissionPending(name: string, delta: number) {
     setPermissionPending((current) => {
@@ -227,8 +196,11 @@ export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
     permissionWrites = permissionWrites.then(persist, persist)
   }
 
-  const all = createMemo(() => visibleSkills(skills() ?? initialSkills, []))
-  const enabledCount = createMemo(() => all().filter((s) => enabled(s.name)).length)
+  const all = createMemo(() => catalog().library)
+  const enabledCount = createMemo(() => catalog().allowed.length)
+  const shortlistCount = createMemo(() => catalog().shortlist.length)
+  const pinnedNames = createMemo(() => new Set(catalog().pinned.map((skill) => skill.name)))
+  const recentNames = createMemo(() => new Set(catalog().recent.map((skill) => skill.name)))
 
   const categories = createMemo(() => {
     const counts = new Map<string, number>()
@@ -311,6 +283,14 @@ export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
   })
 
   onMount(() => {
+    const updatePreferences = () => {
+      const next = skillPreferences(storage)
+      setPinned(next.pinned)
+      setRecent(next.recent)
+    }
+    globalThis.addEventListener(SKILL_PREFERENCES_EVENT, updatePreferences)
+    onCleanup(() => globalThis.removeEventListener(SKILL_PREFERENCES_EVENT, updatePreferences))
+
     const panel = workspaceElement?.closest<HTMLElement>("[data-settings-panel]")
     if (!panel) return
     const observer = new MutationObserver(() => {
@@ -351,9 +331,11 @@ export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
             </Show>
           </div>
           <div class="skills-workspace__summary" aria-live="polite">
-            <span>{visibleSummary()}</span>
+            <span>Library {visibleSummary()}</span>
             <span aria-hidden="true">·</span>
-            <span>{enabledCount()} enabled</span>
+            <span>{enabledCount()} allowed</span>
+            <span aria-hidden="true">·</span>
+            <span>{shortlistCount()} recommended or recent</span>
           </div>
         </div>
 
@@ -530,8 +512,14 @@ export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
                                 <SkillRow
                                   skill={skill}
                                   on={enabled(skill.name)}
+                                  pinned={pinnedNames().has(skill.name)}
+                                  recent={recentNames().has(skill.name)}
                                   saving={Boolean(permissionPending()[skill.name])}
                                   onToggle={(v) => toggle(skill.name, v)}
+                                  onPin={(value) => {
+                                    setSkillPinned(skill.name, value, storage)
+                                    setPinned(skillPreferences(storage).pinned)
+                                  }}
                                 />
                               )}
                             </For>
@@ -573,7 +561,51 @@ export default function SkillsPage(props: { embedded?: boolean }): JSX.Element {
   }
 }
 
-function SkillRow(props: { skill: Skill; on: boolean; saving: boolean; onToggle: (v: boolean) => void }): JSX.Element {
+export function SkillStateBadges(props: {
+  allowed: boolean
+  pinned?: boolean
+  recent?: boolean
+  recommended?: boolean
+  loaded?: boolean
+}): JSX.Element {
+  return (
+    <div class="skills-workspace__tags" aria-label="Skill states">
+      <span class="settings-chip" data-state={props.allowed ? "allowed" : "library"}>
+        {props.allowed ? "Allowed" : "Library only"}
+      </span>
+      <Show when={props.loaded}>
+        <span class="settings-chip" data-state="loaded">
+          Loaded this turn
+        </span>
+      </Show>
+      <Show when={props.pinned}>
+        <span class="settings-chip" data-state="pinned">
+          Pinned
+        </span>
+      </Show>
+      <Show when={!props.pinned && props.recent}>
+        <span class="settings-chip" data-state="recent">
+          Recent
+        </span>
+      </Show>
+      <Show when={!props.pinned && !props.recent && props.recommended}>
+        <span class="settings-chip" data-state="recommended">
+          Recommended
+        </span>
+      </Show>
+    </div>
+  )
+}
+
+function SkillRow(props: {
+  skill: Skill
+  on: boolean
+  pinned: boolean
+  recent: boolean
+  saving: boolean
+  onToggle: (v: boolean) => void
+  onPin: (v: boolean) => void
+}): JSX.Element {
   const source = () => sourceOf(props.skill)
   return (
     <li
@@ -584,6 +616,9 @@ function SkillRow(props: { skill: Skill; on: boolean; saving: boolean; onToggle:
       aria-busy={props.saving ? "true" : undefined}
     >
       <div class="skills-workspace__identity">
+        <span class="skills-workspace__skill-icon" aria-hidden="true">
+          <Icon name={skillIconFor(props.skill)} size="small" />
+        </span>
         <div class="skills-workspace__identity-copy">
           <strong title={props.skill.name}>{displayLabel(props.skill.name)}</strong>
           <span>
@@ -596,17 +631,42 @@ function SkillRow(props: { skill: Skill; on: boolean; saving: boolean; onToggle:
 
       <div class="skills-workspace__details">
         <p data-empty={!props.skill.description}>{props.skill.description || "No description provided."}</p>
-        <Show when={(props.skill.tags ?? []).length > 0}>
-          <div class="skills-workspace__tags" aria-label="Skill tags">
-            <For each={(props.skill.tags ?? []).slice(0, 2)}>
-              {(tag) => <span class="settings-chip">{displayLabel(tag)}</span>}
-            </For>
+        <Show
+          when={
+            (props.skill.tags ?? []).length > 0 || props.on || props.pinned || props.recent || props.skill.recommended
+          }
+        >
+          <div class="skills-workspace__badges">
+            <SkillStateBadges
+              allowed={props.on}
+              pinned={props.pinned}
+              recent={props.recent}
+              recommended={props.skill.recommended}
+            />
+            <Show when={(props.skill.tags ?? []).length > 0}>
+              <div class="skills-workspace__tags" aria-label="Skill tags">
+                <For each={(props.skill.tags ?? []).slice(0, 2)}>
+                  {(tag) => <span class="settings-chip">{displayLabel(tag)}</span>}
+                </For>
+              </div>
+            </Show>
           </div>
         </Show>
       </div>
       <div class="skills-workspace__toggle">
+        <button
+          type="button"
+          class="skills-workspace__pin"
+          data-pinned={props.pinned ? "true" : "false"}
+          aria-pressed={props.pinned}
+          aria-label={`${props.pinned ? "Unpin" : "Pin"} ${props.skill.name}`}
+          title={`${props.pinned ? "Unpin" : "Pin"} from the / menu`}
+          onClick={() => props.onPin(!props.pinned)}
+        >
+          <Icon name={props.pinned ? "pin-filled" : "pin"} size="small" />
+        </button>
         <Switch data-action="skill-toggle" checked={props.on} onChange={props.onToggle} hideLabel>
-          {props.on ? `Disable ${props.skill.name}` : `Enable ${props.skill.name}`}
+          {props.on ? `Remove ${props.skill.name} permission` : `Allow ${props.skill.name}`}
         </Switch>
       </div>
     </li>

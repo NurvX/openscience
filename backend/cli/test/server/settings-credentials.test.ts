@@ -1,7 +1,11 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { CredentialsRoutes, reconcileAccountCredentialFields } from "../../src/server/routes/settings/credentials"
+import { JsonStore } from "../../src/util/jsonstore"
+import { OpenScience } from "../../src/openscience"
+import { Global } from "../../src/global"
 
 test("credential writes are encrypted, owner-only, and safe across processes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openscience-credentials-"))
@@ -62,6 +66,178 @@ test("credential writes are encrypted, owner-only, and safe across processes", a
   }
 })
 
+test("portable credential removal stays scrubbed when remote deletion succeeds but final cleanup fails", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openscience-credential-removal-"))
+  const storePath = path.join(Global.Path.data, "credentials.json")
+  const app = CredentialsRoutes()
+  const authenticated = spyOn(OpenScience, "isAuthenticated").mockResolvedValue(true)
+  const saveRemote = spyOn(OpenScience, "savePortableCredential").mockResolvedValue(true)
+  const deleteRemote = spyOn(OpenScience, "deletePortableCredential").mockResolvedValue(true)
+  const errors = spyOn(console, "error").mockImplementation(() => {})
+  let updateFailure: ReturnType<typeof spyOn> | undefined
+  try {
+    const saved = await app.request("/aws", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        fields: {
+          access_key_id: "AKIAREMOVAL",
+          secret_access_key: "aws-removal-sentinel",
+          region: "us-west-2",
+        },
+      }),
+    })
+    expect(saved.status).toBe(200)
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("aws-removal-sentinel")
+
+    const originalUpdate = JsonStore.update
+    let storeWrites = 0
+    updateFailure = spyOn(JsonStore, "update").mockImplementation(async (filepath, fn) => {
+      if (filepath === storePath && ++storeWrites === 2) throw new Error("injected local finalization failure")
+      return originalUpdate(filepath, fn)
+    })
+    const failed = await app.request("/aws", { method: "DELETE" })
+    expect(failed.status).toBe(500)
+    updateFailure.mockRestore()
+    updateFailure = undefined
+
+    expect(deleteRemote).toHaveBeenCalledTimes(1)
+    const tombstone = JSON.parse(await fs.readFile(storePath, "utf8")).aws
+    expect(tombstone).toMatchObject({
+      fields: {},
+      removal: { remote: true, token: expect.any(String) },
+    })
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined()
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+    const listed = await app.request("/")
+    expect((await listed.json()).services.find((service: { id: string }) => service.id === "aws")).toMatchObject({
+      connected: false,
+      set_fields: [],
+    })
+    await reconcileAccountCredentialFields({
+      aws: {
+        fields: {
+          access_key_id: "AKIASTALE",
+          secret_access_key: "stale-account-copy",
+        },
+      },
+    })
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+    const reconnect = await app.request("/aws", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fields: { access_key_id: "AKIABLOCKED", secret_access_key: "must-not-reconnect" } }),
+    })
+    expect(reconnect.status).toBe(500)
+    expect(saveRemote).toHaveBeenCalledTimes(1)
+
+    const verify = path.join(root, "verify-credential-tombstone.ts")
+    const routes = new URL("../../src/server/routes/settings/credentials.ts", import.meta.url).href
+    await Bun.write(
+      verify,
+      [
+        `import { applyCredentialEnv } from ${JSON.stringify(routes)}`,
+        `for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]) delete process.env[key]`,
+        `await applyCredentialEnv({ strict: true })`,
+        `if (process.env.AWS_ACCESS_KEY_ID || process.env.AWS_SECRET_ACCESS_KEY) throw new Error("tombstoned credential became admissible after restart")`,
+      ].join("\n"),
+    )
+    const child = Bun.spawn([process.execPath, verify], {
+      env: {
+        ...process.env,
+        OPENSCIENCE_DATA_DIR: Global.Path.data,
+        OPENSCIENCE_CONFIG_DIR: path.join(root, "restart-config"),
+        OPENSCIENCE_TEST_HOME: path.join(root, "restart-home"),
+        XDG_STATE_HOME: path.join(root, "restart-state"),
+        XDG_CACHE_HOME: path.join(root, "restart-cache"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [exit, error] = await Promise.all([child.exited, new Response(child.stderr).text()])
+    if (exit !== 0) throw new Error(error)
+
+    const retried = await app.request("/aws", { method: "DELETE" })
+    expect(retried.status).toBe(200)
+    expect(deleteRemote).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(await fs.readFile(storePath, "utf8")).aws).toBeUndefined()
+  } finally {
+    updateFailure?.mockRestore()
+    await Promise.resolve(app.request("/aws", { method: "DELETE" })).catch(() => undefined)
+    errors.mockRestore()
+    deleteRemote.mockRestore()
+    saveRemote.mockRestore()
+    authenticated.mockRestore()
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test("a concurrent portable PUT cannot recreate an account credential after DELETE", async () => {
+  const app = CredentialsRoutes()
+  const storePath = path.join(Global.Path.data, "credentials.json")
+  const saveEntered = Promise.withResolvers<void>()
+  const releaseSave = Promise.withResolvers<void>()
+  const deleteStarted = Promise.withResolvers<void>()
+  let authenticationChecks = 0
+  let remotePresent = false
+  const authenticated = spyOn(OpenScience, "isAuthenticated").mockImplementation(async () => {
+    authenticationChecks++
+    if (authenticationChecks >= 2) deleteStarted.resolve()
+    return true
+  })
+  const saveRemote = spyOn(OpenScience, "savePortableCredential").mockImplementation(async () => {
+    saveEntered.resolve()
+    await releaseSave.promise
+    remotePresent = true
+    return true
+  })
+  const deleteRemote = spyOn(OpenScience, "deletePortableCredential").mockImplementation(async () => {
+    remotePresent = false
+    return true
+  })
+  try {
+    const saving = app.request("/aws", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        fields: {
+          access_key_id: "AKIACONCURRENT",
+          secret_access_key: "concurrent-put-secret",
+          region: "us-west-2",
+        },
+      }),
+    })
+    await saveEntered.promise
+    expect(JSON.parse(await fs.readFile(storePath, "utf8")).aws).toMatchObject({
+      source: "local",
+      fields: { access_key_id: expect.any(String), secret_access_key: expect.any(String) },
+    })
+
+    const deleting = app.request("/aws", { method: "DELETE" })
+    await deleteStarted.promise
+    // DELETE has reached the mutation boundary but cannot tombstone or perform
+    // its remote deletion until the older PUT's remote save is settled.
+    expect(deleteRemote).toHaveBeenCalledTimes(0)
+    releaseSave.resolve()
+
+    const [saved, removed] = await Promise.all([saving, deleting])
+    expect(saved.status).toBe(200)
+    expect(removed.status).toBe(200)
+    expect(saveRemote).toHaveBeenCalledTimes(1)
+    expect(deleteRemote).toHaveBeenCalledTimes(1)
+    expect(remotePresent).toBe(false)
+    expect(JSON.parse(await fs.readFile(storePath, "utf8")).aws).toBeUndefined()
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined()
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+  } finally {
+    releaseSave.resolve()
+    await Promise.resolve(app.request("/aws", { method: "DELETE" })).catch(() => undefined)
+    deleteRemote.mockRestore()
+    saveRemote.mockRestore()
+    authenticated.mockRestore()
+  }
+})
+
 test("credential catalog is categorized and injects integration and compute environments", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openscience-credential-catalog-"))
   const runner = path.join(root, "catalog.ts")
@@ -82,6 +258,10 @@ test("credential catalog is categorized and injects integration and compute envi
       'for (const id of ["aws", "gcp", "azure", "nvidia"]) {',
       '  if (!compute.includes(id)) throw new Error("missing compute credential " + id)',
       "}",
+      'for (const id of ["aws", "gcp", "azure"]) {',
+      '  if (!services.find((service) => service.id === id)?.description.includes("Credential-only bridge")) throw new Error("compute adapter depth is unclear for " + id)',
+      "}",
+      'if (!services.find((service) => service.id === "nvidia")?.description.includes("not an NVIDIA compute-backend connection")) throw new Error("NVIDIA credential is mislabeled as compute")',
       'await app.request("/huggingface", {',
       '  method: "PUT",',
       '  headers: { "content-type": "application/json" },',
@@ -265,7 +445,6 @@ test("a second server drops rotated env and revokes an inherited child before it
     worker,
     [
       `import fs from "node:fs/promises"`,
-      `import { spawn } from "node:child_process"`,
       `import { applyCredentialEnv } from ${JSON.stringify(routes)}`,
       `import { CredentialLifecycle } from ${JSON.stringify(lifecycle)}`,
       `import { OpenScience } from ${JSON.stringify(openscience)}`,
@@ -273,11 +452,13 @@ test("a second server drops rotated env and revokes an inherited child before it
       `await applyCredentialEnv()`,
       `if (process.env.LAB_ACCESS_TOKEN !== "cross-process-secret") throw new Error("worker did not load initial secret")`,
       `const inherited = await OpenScience.subprocessEnv(process.env)`,
-      `const child = spawn(process.execPath, ["-e", "console.log(process.env.LAB_ACCESS_TOKEN || 'absent'); setInterval(() => {}, 1000)"], { env: inherited, stdio: ["ignore", "pipe", "pipe"] })`,
-      `const first = await new Promise((resolve, reject) => { child.stdout.once("data", (data) => resolve(String(data).trim())); child.once("error", reject) })`,
+      `const child = Bun.spawn([process.execPath, "-e", "console.log(process.env.LAB_ACCESS_TOKEN || 'absent'); setInterval(() => {}, 1000)"], { env: inherited, stdin: "ignore", stdout: "pipe", stderr: "pipe" })`,
+      `const reader = child.stdout.getReader()`,
+      `const first = new TextDecoder().decode((await reader.read()).value).trim()`,
+      `reader.releaseLock()`,
       `if (first !== "cross-process-secret") throw new Error("real child did not inherit initial secret")`,
       `let revoked = false`,
-      `CredentialLifecycle.onRevoke(async () => { revoked = true; child.kill("SIGTERM"); await new Promise((resolve) => child.once("exit", resolve)) })`,
+      `CredentialLifecycle.onRevoke(async () => { revoked = true; child.kill("SIGTERM"); await child.exited })`,
       `CredentialLifecycle.watch(25)`,
       `await fs.writeFile(${JSON.stringify(ready)}, "ready")`,
       `for (let i = 0; i < 400 && !revoked; i++) await Bun.sleep(10)`,

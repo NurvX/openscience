@@ -14,6 +14,7 @@ import {
   isSyncedEnvAllowed,
   BYOK_LLM_ENV_KEYS,
   SYNCED_SERVICE_ENV_KEYS,
+  LOCAL_COMPUTE_CLI_ENV_KEYS,
   managedOpenRouterBaseURL,
 } from "./synced-env-policy"
 import { isAtlasManagedKey, isOrganizationWorkspaceKey } from "../credentials/managed-key"
@@ -51,6 +52,7 @@ const syncedSecretValues = new Map<string, string>()
 // (a hot path in bash output streaming) can mask them without an async read.
 const byokSecretValues = new Set<string>()
 const TOKEN_SECRET_PATTERNS = [
+  /odp_v2\.[a-f0-9]{10,138}\.[a-f0-9]{32}\.[a-f0-9]{32}\.[a-f0-9]{64}/gi,
   /\b(?:thk[_-]|osk_|sk-|sk_|gsk_|hf_|nvapi-|ghp_|gho_|ghu_|ghs_|github_pat_|xox[baprs]-)[A-Za-z0-9._-]{8,}\b/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
 ]
@@ -142,9 +144,12 @@ const SAFE_SYNCED_KEYS = new Set([
   "OPENSCIENCE_RUNTIME",
 ])
 
-// Modal credentials belong to its trusted adapter and never enter
-// agent-controlled shells, including when supplied by an explicit export.
-const CONTROL_PLANE_ENV_KEYS = new Set(["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"])
+// Control-plane capabilities belong to trusted host adapters and never enter
+// agent-controlled children, including when supplied by an explicit export or
+// project configuration. Deny the desktop-update namespace so future updater
+// capabilities cannot become child-process ambient authority by accident.
+const CONTROL_PLANE_ENV_KEYS = new Set(["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", ...LOCAL_COMPUTE_CLI_ENV_KEYS])
+const CONTROL_PLANE_ENV_PREFIXES = ["OPENSCIENCE_DESKTOP_UPDATE_", "OPENSCIENCE_DESKTOP_PARENT_"]
 
 /**
  * Persistent CLI auth session.
@@ -1859,7 +1864,7 @@ export namespace OpenScience {
               module.reconcileAccountCredentialFields(portable),
             ),
             import("../server/routes/settings/compute").then((module) =>
-              module.ComputeSettings.reconcileAccountProviders(portable),
+              module.ComputeSettings.reconcileAccountProvidersDuringCredentialMutation(portable),
             ),
           ])
 
@@ -2016,6 +2021,16 @@ export namespace OpenScience {
    *  ahead of a subprocess run to seed the BYOK cache. */
   export function redactSecrets(text: string): string {
     let result = text
+    // Preserve complete structured-token matches before replacing exact
+    // registered values. A registered value can be a substring of a token
+    // (for example, an ODP proof digest); replacing that substring first would
+    // destroy the token shape and leave the rest of the credential visible.
+    for (const pattern of TOKEN_SECRET_PATTERNS) result = result.replace(pattern, "[REDACTED]")
+    result = result.replace(PRIVATE_KEY_SECRET, "[REDACTED]")
+    result = result.replace(JWT_SECRET, "[REDACTED]")
+    result = result.replace(BEARER_SECRET, "$1[REDACTED]")
+    result = result.replace(QUOTED_SECRET, "$1$2[REDACTED]$2")
+    result = result.replace(BARE_SECRET, "$1[REDACTED]")
     for (const value of syncedSecretValues.values()) {
       if (value.length < 4) continue
       result = result.replaceAll(value, "[REDACTED]")
@@ -2024,12 +2039,6 @@ export namespace OpenScience {
       if (value.length < 4) continue
       result = result.replaceAll(value, "[REDACTED]")
     }
-    for (const pattern of TOKEN_SECRET_PATTERNS) result = result.replace(pattern, "[REDACTED]")
-    result = result.replace(PRIVATE_KEY_SECRET, "[REDACTED]")
-    result = result.replace(JWT_SECRET, "[REDACTED]")
-    result = result.replace(BEARER_SECRET, "$1[REDACTED]")
-    result = result.replace(QUOTED_SECRET, "$1$2[REDACTED]$2")
-    result = result.replace(BARE_SECRET, "$1[REDACTED]")
     return result
   }
 
@@ -2085,11 +2094,23 @@ export namespace OpenScience {
     return result
   }
 
-  export function filterEnvForSubprocess(env: NodeJS.ProcessEnv): Record<string, string> {
+  /** Strip host-only capabilities before composing any agent-controlled child
+   * environment. Call this again after trusted base env and project-authored
+   * overlays are merged so an overlay can never restore ambient authority. */
+  export function filterControlPlaneEnv(env: NodeJS.ProcessEnv): Record<string, string> {
     const result: Record<string, string> = {}
     for (const [key, value] of Object.entries(env)) {
       if (!value) continue
       if (CONTROL_PLANE_ENV_KEYS.has(key)) continue
+      if (CONTROL_PLANE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue
+      result[key] = value
+    }
+    return result
+  }
+
+  export function filterEnvForSubprocess(env: NodeJS.ProcessEnv): Record<string, string> {
+    const result: Record<string, string> = {}
+    for (const [key, value] of Object.entries(filterControlPlaneEnv(env))) {
       if (isManagedAtlasKey(value)) continue
       // Entries ending in `_` (LC_, XDG_) are true prefixes; the rest are exact
       // names. Treating all as prefixes let HOME match HOMEBREW_GITHUB_API_TOKEN,
@@ -2112,8 +2133,7 @@ export namespace OpenScience {
    * OpenScience host and can only enter a kernel through an explicit start env. */
   export function filterEnvForKernel(env: NodeJS.ProcessEnv): Record<string, string> {
     const result: Record<string, string> = {}
-    for (const [key, value] of Object.entries(env)) {
-      if (!value) continue
+    for (const [key, value] of Object.entries(filterControlPlaneEnv(env))) {
       const runtime =
         SAFE_ENV_PREFIXES.some((prefix) => (prefix.endsWith("_") ? key.startsWith(prefix) : key === prefix)) ||
         KERNEL_RUNTIME_KEYS.has(key)
@@ -2122,8 +2142,8 @@ export namespace OpenScience {
     return result
   }
 
-  export function kernelEnv(env: NodeJS.ProcessEnv = process.env) {
-    return {
+  export function kernelEnv(env: NodeJS.ProcessEnv = process.env, overlay: NodeJS.ProcessEnv = {}) {
+    return filterControlPlaneEnv({
       ...filterEnvForKernel(env),
       // A denied ~/.gitconfig is a hard error in Git (unlike a missing file).
       // Arbitrary kernels must not read host Git credentials/config, so point
@@ -2131,7 +2151,8 @@ export namespace OpenScience {
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_TERMINAL_PROMPT: "0",
-    }
+      ...overlay,
+    })
   }
 
   /** Host credential files that an OS-sandboxed kernel must not read. Atlas

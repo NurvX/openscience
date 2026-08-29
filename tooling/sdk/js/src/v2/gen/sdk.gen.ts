@@ -17,6 +17,7 @@ import type {
   AccountLogoutResponses,
   AccountSessionResponses,
   AgentPartInput,
+  ApiAuth,
   AppAgentsResponses,
   AppLogErrors,
   AppLogResponses,
@@ -24,6 +25,8 @@ import type {
   AppSkillsResponses,
   AppSkillWriteResponses,
   Auth as Auth3,
+  AuthOnboardingErrors,
+  AuthOnboardingResponses,
   AuthRemoveErrors,
   AuthRemoveResponses,
   AuthSetErrors,
@@ -136,10 +139,15 @@ import type {
   McpAuthAuthenticateResponses,
   McpAuthCallbackErrors,
   McpAuthCallbackResponses,
+  McpAuthCancelErrors,
+  McpAuthCancelResponses,
+  McpAuthPendingResponses,
   McpAuthRemoveErrors,
   McpAuthRemoveResponses,
   McpAuthStartErrors,
   McpAuthStartResponses,
+  McpAuthWaitErrors,
+  McpAuthWaitResponses,
   McpConfigRemoveErrors,
   McpConfigRemoveResponses,
   McpConfigSetErrors,
@@ -321,6 +329,8 @@ import type {
   SettingsComputeProviderConnectErrors,
   SettingsComputeProviderConnectResponses,
   SettingsComputeProviderDisconnectResponses,
+  SettingsComputeProviderDoctorErrors,
+  SettingsComputeProviderDoctorResponses,
   SettingsComputeProviderEnabledErrors,
   SettingsComputeProviderEnabledResponses,
   SettingsComputeSshAddErrors,
@@ -335,7 +345,9 @@ import type {
   SettingsCredentialsSetResponses,
   SettingsNetworkGetResponses,
   SettingsNetworkSetResponses,
+  SettingsPreferencesClearOnboardingOperationResponses,
   SettingsPreferencesGetResponses,
+  SettingsPreferencesOnboardingOperationResponses,
   SettingsPreferencesUpdateResponses,
   SettingsResearchToolsGetResponses,
   SettingsResearchToolsTelemetryDeleteResponses,
@@ -348,9 +360,16 @@ import type {
   SettingsStorageResetLocationErrors,
   SettingsStorageResetLocationResponses,
   SettingsStorageUsageResponses,
+  SettingsUpdatesApplyErrors,
+  SettingsUpdatesApplyResponses,
+  SettingsUpdatesCancelResponses,
   SettingsUpdatesCheckResponses,
+  SettingsUpdatesDisposeErrors,
+  SettingsUpdatesDisposeResponses,
   SettingsUpdatesInstallErrors,
   SettingsUpdatesInstallResponses,
+  SettingsUpdatesStageResponses,
+  SettingsUpdatesStateResponses,
   SettingsUsageGetResponses,
   SettingsWalletGetResponses,
   SubtaskPartInput,
@@ -420,7 +439,7 @@ export class Project extends HeyApiClient {
   /**
    * Create project
    *
-   * Create an app-managed project with an opaque identity and optional project-scoped access to source locations explicitly selected by the user. Source paths never become the project identity.
+   * Create an app-managed project with an opaque identity and optional project-scoped access to source locations explicitly selected by the user. Source paths never become the project identity. Reusing an operation_id with the exact same draft safely replays its original result.
    */
   public create<ThrowOnError extends boolean = false>(
     parameters: {
@@ -429,6 +448,7 @@ export class Project extends HeyApiClient {
         path: string
         access?: "read" | "write"
       }>
+      operation_id?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -439,6 +459,7 @@ export class Project extends HeyApiClient {
           args: [
             { in: "body", key: "name" },
             { in: "body", key: "sources" },
+            { in: "body", key: "operation_id" },
           ],
         },
       ],
@@ -888,12 +909,19 @@ export class Storage extends HeyApiClient {
   /**
    * Get storage usage
    *
-   * Real on-disk sizes for the active OpenScience data directory and its top-level entries.
+   * Real on-disk sizes for the active OpenScience data directory and its top-level entries. Pass refresh=1 to bypass the result and error retry TTL.
    */
-  public usage<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public usage<ThrowOnError extends boolean = false>(
+    parameters?: {
+      refresh?: "1"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "refresh" }] }])
     return (options?.client ?? this.client).get<SettingsStorageUsageResponses, unknown, ThrowOnError>({
       url: "/settings/storage",
       ...options,
+      ...params,
     })
   }
 
@@ -1040,6 +1068,27 @@ export class Provider extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Run the provider's reviewed read-only native connection check
+   */
+  public doctor<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).post<
+      SettingsComputeProviderDoctorResponses,
+      SettingsComputeProviderDoctorErrors,
+      ThrowOnError
+    >({
+      url: "/settings/compute/provider/{id}/doctor",
+      ...options,
+      ...params,
     })
   }
 }
@@ -1203,6 +1252,8 @@ export class Ssh extends HeyApiClient {
       host: string
       user?: string
       port?: number
+      identity_file?: string
+      proxy_jump?: string
       scheduler?: "none" | "slurm" | "pbs"
       workdir?: string
       notes?: string
@@ -1219,6 +1270,8 @@ export class Ssh extends HeyApiClient {
             { in: "body", key: "host" },
             { in: "body", key: "user" },
             { in: "body", key: "port" },
+            { in: "body", key: "identity_file" },
+            { in: "body", key: "proxy_jump" },
             { in: "body", key: "scheduler" },
             { in: "body", key: "workdir" },
             { in: "body", key: "notes" },
@@ -1826,6 +1879,58 @@ export class Preferences extends HeyApiClient {
       },
     })
   }
+
+  /**
+   * Clear one completed desktop onboarding draft binding
+   */
+  public clearOnboardingOperation<ThrowOnError extends boolean = false>(
+    parameters: {
+      fingerprint: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "fingerprint" }] }])
+    return (options?.client ?? this.client).delete<
+      SettingsPreferencesClearOnboardingOperationResponses,
+      unknown,
+      ThrowOnError
+    >({
+      url: "/settings/preferences/onboarding-operation",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get or create the durable operation for an exact desktop onboarding draft
+   */
+  public onboardingOperation<ThrowOnError extends boolean = false>(
+    parameters: {
+      fingerprint: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "fingerprint" }] }])
+    return (options?.client ?? this.client).post<
+      SettingsPreferencesOnboardingOperationResponses,
+      unknown,
+      ThrowOnError
+    >({
+      url: "/settings/preferences/onboarding-operation",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Billing extends HeyApiClient {
@@ -1875,7 +1980,7 @@ export class Billing extends HeyApiClient {
 
 export class Wallet extends HeyApiClient {
   /**
-   * Get wallet balance, routing mode, and recent transactions
+   * Get purchased Wallet balance, routing mode, and recent transactions
    */
   public get<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).get<SettingsWalletGetResponses, unknown, ThrowOnError>({
@@ -1905,6 +2010,58 @@ export class Updates extends HeyApiClient {
       SettingsUpdatesInstallErrors,
       ThrowOnError
     >({ url: "/settings/updates", ...options })
+  }
+
+  /**
+   * Get desktop update progress
+   */
+  public state<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<SettingsUpdatesStateResponses, unknown, ThrowOnError>({
+      url: "/settings/updates/state",
+      ...options,
+    })
+  }
+
+  /**
+   * Cancel or discard a staged desktop update
+   */
+  public cancel<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).delete<SettingsUpdatesCancelResponses, unknown, ThrowOnError>({
+      url: "/settings/updates/stage",
+      ...options,
+    })
+  }
+
+  /**
+   * Download and verify the desktop update
+   */
+  public stage<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<SettingsUpdatesStageResponses, unknown, ThrowOnError>({
+      url: "/settings/updates/stage",
+      ...options,
+    })
+  }
+
+  /**
+   * Restart into a verified desktop update
+   */
+  public apply<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      SettingsUpdatesApplyResponses,
+      SettingsUpdatesApplyErrors,
+      ThrowOnError
+    >({ url: "/settings/updates/apply", ...options })
+  }
+
+  /**
+   * Gracefully release runtimes before a desktop restart
+   */
+  public dispose<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      SettingsUpdatesDisposeResponses,
+      SettingsUpdatesDisposeErrors,
+      ThrowOnError
+    >({ url: "/settings/updates/dispose", ...options })
   }
 }
 
@@ -2150,6 +2307,41 @@ export class Settings extends HeyApiClient {
 }
 
 export class Auth extends HeyApiClient {
+  /**
+   * Configure an onboarding provider credential
+   *
+   * Atomically save one local provider key and select BYOK model access.
+   */
+  public onboarding<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      apiAuth?: ApiAuth
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { key: "apiAuth", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<AuthOnboardingResponses, AuthOnboardingErrors, ThrowOnError>({
+      url: "/auth/{providerID}/onboarding",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   /**
    * Remove auth credentials
    *
@@ -7116,6 +7308,100 @@ export class Auth2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<McpAuthStartResponses, McpAuthStartErrors, ThrowOnError>({
       url: "/mcp/{name}/auth",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Cancel pending MCP OAuth
+   *
+   * Cancel only the pending browser authorization flow without deleting existing credentials.
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      flow_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "flow_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<McpAuthCancelResponses, McpAuthCancelErrors, ThrowOnError>({
+      url: "/mcp/{name}/auth/pending",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read pending MCP OAuth
+   *
+   * Return the exact resumable browser authorization operation, if one exists.
+   */
+  public pending<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<McpAuthPendingResponses, unknown, ThrowOnError>({
+      url: "/mcp/{name}/auth/pending",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Wait for MCP OAuth
+   *
+   * Wait for an already-started browser OAuth operation without launching a second browser.
+   */
+  public wait<ThrowOnError extends boolean = false>(
+    parameters: {
+      name: string
+      directory?: string
+      flow_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "name" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "flow_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpAuthWaitResponses, McpAuthWaitErrors, ThrowOnError>({
+      url: "/mcp/{name}/auth/wait",
       ...options,
       ...params,
     })

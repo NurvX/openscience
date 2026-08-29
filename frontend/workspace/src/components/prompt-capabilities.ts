@@ -16,6 +16,14 @@ export type DelegationModel = {
   modelID: string
 }
 
+export function sameDelegationModel(
+  current: DelegationModel | null | undefined,
+  next: DelegationModel | null | undefined,
+) {
+  if (!current || !next) return !current && !next
+  return current.providerID === next.providerID && current.modelID === next.modelID
+}
+
 export type DelegationSettings = {
   level: DelegationLevel
   workerModel?: DelegationModel
@@ -31,10 +39,23 @@ export const DELEGATION_LEVELS: Array<{ value: DelegationLevel; label: string }>
 export const DELEGATION_AUTONOMY: Array<{
   value: DelegationAutonomy
   label: string
+  description: string
 }> = [
-  { value: "interactive", label: "Interactive" },
-  { value: "balanced", label: "Balanced" },
-  { value: "autonomous", label: "Independent" },
+  {
+    value: "interactive",
+    label: "Interactive",
+    description: "Plan together and ask at consequential choices, with one recommended option",
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    description: "Decide routine reversible details and ask only when the outcome could materially change",
+  },
+  {
+    value: "autonomous",
+    label: "Independent",
+    description: "Take the recommended path, record assumptions, and ask only when blocked or missing authority",
+  },
 ]
 
 export const DEFAULT_DELEGATION: DelegationSettings = {

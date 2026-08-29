@@ -60,6 +60,17 @@ async function dirSize(target: string, seen: Set<string>): Promise<number> {
   return bytes
 }
 
+const Relocation = z.object({
+  id: z.string().optional(),
+  phase: z.enum(["copying", "ready", "publishing", "published", "switched", "recovery_required"]),
+  source: z.string().optional(),
+  target: z.string().optional(),
+  started_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  active: z.boolean().optional(),
+  error: z.string().optional(),
+})
+
 const Usage = z.object({
   data_dir: z.string(),
   managed: z.boolean(),
@@ -71,6 +82,7 @@ const Usage = z.object({
   scanning: z.boolean(),
   updated_at: z.string().nullable(),
   scan_error: z.string().nullable(),
+  relocation: Relocation.nullable(),
   entries: z.array(z.object({ name: z.string(), path: z.string(), bytes: z.number(), kind: z.enum(["dir", "file"]) })),
 })
 
@@ -115,7 +127,7 @@ async function scanUsage(dataDir: string): Promise<ScanResult> {
   }
 }
 
-function refreshUsage(dataDir: string) {
+function refreshUsage(dataDir: string, refresh = false) {
   if (usageScan.dataDir !== dataDir) {
     usageScan.dataDir = dataDir
     usageScan.value = undefined
@@ -125,7 +137,12 @@ function refreshUsage(dataDir: string) {
   }
   const fresh = usageScan.value && Date.now() - Date.parse(usageScan.value.updated_at) < 30_000
   const recentError = usageScan.errorAt !== undefined && Date.now() - usageScan.errorAt < 30_000
-  if (fresh || recentError || usageScan.promise) return
+  if (usageScan.promise) return
+  if (!refresh && (fresh || recentError)) return
+  if (refresh) {
+    usageScan.error = undefined
+    usageScan.errorAt = undefined
+  }
   usageScan.promise = scanUsage(dataDir)
     .then((value) => {
       if (usageScan.dataDir !== dataDir) return
@@ -163,17 +180,22 @@ export const StorageRoutes = lazy(() =>
       "/",
       describeRoute({
         summary: "Get storage usage",
-        description: "Real on-disk sizes for the active OpenScience data directory and its top-level entries.",
+        description:
+          "Real on-disk sizes for the active OpenScience data directory and its top-level entries. Pass refresh=1 to bypass the result and error retry TTL.",
         operationId: "settings.storage.usage",
         responses: { 200: { description: "Usage", content: { "application/json": { schema: resolver(Usage) } } } },
       }),
+      validator("query", z.object({ refresh: z.literal("1").optional() })),
       async (c) => {
         const dataDir = await fs.realpath(Global.Path.data)
-        refreshUsage(dataDir)
-        const pointer = await Bun.file(pointerPath)
-          .text()
-          .then((text) => text.trim() || null)
-          .catch(() => null)
+        refreshUsage(dataDir, c.req.valid("query").refresh === "1")
+        const [pointer, relocation] = await Promise.all([
+          Bun.file(pointerPath)
+            .text()
+            .then((text) => text.trim() || null)
+            .catch(() => null),
+          DataRelocation.state().then((value) => value ?? null),
+        ])
         return c.json({
           data_dir: dataDir,
           managed: Global.Path.dataManaged,
@@ -186,6 +208,7 @@ export const StorageRoutes = lazy(() =>
           scanning: Boolean(usageScan.promise),
           updated_at: usageScan.value?.updated_at ?? null,
           scan_error: usageScan.error ?? null,
+          relocation,
         })
       },
     )

@@ -22,6 +22,8 @@ import { Project } from "../project/project"
 import { Vcs } from "../project/vcs"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill/skill"
+import { PermissionNext } from "../permission/next"
+import { Config } from "../config/config"
 import { Auth } from "../auth"
 import { Command } from "../command"
 import { Global } from "../global"
@@ -59,7 +61,7 @@ import { SandboxSettingsRoutes } from "./routes/settings/sandbox"
 import { BillingSettingsRoutes } from "./routes/settings/billing"
 import { WalletSettingsRoutes } from "./routes/settings/wallet"
 import { SettingsUsageRoutes } from "./routes/settings/usage"
-import { UpdatesSettingsRoutes } from "./routes/settings/updates"
+import { UpdatesSettingsRoutes, desktopUpdateShutdownAuthorized } from "./routes/settings/updates"
 import { ResearchToolsSettingsRoutes } from "./routes/settings/research-tools"
 import { ScientificToolsSettingsRoutes } from "./routes/settings/scientific-tools"
 import { projectSelection } from "./project-selection"
@@ -70,6 +72,7 @@ import { CredentialProcessLedger } from "../credentials/process-ledger"
 import { DataRootBarrier } from "../global/data-root-barrier"
 import { OpenScience } from "../openscience"
 import { accountRequiredResponse, requiresAccountForRequest } from "./account-gate"
+import { OnboardingAuthRoutes } from "./routes/onboarding-auth"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -81,11 +84,25 @@ export namespace Server {
   let _corsWhitelist: string[] = []
   let _server: Bun.Server<unknown> | undefined
   let credentialLifecycleReady = false
+  let credentialLifecycleBaseline: Promise<void> | undefined
+  let openapiDocument: ReturnType<typeof generateSpecs> | undefined
 
   function startCredentialLifecycle() {
     if (credentialLifecycleReady) return
     credentialLifecycleReady = true
-    CredentialLifecycle.onRevoke(async () => {
+    CredentialLifecycle.onRevoke(async ({ reason }) => {
+      if (reason === "mcp-auth.migrate") return
+      const mcpAuthority =
+        reason.startsWith("mcp-config.") ||
+        ["mcp-auth.set:", "mcp-auth.remove:", "mcp-auth.tokens:", "mcp-auth.tokens.refresh:", "mcp-auth.client:"].some(
+          (prefix) => reason.startsWith(prefix),
+        )
+      if (mcpAuthority) {
+        // MCP authority is scoped to MCP transports. Do not stop unrelated
+        // notebooks, compute, or shell commands when an OAuth token refreshes.
+        await Promise.all([CredentialProcessLedger.revoke("mcp"), Instance.disposeAll({ strict: true })])
+        return
+      }
       // Compute jobs and long-running Bash commands do not live in Instance
       // state. MCP and LSP do, and their disposal callbacks close the
       // underlying transports/processes.
@@ -93,10 +110,12 @@ export namespace Server {
         ComputeJobs.cancelCredentialProcesses(),
         CommandRuntime.stopAll(),
         CredentialProcessLedger.revoke("mcp"),
-        Instance.disposeAll(),
+        Instance.disposeAll({ strict: true }),
       ])
     })
-    CredentialLifecycle.watch()
+    credentialLifecycleBaseline = CredentialLifecycle.ensureFresh().then(() => {
+      CredentialLifecycle.watch()
+    })
   }
 
   // Per-process secret marking trusted in-process calls (Server.internalFetch).
@@ -118,6 +137,13 @@ export namespace Server {
     () =>
       // TODO: Break server.ts into smaller route files to fix type inference
       app
+        .use(async (_c, next) => {
+          // Reconcile a durable credential revision before any request can
+          // initialize project state. Running revokers from inside that state
+          // initializer would otherwise wait on the very state being built.
+          await credentialLifecycleBaseline
+          return next()
+        })
         // 404/410 and friends are cacheable by default (RFC 7231 §6.1), and a
         // JSON body with no Cache-Control is fair game for heuristic caching
         // too. A browser that cached one stale-project 410 for /provider then
@@ -193,6 +219,13 @@ export namespace Server {
           if (
             !health &&
             !preflight &&
+            !(
+              c.req.path === "/settings/updates/dispose" &&
+              desktopUpdateShutdownAuthorized(
+                c.req.header("authorization"),
+                process.env.OPENSCIENCE_DESKTOP_UPDATE_TOKEN,
+              )
+            ) &&
             !isDeploymentAuthorized(process.env["OPENSCIENCE_AUTH_TOKEN"], c.req.header("authorization"))
           ) {
             c.header("WWW-Authenticate", 'Bearer realm="openscience"')
@@ -273,6 +306,25 @@ export namespace Server {
         .route("/settings/updates", UpdatesSettingsRoutes())
         .route("/settings/research-tools", ResearchToolsSettingsRoutes())
         .route("/settings/scientific-tools", ScientificToolsSettingsRoutes())
+        .route(
+          "/auth",
+          OnboardingAuthRoutes({
+            readCredential: (providerID) => Auth.get(providerID),
+            saveCredential: (providerID, auth) => Auth.set(providerID, auth),
+            removeCredential: (providerID) => Auth.remove(providerID),
+            readBillingMode: async () => (await Config.getGlobal()).billing?.llm ?? null,
+            selectByok: async () => {
+              await OpenScience.setBillingMode("byok")
+            },
+            restoreBillingMode: async (mode) => {
+              await Config.updateGlobal({ billing: { llm: mode } }, { preserveInstances: true })
+            },
+            // Defer this call because Provider imports Server for local fetches;
+            // the route module itself intentionally has no Provider dependency.
+            invalidate: () => Provider.invalidate(),
+            serialize: (action) => CredentialLifecycle.serialized(action),
+          }),
+        )
         .put(
           "/auth/:providerID",
           describeRoute({
@@ -597,15 +649,16 @@ export namespace Server {
                 description: "List of skills",
                 content: {
                   "application/json": {
-                    schema: resolver(Skill.Info.array()),
+                    schema: resolver(Skill.CatalogEntry.array()),
                   },
                 },
               },
             },
           }),
           async (c) => {
-            const skills = await Skill.all()
-            return c.json(skills)
+            const config = await Config.get()
+            const skills = await Skill.catalog(PermissionNext.fromConfig(config.permission ?? {}))
+            return c.json(skills.library)
           },
         )
         .put(
@@ -786,18 +839,24 @@ export namespace Server {
   }
 
   export async function openapi() {
-    // Cast to break excessive type recursion from long route chains
-    const result = await generateSpecs(App() as Hono, {
-      documentation: {
-        info: {
-          title: "openscience",
-          version: "1.0.0",
-          description: "openscience api",
+    if (!openapiDocument) {
+      // hono-openapi resolves nested route schemas in place. Generate the
+      // static application contract once so later callers retain components.
+      openapiDocument = generateSpecs(App() as Hono, {
+        documentation: {
+          info: {
+            title: "openscience",
+            version: "1.0.0",
+            description: "openscience api",
+          },
+          openapi: "3.1.1",
         },
-        openapi: "3.1.1",
-      },
-    })
-    return result
+      }).catch((error) => {
+        openapiDocument = undefined
+        throw error
+      })
+    }
+    return openapiDocument
   }
 
   export function listen(opts: { port: number; cors?: string[] }) {

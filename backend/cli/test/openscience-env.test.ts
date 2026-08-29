@@ -1,7 +1,19 @@
 import { expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import path from "node:path"
 import { OpenScience } from "../src/openscience"
 import { ToolOutputPath } from "../src/tool/tool-output-path"
+
+test("structured credentials are redacted before registered secret substrings", () => {
+  const suffix = createHash("sha256").update("openscience-redaction-suffix").digest("hex")
+  const prefix = createHash("sha256").update("openscience-redaction-prefix").digest("hex").slice(0, 10)
+  const epoch = createHash("sha256").update("openscience-redaction-epoch").digest("hex").slice(0, 32)
+  const nonce = createHash("sha256").update("openscience-redaction-nonce").digest("hex").slice(0, 32)
+  const proof = `odp_v2.${prefix}.${epoch}.${nonce}.${suffix}`
+  OpenScience.registerSecretValues([suffix])
+
+  expect(OpenScience.redactSecrets(`before x${proof}x after`)).toBe("before x[REDACTED]x after")
+})
 
 test("subprocess env filtering never passes managed Atlas provider keys", () => {
   const filtered = OpenScience.filterEnvForSubprocess({
@@ -50,20 +62,70 @@ test("subprocess env filtering preserves a BYOK custom gateway", () => {
   expect(filtered.OPENROUTER_BASE_URL).toBe("https://my-gateway.example/api/v1")
 })
 
-test("subprocess env filtering preserves direct shell credentials but never exposes Modal tokens", () => {
+test("subprocess env filtering never exposes compute or desktop control-plane capabilities", () => {
   const filtered = OpenScience.filterEnvForSubprocess({
     PATH: "/usr/bin",
     MODAL_TOKEN_ID: "ak-user-owned",
     MODAL_TOKEN_SECRET: "as-user-owned",
+    OPENSCIENCE_DESKTOP_UPDATE_URL: "http://127.0.0.1:4096/settings/updates/apply",
+    OPENSCIENCE_DESKTOP_UPDATE_TOKEN: "desktop-update-capability",
     LAMBDA_API_KEY: "lambda-user-owned",
     RUNPOD_API_KEY: "runpod-user-owned",
   })
 
+  expect(filtered).toEqual({ PATH: "/usr/bin" })
+})
+
+test("control-plane filtering denies the complete desktop update namespace after environment overlays", () => {
+  const filtered = OpenScience.filterControlPlaneEnv({
+    PATH: "/usr/bin",
+    OPENSCIENCE_DESKTOP_UPDATE_URL: "http://127.0.0.1:4096/settings/updates/apply",
+    OPENSCIENCE_DESKTOP_UPDATE_TOKEN: "desktop-update-capability",
+    OPENSCIENCE_DESKTOP_UPDATE_FUTURE_CAPABILITY: "must-default-deny",
+    PROJECT_AUTHORED_VALUE: "preserved",
+  })
+
   expect(filtered).toEqual({
     PATH: "/usr/bin",
-    LAMBDA_API_KEY: "lambda-user-owned",
-    RUNPOD_API_KEY: "runpod-user-owned",
+    PROJECT_AUTHORED_VALUE: "preserved",
   })
+})
+
+test("representative agent subprocess environments cannot inherit host control-plane capabilities", () => {
+  const ambient = {
+    PATH: "/usr/bin",
+    HOME: "/home/researcher",
+    TENSORPOOL_KEY: "tensorpool-host-capability",
+    LAMBDA_API_KEY: "lambda-host-capability",
+    PRIME_API_KEY: "prime-host-capability",
+    VAST_API_KEY: "vast-host-capability",
+    RUNPOD_API_KEY: "runpod-host-capability",
+    OPENSCIENCE_DESKTOP_UPDATE_URL: "http://127.0.0.1:4096/settings/updates/apply",
+    OPENSCIENCE_DESKTOP_UPDATE_TOKEN: "desktop-update-capability",
+  }
+  const sanitized = OpenScience.filterEnvForSubprocess(ambient)
+  const environments: Record<string, Record<string, string>> = {
+    bashAfterRuntimeOverlay: OpenScience.filterEnvForSubprocess({
+      ...sanitized,
+      OPENSCIENCE_DESKTOP_UPDATE_TOKEN: "restored-by-runtime-overlay",
+    }),
+    taskShell: { ...sanitized, TERM: "dumb" },
+    localCompute: sanitized,
+    kernel: OpenScience.kernelEnv(ambient, {
+      OPENSCIENCE_DESKTOP_UPDATE_URL: "restored-by-kernel-overlay",
+      OPENSCIENCE_DESKTOP_UPDATE_TOKEN: "restored-by-kernel-overlay",
+    }),
+  }
+
+  for (const environment of Object.values(environments)) {
+    expect(environment.TENSORPOOL_KEY).toBeUndefined()
+    expect(environment.LAMBDA_API_KEY).toBeUndefined()
+    expect(environment.PRIME_API_KEY).toBeUndefined()
+    expect(environment.VAST_API_KEY).toBeUndefined()
+    expect(environment.RUNPOD_API_KEY).toBeUndefined()
+    expect(environment.OPENSCIENCE_DESKTOP_UPDATE_URL).toBeUndefined()
+    expect(environment.OPENSCIENCE_DESKTOP_UPDATE_TOKEN).toBeUndefined()
+  }
 })
 
 test("kernel env filtering keeps runtime configuration but drops credentials", () => {

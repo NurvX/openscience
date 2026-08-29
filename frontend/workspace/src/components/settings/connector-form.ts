@@ -10,6 +10,7 @@ export type ConnectorIdentityIcon = "cloud" | "console" | "discord" | "folder" |
 export interface ConnectorIdentity {
   icon: ConnectorIdentityIcon
   label: string
+  providerLogo?: string
 }
 
 const MASK = "••••••••"
@@ -31,6 +32,17 @@ export interface ConnectorFormState {
   previous?: ConfiguredMcp
 }
 
+export interface CatalogConnectorSetup {
+  type: "remote"
+  name: string
+  url: string
+  oauth: "auto" | "client"
+  scope?: string
+  confidential_client?: boolean
+  one_click_disabled?: boolean
+  one_click_connect?: boolean
+}
+
 export function blankConnectorForm(type: McpType): ConnectorFormState {
   return {
     name: "",
@@ -49,14 +61,7 @@ export function blankConnectorForm(type: McpType): ConnectorFormState {
   }
 }
 
-export function connectorFormFromCatalog(setup: {
-  type: "remote"
-  name: string
-  url: string
-  oauth: "auto" | "client"
-  scope?: string
-  confidential_client?: boolean
-}): ConnectorFormState {
+export function connectorFormFromCatalog(setup: CatalogConnectorSetup): ConnectorFormState {
   return {
     ...blankConnectorForm("remote"),
     name: setup.name,
@@ -66,6 +71,29 @@ export function connectorFormFromCatalog(setup: {
     initiallyDisabled: true,
     requireClientSecret: setup.confidential_client === true,
   }
+}
+
+/** Build the only state a reviewed one-click preset may persist. It lands off;
+ * the browser OAuth transaction is the separate step that may enable it. */
+export function catalogPresetConfig(setup: CatalogConnectorSetup) {
+  if ((!setup.one_click_disabled && !setup.one_click_connect) || setup.oauth !== "auto") {
+    throw new Error("This catalog entry requires setup review")
+  }
+  const disabled = buildConnectorConfig(connectorFormFromCatalog(setup))
+  if (disabled.type !== "remote" || disabled.enabled !== false) {
+    throw new Error("Catalog preset must be saved disabled")
+  }
+  return disabled
+}
+
+export function connectorConflictsWithCatalogPreset(config: ConfiguredMcp | undefined, setup: CatalogConnectorSetup) {
+  if (!config) return false
+  return (
+    !connectorMatchesCatalogSetup(config, setup) ||
+    config.type !== "remote" ||
+    Boolean(config.headers && Object.keys(config.headers).length) ||
+    Boolean(config.timeout)
+  )
 }
 
 export function connectorMatchesCatalogSetup(
@@ -101,7 +129,18 @@ export function connectorIdentity(name: string, config: ConfiguredMcp): Connecto
   const target = config.type === "remote" ? config.url : [name, ...config.command].join(" ")
   const haystack = `${name} ${target}`.toLowerCase()
 
-  if (haystack.includes("github")) return { icon: "github", label: "GitHub" }
+  if (haystack.includes("givemeanode") || haystack.includes("mcp.givemeanode.com")) {
+    return { icon: "cloud", label: "GiveMeANode", providerLogo: "givemeanode" }
+  }
+  if (haystack.includes("github")) return { icon: "github", label: "GitHub", providerLogo: "github" }
+  if (haystack.includes("benchling")) return { icon: "cloud", label: "Benchling", providerLogo: "benchling" }
+  if (haystack.includes("dropbox")) return { icon: "cloud", label: "Dropbox", providerLogo: "dropbox" }
+  if (name.trim().toLowerCase() === "box" || haystack.includes("mcp.box.com")) {
+    return { icon: "cloud", label: "Box", providerLogo: "box" }
+  }
+  if (name.trim().toLowerCase() === "aws-s3" || haystack.includes("aws-mcp.")) {
+    return { icon: "cloud", label: "Amazon S3", providerLogo: "aws" }
+  }
   if (haystack.includes("discord")) return { icon: "discord", label: "Discord" }
   if (/file[ -]?system|local[ -]?files|workspace[ -]?files/u.test(haystack)) {
     return { icon: "folder", label: "Filesystem" }

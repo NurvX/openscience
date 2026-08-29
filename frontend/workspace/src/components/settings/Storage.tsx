@@ -9,6 +9,16 @@ import { PanelBody, PanelHeader, PanelScroll, Section } from "./_shared"
 import "./preference-panels.css"
 
 type Entry = { name: string; path: string; bytes: number; kind: "dir" | "file" }
+type Relocation = {
+  id?: string
+  phase: "copying" | "ready" | "publishing" | "published" | "switched" | "recovery_required"
+  source?: string
+  target?: string
+  started_at?: string
+  updated_at?: string
+  active?: boolean
+  error?: string
+}
 type Usage = {
   data_dir: string
   managed: boolean
@@ -21,6 +31,7 @@ type Usage = {
   scanning?: boolean
   updated_at?: string | null
   scan_error?: string | null
+  relocation?: Relocation | null
 }
 
 function fmt(bytes: number): string {
@@ -33,6 +44,69 @@ function fmt(bytes: number): string {
     i++
   }
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
+}
+
+export function storageUsagePath(refresh = false) {
+  return refresh ? "/settings/storage?refresh=1" : "/settings/storage"
+}
+
+export async function storageLocationChoice(open: () => Promise<string | string[] | null>) {
+  return Promise.resolve()
+    .then(open)
+    .then(
+      (picked) => {
+        const path = Array.isArray(picked) ? picked[0] : picked
+        if (!path) return { kind: "cancelled" as const }
+        return { kind: "selected" as const, path }
+      },
+      (error) => ({
+        kind: "error" as const,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    )
+}
+
+export function storageRelocationCopy(value: Relocation) {
+  if (value.phase === "recovery_required") {
+    return {
+      title: "Storage move needs attention",
+      detail: value.error ?? "OpenScience could not safely read the recovery record.",
+      tone: "critical" as const,
+    }
+  }
+  if (!value.active) {
+    return {
+      title: "Storage move was interrupted",
+      detail: "Your current data is still protected. Resume to recover the verified transaction safely.",
+      tone: "warning" as const,
+    }
+  }
+  if (value.phase === "copying") {
+    return {
+      title: "Copying and verifying data",
+      detail: "The current location remains active until the verified copy is ready.",
+      tone: "neutral" as const,
+    }
+  }
+  if (value.phase === "ready" || value.phase === "publishing") {
+    return {
+      title: "Preparing the verified copy",
+      detail: "The current location remains active while the destination is committed.",
+      tone: "neutral" as const,
+    }
+  }
+  if (value.phase === "published") {
+    return {
+      title: "Switching storage location",
+      detail: "The verified destination is ready. OpenScience is switching running servers together.",
+      tone: "neutral" as const,
+    }
+  }
+  return {
+    title: "Finalizing storage location",
+    detail: "The new location is active. OpenScience is finishing recovery metadata.",
+    tone: "neutral" as const,
+  }
 }
 
 export const Storage: Component = () => {
@@ -53,13 +127,14 @@ export const Storage: Component = () => {
   let poll: ReturnType<typeof setTimeout> | undefined
   const schedulePoll = (next: Usage) => {
     if (poll) clearTimeout(poll)
-    poll = next.scanning ? setTimeout(() => void load(true), 1_500) : undefined
+    poll = next.scanning || busy() ? setTimeout(() => void load({ background: true }), 1_500) : undefined
   }
-  const load = async (background = false) => {
+  const load = async (options: { background?: boolean; refresh?: boolean } = {}) => {
+    const background = options.background ?? false
     if (!background) setLoading(true)
     if (!background) setError(undefined)
     try {
-      const next = await settingsApi<Usage>(base(), fetchFn(), "/settings/storage")
+      const next = await settingsApi<Usage>(base(), fetchFn(), storageUsagePath(options.refresh))
       setUsage(next)
       schedulePoll(next)
     } catch (err) {
@@ -73,6 +148,7 @@ export const Storage: Component = () => {
       if (!background) setLoading(false)
     }
   }
+  const retry = () => load({ background: Boolean(usage()), refresh: true })
   onMount(() => void load())
   onCleanup(() => {
     if (poll) clearTimeout(poll)
@@ -84,17 +160,21 @@ export const Storage: Component = () => {
     setError(undefined)
     setStatus(undefined)
     if (!platform.openDirectoryPickerDialog) return
-    const picked = await platform
-      .openDirectoryPickerDialog({ title: "Choose a new OpenScience data location", serverUrl: sdk.url })
-      .catch(() => null)
-    const selected = Array.isArray(picked) ? picked[0] : picked
-    if (selected) setTarget(selected)
+    const choice = await storageLocationChoice(() =>
+      platform.openDirectoryPickerDialog!({ title: "Choose a new OpenScience data location", serverUrl: sdk.url }),
+    )
+    if (choice.kind === "error") {
+      setError(`The system folder picker could not open. ${choice.message}`)
+      return
+    }
+    if (choice.kind === "selected") setTarget(choice.path)
   }
 
-  const relocate = async () => {
-    const next = target().trim()
+  const relocate = async (requested?: string) => {
+    const next = (requested ?? target()).trim()
     if (!next || busy()) return
     setBusy(true)
+    void load({ background: true })
     setError(undefined)
     setStatus(undefined)
     try {
@@ -109,7 +189,7 @@ export const Storage: Component = () => {
       setStatus(
         `Moved ${fmt(result.bytes)} across ${result.files} files. Every running OpenScience server now uses ${result.target}.${result.warning ? ` ${result.warning}` : ""}`,
       )
-      await load()
+      await load({ refresh: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -120,6 +200,7 @@ export const Storage: Component = () => {
   const resetLocation = async () => {
     if (busy()) return
     setBusy(true)
+    void load({ background: true })
     setError(undefined)
     setStatus(undefined)
     try {
@@ -134,7 +215,7 @@ export const Storage: Component = () => {
           ? `Returned to ${result.target}. The previous default directory is preserved at ${result.backup}.`
           : `Returned to ${result.target}.`) + (result.warning ? ` ${result.warning}` : ""),
       )
-      await load()
+      await load({ refresh: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -159,7 +240,7 @@ export const Storage: Component = () => {
           <Show when={error()}>
             <div class="settings-alert whitespace-pre-wrap" data-tone="critical" role="alert">
               <span>{error()}</span>
-              <button type="button" class="settings-inline-action" disabled={loading()} onClick={() => void load()}>
+              <button type="button" class="settings-inline-action" disabled={loading()} onClick={() => void retry()}>
                 Retry
               </button>
             </div>
@@ -177,11 +258,52 @@ export const Storage: Component = () => {
               <div class="settings-alert" data-tone="warning" role="status">
                 <Icon name="alert-circle" size="small" class="shrink-0 text-icon-weak-base" />
                 <span>Disk usage could not be refreshed. Cached values remain visible. {message()}</span>
-                <button type="button" class="settings-inline-action" onClick={() => void load()}>
+                <button type="button" class="settings-inline-action" onClick={() => void retry()}>
                   Retry
                 </button>
               </div>
             )}
+          </Show>
+          <Show when={usage()?.relocation}>
+            {(relocation) => {
+              const copy = () => storageRelocationCopy(relocation())
+              return (
+                <div class="settings-alert" data-tone={copy().tone} role="status" aria-live="polite">
+                  <Icon
+                    name={
+                      copy().tone === "critical"
+                        ? "alert-circle"
+                        : copy().tone === "warning"
+                          ? "alert-circle"
+                          : "refresh"
+                    }
+                    size="small"
+                    class="shrink-0 text-icon-weak-base"
+                  />
+                  <div class="min-w-0 flex-1">
+                    <strong class="block text-12-medium text-text-strong">{copy().title}</strong>
+                    <span class="block text-12-regular text-text-weak">{copy().detail}</span>
+                    <Show when={relocation().target}>
+                      <code class="mt-1 block truncate text-11-regular text-text-weak" title={relocation().target}>
+                        {relocation().target}
+                      </code>
+                    </Show>
+                  </div>
+                  <Show
+                    when={!relocation().active && relocation().target && relocation().phase !== "recovery_required"}
+                  >
+                    <button
+                      type="button"
+                      class="settings-preference-action shrink-0"
+                      disabled={busy()}
+                      onClick={() => void relocate(relocation().target)}
+                    >
+                      Resume safely
+                    </button>
+                  </Show>
+                </div>
+              )
+            }}
           </Show>
 
           <Show

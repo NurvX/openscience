@@ -48,7 +48,7 @@ The command is `openscience`, and it opens the workspace in your browser. The fi
 npx synsci
 ```
 
-Platform binaries and desktop installers are also attached to [GitHub Releases](https://github.com/synthetic-sciences/OpenScience/releases); see the [changelog](CHANGELOG.md) for what's new in each version. Release notes identify unsigned builds. In unsigned mode, the macOS apps are ad-hoc signed but not notarized, so verify the published checksum before using macOS's explicit **Open Anyway** flow once. Releases after the first self-update-capable install can update and restart from inside OpenScience without downloading another DMG.
+Platform binaries and desktop installers are also attached to [GitHub Releases](https://github.com/synthetic-sciences/OpenScience/releases); see the [changelog](CHANGELOG.md) for what's new in each version. Stable macOS releases are Developer ID signed, notarized, and stapled. A signed stable install can verify the exact architecture-specific release ZIP, replace itself, prove the packaged main process and bundled runtime healthy, and restart without another DMG. Local or ad-hoc-signed development builds are not part of the stable update channel and cannot self-update.
 
 Linux installs require kernel 5.1 or newer. Glibc builds require glibc 2.17 or newer, and musl builds are published separately. CentOS 7's stock 3.10 kernel is not supported even though its glibc version meets the minimum; use a newer host kernel or VM.
 
@@ -73,7 +73,7 @@ OpenScience uses a free [Synthetic Sciences account](https://app.syntheticscienc
 
 ```bash
 openscience login          # connect this device once
-openscience wallet         # check Ace and the purchased wallet balance
+openscience wallet         # check Ace and the purchased Wallet balance
 ```
 
 Ace is one optional on/off authorization, not a scheduled monthly plan. Turning it on is a **$0 authorization** backed by the selected saved card; it does not buy credits or change the Wallet. One credit is $1 shared by credit-backed model calls and enhanced search. Usage is debited at the underlying OpenRouter provider price plus a 2% service margin. While Ace is on, a purchased Wallet balance below **5 credits** triggers one fixed reload of **20 credits** plus the disclosed processing fee. Turning Ace off stops future charges and preserves saved Stripe cards, Wallet value, and billing history. There is no separate auto-reload control. BYOK, local-model, and eligible ChatGPT/Codex usage remain separate and never debit the Wallet.
