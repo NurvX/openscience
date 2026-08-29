@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
+import { CapabilityRuntime } from "../../src/science/capability/runtime"
 import { ScientificToolsSettingsRoutes } from "../../src/server/routes/settings/scientific-tools"
 
 describe("scientific tools settings catalog", () => {
   test("returns the complete truthful capability and reviewed connector inventory", async () => {
+    const doctor = spyOn(CapabilityRuntime, "doctor")
     const response = await ScientificToolsSettingsRoutes().request("/")
     expect(response.status).toBe(200)
     const body = (await response.json()) as {
@@ -28,10 +30,10 @@ describe("scientific tools settings catalog", () => {
     expect(body.counts).toEqual({
       total: 54,
       packaged: 5,
-      hosted: 4,
+      hosted: 10,
       verified: 0,
-      experimental: 51,
-      blocked: 3,
+      experimental: 52,
+      blocked: 2,
     })
     expect(body.connectors.map((entry) => entry.id)).toEqual(["github", "benchling", "box", "dropbox", "s3"])
     expect(body.connectors.every((entry) => entry.writes_enabled_by_catalog === false)).toBe(true)
@@ -43,5 +45,8 @@ describe("scientific tools settings catalog", () => {
         ),
       ),
     ).toBe(true)
+    expect(doctor).toHaveBeenCalledTimes(5)
+    expect(doctor.mock.calls.every(([, options]) => options?.verification === "status")).toBe(true)
+    doctor.mockRestore()
   })
 })

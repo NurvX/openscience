@@ -1,8 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import crypto from "node:crypto"
-import { CORE_SCIENCE_REQUIREMENTS, CORE_SCIENCE_RUNTIME } from "../../src/science/capability/pack"
+import {
+  CORE_SCIENCE_CONDA_LOCKS,
+  capabilityLockDigest,
+  condaLockSha256,
+} from "../../src/science/capability/conda-locks"
+import {
+  CORE_SCIENCE_LOCAL_LOCKS,
+  CORE_SCIENCE_REQUIREMENTS,
+  CORE_SCIENCE_RUNTIME,
+  capabilityPlatform,
+  coreScienceCondaLocks,
+} from "../../src/science/capability/pack"
 import { CapabilityRegistry } from "../../src/science/capability/registry"
-import { CapabilityWorkload } from "../../src/science/capability/schema"
+import { CapabilityRuntime, CapabilityWorkload } from "../../src/science/capability/schema"
 
 describe("scientific capability registry", () => {
   test("exposes the honest 54-entry maturity and availability inventory", () => {
@@ -25,8 +35,12 @@ describe("scientific capability registry", () => {
       maturity: "blocked",
       availability: { local: "unavailable", hosted: "unavailable" },
     })
-    expect(items.filter((item) => item.maturity === "experimental")).toHaveLength(51)
-    expect(items.filter((item) => item.maturity === "blocked")).toHaveLength(3)
+    expect(items.find((item) => item.id === "openfold3")).toMatchObject({
+      maturity: "experimental",
+      availability: { local: "unavailable", hosted: "setup_needed" },
+    })
+    expect(items.filter((item) => item.maturity === "experimental")).toHaveLength(52)
+    expect(items.filter((item) => item.maturity === "blocked")).toHaveLength(2)
   })
 
   test("owns one immutable exact runtime graph for the five packaged capabilities", () => {
@@ -40,6 +54,7 @@ describe("scientific capability registry", () => {
     expect(CORE_SCIENCE_RUNTIME.image).toMatch(/@sha256:[a-f0-9]{64}$/)
     expect(CORE_SCIENCE_RUNTIME.lock_digest).toMatch(/^[a-f0-9]{64}$/)
     expect(CORE_SCIENCE_RUNTIME.local_platforms).toEqual(["darwin-arm64", "linux-arm64", "linux-x64"])
+    expect(CORE_SCIENCE_RUNTIME.local_locks).toEqual(CORE_SCIENCE_LOCAL_LOCKS)
     expect(CORE_SCIENCE_RUNTIME.network).toEqual({ build: "package_index_only", execution: "none" })
     expect(CORE_SCIENCE_REQUIREMENTS.trim().split("\n")).toHaveLength(18)
     expect(
@@ -48,21 +63,57 @@ describe("scientific capability registry", () => {
         .every((line) => line.includes("--hash=sha256:")),
     ).toBe(true)
     expect(CORE_SCIENCE_RUNTIME.lock_digest).toBe(
-      crypto
-        .createHash("sha256")
-        .update(
-          JSON.stringify({
-            channels: ["conda-forge"],
-            packages: ["python=3.12.11", "pip=25.1.1"],
-            pip_packages: CORE_SCIENCE_RUNTIME.packages,
-            pip_requirements: CORE_SCIENCE_REQUIREMENTS,
-          }),
-        )
-        .digest("hex"),
+      capabilityLockDigest({
+        channels: ["conda-forge"],
+        packages: ["python=3.12.11", "pip=25.1.1"],
+        conda_locks: CORE_SCIENCE_CONDA_LOCKS,
+        pip_packages: CORE_SCIENCE_RUNTIME.packages,
+        pip_requirements: CORE_SCIENCE_REQUIREMENTS,
+      }),
     )
     for (const id of ["scipy", "matplotlib", "scikit-learn", "biopython", "rdkit"]) {
       expect(CapabilityRegistry.describe(id)?.runtime).toEqual(CORE_SCIENCE_RUNTIME)
     }
+  })
+
+  test("publishes only exact per-platform lock SHAs and keeps strict Conda URLs internal", () => {
+    const locks = coreScienceCondaLocks()
+    expect(Object.keys(locks).toSorted()).toEqual(["linux-64", "linux-aarch64", "osx-arm64"])
+    const platforms = {
+      "osx-arm64": "darwin-arm64",
+      "linux-aarch64": "linux-arm64",
+      "linux-64": "linux-x64",
+    } as const
+    for (const [platform, lock] of Object.entries(locks)) {
+      const lines = lock.split("\n")
+      expect(lines[0]).toBe("@EXPLICIT")
+      expect(lines.length).toBeGreaterThan(2)
+      for (const line of lines.slice(1)) {
+        expect(line).toMatch(
+          /^https:\/\/conda\.anaconda\.org\/conda-forge\/(?:osx-arm64|linux-aarch64|linux-64|noarch)\/[A-Za-z0-9_][A-Za-z0-9_.-]*(?:\.conda|\.tar\.bz2)#sha256=[a-f0-9]{64}$/,
+        )
+        expect([platform, "noarch"]).toContain(new URL(line).pathname.split("/")[2])
+      }
+      expect(CORE_SCIENCE_RUNTIME.local_locks[platforms[platform as keyof typeof platforms]]).toBe(
+        condaLockSha256(lock),
+      )
+    }
+    expect(JSON.stringify(CapabilityRegistry.describe("scipy"))).not.toContain("conda.anaconda.org")
+    expect(
+      CapabilityRuntime.safeParse({
+        ...CORE_SCIENCE_RUNTIME,
+        local_locks: { "darwin-arm64": CORE_SCIENCE_LOCAL_LOCKS["darwin-arm64"] },
+      }).success,
+    ).toBe(false)
+  })
+
+  test("rejects old macOS, musl, and glibc older than 2.28", () => {
+    expect(capabilityPlatform({ platform: "darwin", arch: "arm64", release: "20.6.0" })).toBeUndefined()
+    expect(capabilityPlatform({ platform: "darwin", arch: "arm64", release: "21.0.0" })).toBe("darwin-arm64")
+    expect(capabilityPlatform({ platform: "linux", arch: "x64", glibc: undefined })).toBeUndefined()
+    expect(capabilityPlatform({ platform: "linux", arch: "x64", glibc: "2.27" })).toBeUndefined()
+    expect(capabilityPlatform({ platform: "linux", arch: "x64", glibc: "2.28" })).toBe("linux-x64")
+    expect(capabilityPlatform({ platform: "linux", arch: "arm64", glibc: "2.39" })).toBe("linux-arm64")
   })
 
   test("compiles a bounded zero-default-upload Modal plan without caller environment overrides", async () => {
@@ -125,6 +176,12 @@ describe("scientific capability registry", () => {
       maturity: "experimental",
       availability: { local: "unavailable", hosted: "setup_needed" },
       hosted: { kind: "nvidia_nim", adapter_id: "diffdock" },
+    })
+    expect(CapabilityRegistry.describe("openfold3")).toMatchObject({
+      maturity: "experimental",
+      availability: { local: "unavailable", hosted: "setup_needed" },
+      hosted: { kind: "nvidia_nim", adapter_id: "openfold3" },
+      basis: expect.stringContaining("pending validation"),
     })
     expect(CapabilityRegistry.describe("alphafold2")).toMatchObject({
       maturity: "blocked",

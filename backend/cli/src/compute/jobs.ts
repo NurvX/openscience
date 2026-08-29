@@ -1530,12 +1530,39 @@ export namespace ComputeJobs {
     }
   }
 
+  async function reattestLocalCapability(job: Job, authority: ExecutionAuthority.Decision) {
+    if (job.target.kind !== "local" || !job.capability || !job.capability_execution) return
+    const configuredRuntime = job.capability_execution.runtime_root
+    if (!configuredRuntime) throw new Error("Scientific local capability runtime is unavailable")
+    const runtime = await fs.realpath(configuredRuntime).catch(() => undefined)
+    if (!runtime) throw new Error("Scientific local capability runtime is unavailable")
+    // The effective sandbox write surface is the union of project/session
+    // grants and the machine-wide allowWrite policy. On Seatbelt, allowing an
+    // ancestor of the exact runtime would let a process rename that ancestor
+    // around the later path-based read-only deny, so reject the topology before
+    // either attestation or spawn.
+    for (const writable of new Set([...authority.writable, ...authority.sandbox.allowWrite])) {
+      const root = await fs.realpath(writable).catch(() => undefined)
+      if (!root) continue
+      const relative = path.relative(root, runtime)
+      if (
+        relative === "" ||
+        (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+      ) {
+        throw new Error("Scientific local capability runtime must be outside every writable sandbox root")
+      }
+    }
+    const { CapabilityRegistry } = await import("@/science/capability/registry")
+    await CapabilityRegistry.reattest(job.capability, job.capability_execution)
+  }
+
   async function launch(
     job: Job,
     host: Host | undefined,
     scope: Scope,
     authority: ExecutionAuthority.Decision,
   ): Promise<Launch> {
+    if (!host) await reattestLocalCapability(job, authority)
     const spec = command(job, host)
     if (host) {
       const planned = Sandbox.wrapArgv({
@@ -1573,6 +1600,7 @@ export namespace ComputeJobs {
         ...authority.readable,
         ...(job.capability_execution?.runtime_root ? [job.capability_execution.runtime_root] : []),
       ],
+      readOnly: job.capability_execution?.runtime_root ? [job.capability_execution.runtime_root] : [],
       extraWritable: [exitOf(scope.root, job.id)],
       unreadable: OpenScience.kernelSensitivePaths(),
       options: sandboxOptions,
@@ -2564,6 +2592,11 @@ export namespace ComputeJobs {
           if (process.platform === "linux" && !linuxIdentity) {
             throw new Error(`Could not establish the compute server identity for durable launch registration`)
           }
+          // All asynchronous launch preparation is complete at this point.
+          // Repeat the archive-derived capability attestation after approval
+          // and immediately before the synchronous wrapper + child spawn so a
+          // runtime changed while permission was pending can never execute.
+          if (!host) await reattestLocalCapability(queued, authority)
           const wrapped = WindowsJobLauncher.wrap({
             file: launch.argv[0]!,
             args: launch.argv.slice(1),

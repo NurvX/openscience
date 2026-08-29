@@ -181,7 +181,7 @@ function CapabilityRow(props: {
         <span class="scientific-tool-row__copy">
           <span class="scientific-tool-row__title">
             <strong>{props.record.name}</strong>
-            <small>{props.record.category.replaceAll("_", " ")}</small>
+            <small>{categoryLabel(props.record.category)}</small>
           </span>
           <span>{props.record.summary}</span>
         </span>
@@ -262,4 +262,9 @@ function availabilityLabel(value: ScientificCapabilityRecord["availability"]["lo
   if (value === "setup_needed") return "setup"
   if (value === "not_applicable") return "n/a"
   return value
+}
+
+function categoryLabel(value: string) {
+  const label = value.replaceAll("_", " ")
+  return label.charAt(0).toUpperCase() + label.slice(1)
 }

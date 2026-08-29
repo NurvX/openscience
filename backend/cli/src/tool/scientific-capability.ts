@@ -315,23 +315,6 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
           if (!args.payload)
             throw new Error(`${item.name} requires a payload matching its strict hosted request schema`)
           const preview = await BioNemoHosted.plan(item.hosted.adapter_id, args.payload)
-          const host = new URL(preview.endpoint).host
-          await ctx.ask({
-            permission: "network",
-            patterns: [host],
-            always: [],
-            metadata: {
-              url: preview.endpoint,
-              network: { host },
-              scientific_capability: {
-                id: item.id,
-                capability: item.name,
-                provider: preview.provider,
-                endpoint: preview.endpoint,
-                model_version: preview.model_version,
-              },
-            },
-          })
           await ctx.ask({
             permission: "remote_compute",
             patterns: [preview.approval_sha256],
@@ -342,10 +325,13 @@ export const ScientificCapabilityTool = Tool.define<typeof ScientificCapabilityP
                 capability: item.name,
                 provider: preview.provider,
                 endpoint: preview.endpoint,
+                status_endpoint_template: preview.status_endpoint_template,
+                status_host: preview.status_host,
                 request_sha256: preview.request_sha256,
                 approval_sha256: preview.approval_sha256,
-                model_version: preview.model_version,
+                api_schema_version: preview.api_schema_version,
                 payload_bytes: preview.payload_bytes,
+                egress_summary: preview.egress_summary,
                 terms_url: preview.terms_url,
                 method: preview.method,
                 warning: preview.warning,

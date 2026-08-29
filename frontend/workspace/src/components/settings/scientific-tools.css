@@ -165,10 +165,6 @@
   line-height: 16px;
 }
 
-.scientific-tool-row__title small {
-  text-transform: capitalize;
-}
-
 .scientific-tool-row__copy > span {
   overflow: hidden;
   text-overflow: ellipsis;

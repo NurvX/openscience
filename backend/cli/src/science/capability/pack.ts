@@ -1,5 +1,12 @@
-import crypto from "node:crypto"
 import { CapabilityRuntime } from "./schema"
+import {
+  CORE_SCIENCE_CONDA_LOCKS,
+  capabilityLockDigest,
+  condaLockPlatform,
+  condaLockSha256,
+  type CondaLockHost,
+  type CoreScienceCondaPlatform,
+} from "./conda-locks"
 
 export const CORE_SCIENCE_PACKAGES = [
   "biopython==1.88",
@@ -49,14 +56,21 @@ six==1.17.0 --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be89
 threadpoolctl==3.6.0 --hash=sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb
 `.trim()
 
+export const CORE_SCIENCE_LOCAL_LOCKS = {
+  "darwin-arm64": condaLockSha256(CORE_SCIENCE_CONDA_LOCKS["osx-arm64"]),
+  "linux-arm64": condaLockSha256(CORE_SCIENCE_CONDA_LOCKS["linux-aarch64"]),
+  "linux-x64": condaLockSha256(CORE_SCIENCE_CONDA_LOCKS["linux-64"]),
+} as const
+
 const lockInput = {
   channels: ["conda-forge"],
   packages: ["python=3.12.11", "pip=25.1.1"],
+  conda_locks: CORE_SCIENCE_CONDA_LOCKS,
   pip_packages: CORE_SCIENCE_PACKAGES,
   pip_requirements: CORE_SCIENCE_REQUIREMENTS,
 }
 
-export const CORE_SCIENCE_LOCK_DIGEST = crypto.createHash("sha256").update(JSON.stringify(lockInput)).digest("hex")
+export const CORE_SCIENCE_LOCK_DIGEST = capabilityLockDigest(lockInput)
 
 export const CORE_SCIENCE_RUNTIME = CapabilityRuntime.parse({
   kind: "python_pack",
@@ -64,6 +78,7 @@ export const CORE_SCIENCE_RUNTIME = CapabilityRuntime.parse({
   python: "3.12.11",
   targets: ["local", "modal"],
   local_platforms: ["darwin-arm64", "linux-arm64", "linux-x64"],
+  local_locks: CORE_SCIENCE_LOCAL_LOCKS,
   image: "python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7",
   lock_digest: CORE_SCIENCE_LOCK_DIGEST,
   packages: CORE_SCIENCE_PACKAGES,
@@ -74,11 +89,18 @@ export const CORE_SCIENCE_RUNTIME = CapabilityRuntime.parse({
 
 export const CORE_SCIENCE_ENVIRONMENT = CORE_SCIENCE_RUNTIME.pack_id
 
-export function capabilityPlatform() {
-  if (process.platform === "darwin" && process.arch === "arm64") return "darwin-arm64" as const
-  if (process.platform === "darwin" && process.arch === "x64") return "darwin-x64" as const
-  if (process.platform === "linux" && process.arch === "arm64") return "linux-arm64" as const
-  if (process.platform === "linux" && process.arch === "x64") return "linux-x64" as const
-  if (process.platform === "win32" && process.arch === "x64") return "windows-x64" as const
+export function capabilityPlatform(host?: CondaLockHost) {
+  const current = condaLockPlatform(host)
+  if (current === "osx-arm64") return "darwin-arm64" as const
+  if (current === "linux-aarch64") return "linux-arm64" as const
+  if (current === "linux-64") return "linux-x64" as const
   return undefined
+}
+
+export function capabilityCondaPlatform(host?: CondaLockHost): CoreScienceCondaPlatform | undefined {
+  return condaLockPlatform(host)
+}
+
+export function coreScienceCondaLocks() {
+  return { ...CORE_SCIENCE_CONDA_LOCKS }
 }

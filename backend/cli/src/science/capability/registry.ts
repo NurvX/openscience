@@ -10,7 +10,8 @@ import {
   type CapabilityRuntime,
 } from "./schema"
 import { capabilitySmokeScript } from "./smokes"
-import { capabilityPlatform } from "./pack"
+import { condaLockSha256 } from "./conda-locks"
+import { capabilityCondaPlatform, capabilityPlatform, coreScienceCondaLocks } from "./pack"
 
 export type CapabilityBinding = JobBroker.CapabilityBinding
 export type CapabilitySummary = {
@@ -65,15 +66,25 @@ function bounded(runtime: CapabilityRuntime, requested?: { cpus?: number; memory
 }
 async function environment(runtime: CapabilityRuntime) {
   const current = capabilityPlatform()
-  if (!current || !runtime.local_platforms.includes(current))
+  const conda = capabilityCondaPlatform()
+  const exact = conda ? coreScienceCondaLocks()[conda] : undefined
+  const lock = current ? runtime.local_locks[current] : undefined
+  if (!current || !exact || !runtime.local_platforms.includes(current) || lock !== condaLockSha256(exact))
     throw new Error(
       `${runtime.pack_id} has no release-locked local wheel set for ${current ?? `${process.platform}-${process.arch}`}`,
     )
-  const state = await ManagedEnvironments.inspect(runtime.pack_id)
+  const state = await ManagedEnvironments.inspect(runtime.pack_id, {
+    conda_lock: exact,
+    lock_digest: runtime.lock_digest,
+    pip_packages: runtime.packages,
+    pip_requirements: runtime.pip_requirements,
+    python: runtime.python,
+  })
   if (
     !state.ready ||
     !state.manifest ||
     state.manifest.spec !== runtime.lock_digest ||
+    state.manifest.conda_lock_sha256 !== lock ||
     !same(state.manifest.packages, [`python=${runtime.python}`, "pip=25.1.1"]) ||
     !same(state.manifest.pip_packages, runtime.packages)
   )
@@ -130,6 +141,24 @@ export namespace CapabilityRegistry {
       profile: input.profile,
       runtime_digest: digest(input.manifest.runtime),
     })
+  }
+  export async function reattest(expectedBinding: CapabilityBinding, expectedExecution: JobBroker.CapabilityExecution) {
+    const item = describe(expectedBinding.id)
+    if (!item) throw new Error(`Scientific capability '${expectedBinding.id}' is no longer registered`)
+    runnable(item)
+    const currentBinding = binding({ manifest: item, profile: expectedBinding.profile })
+    if (canonical(currentBinding) !== canonical(expectedBinding)) {
+      throw new Error(`Scientific capability '${expectedBinding.id}' binding changed before dispatch`)
+    }
+    if (expectedExecution.lock_digest !== item.runtime.lock_digest) {
+      throw new Error(`Scientific capability '${expectedBinding.id}' runtime lock changed before dispatch`)
+    }
+    const local = await environment(item.runtime)
+    const currentExecution = execution(item.runtime, local)
+    if (canonical(currentExecution) !== canonical(expectedExecution)) {
+      throw new Error(`Scientific capability '${expectedBinding.id}' execution root changed before dispatch`)
+    }
+    return { binding: currentBinding, execution: currentExecution }
   }
   export async function compileTask(id: string, raw: CapabilityWorkload) {
     const item = describe(id)

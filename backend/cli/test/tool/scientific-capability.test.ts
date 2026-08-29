@@ -4,6 +4,7 @@ import { Instance } from "../../src/project/instance"
 import { CredentialsRoutes } from "../../src/server/routes/settings/credentials"
 import { executionSession, tmpdir } from "../fixture/fixture"
 import { ScientificCapabilityParameters, ScientificCapabilityTool } from "../../src/tool/scientific-capability"
+import { Global } from "../../src/global"
 
 const context = {
   sessionID: "ses_scientific_capability",
@@ -66,8 +67,9 @@ describe("scientific_capability tool", () => {
     expect(catalog.capabilities).toHaveLength(54)
     expect(catalog.capabilities.every((item) => item.maturity !== "verified")).toBe(true)
     expect(catalog.capabilities.find((item) => item.id === "boltz2")?.availability.hosted).toBe("setup_needed")
+    expect(catalog.capabilities.find((item) => item.id === "openfold3")?.availability.hosted).toBe("setup_needed")
     expect(catalog.capabilities.find((item) => item.id === "paper-qa")?.availability.local).toBe("setup_needed")
-    expect(catalog.capabilities.filter((item) => item.maturity === "blocked")).toHaveLength(3)
+    expect(catalog.capabilities.filter((item) => item.maturity === "blocked")).toHaveLength(2)
     expect(listed.metadata.scientific_capability.dispatched).toBe(false)
   })
 
@@ -116,7 +118,11 @@ describe("scientific_capability tool", () => {
     expect(preview.dispatched).toBe(false)
     await expect(
       tool.execute(
-        { action: "plan", id: "diffdock", payload: { protein: "ATOM", ligand: "CCO", extra: true } },
+        {
+          action: "plan",
+          id: "diffdock",
+          payload: { protein: "ATOM", ligand: "CCO", ligand_file_type: "txt", extra: true },
+        },
         context,
       ),
     ).rejects.toThrow()
@@ -136,7 +142,7 @@ describe("scientific_capability tool", () => {
     })
   })
 
-  test("hosted start asks for separate host access and exact non-standing remote approval", async () => {
+  test("hosted start asks once for an exact non-standing approval covering request and status hosts", async () => {
     await using tmp = await tmpdir({ git: true })
     const originalFetch = globalThis.fetch
     try {
@@ -161,7 +167,13 @@ describe("scientific_capability tool", () => {
           globalThis.fetch = (async () =>
             new Response(
               JSON.stringify({
-                structure: "HEADER    TEST\nATOM      1  CA  ALA A   1      0.000   0.000   0.000\n",
+                structures: [
+                  {
+                    structure: "data_test\n_atom_site.id 1\n",
+                    format: "mmcif",
+                  },
+                ],
+                confidence_scores: [0.91],
               }),
               { headers: { "content-type": "application/json" } },
             )) as unknown as typeof fetch
@@ -179,30 +191,111 @@ describe("scientific_capability tool", () => {
               },
             },
           )
-          expect(asked).toHaveLength(2)
+          expect(asked).toHaveLength(1)
           expect(asked[0]).toMatchObject({
-            permission: "network",
-            patterns: ["health.api.nvidia.com"],
-            always: [],
-          })
-          expect(asked[1]).toMatchObject({
             permission: "remote_compute",
             always: [],
           })
-          expect(asked[1]?.patterns[0]).toMatch(/^[a-f0-9]{64}$/)
-          expect(asked[1]?.metadata.scientific_capability).toMatchObject({
+          expect(asked.some((item) => item.permission === "network")).toBe(false)
+          expect(asked[0]?.patterns[0]).toMatch(/^[a-f0-9]{64}$/)
+          expect(asked[0]?.metadata.scientific_capability).toMatchObject({
             id: "boltz2",
             provider: "nvidia",
             endpoint: "https://health.api.nvidia.com/v1/biology/mit/boltz2/predict",
-            model_version: "2.2.1",
+            status_endpoint_template: "https://api.nvcf.nvidia.com/v2/nvcf/pexec/status/{requestId}",
+            status_host: "api.nvcf.nvidia.com",
+            api_schema_version: "api-schema-1.5.0",
             method: "POST",
           })
-          expect((asked[1]?.metadata.scientific_capability as { payload_bytes: number }).payload_bytes).toBeGreaterThan(
+          expect((asked[0]?.metadata.scientific_capability as { payload_bytes: number }).payload_bytes).toBeGreaterThan(
             0,
           )
-          expect((asked[1]?.metadata.scientific_capability as { terms_url: string }).terms_url).toContain(
+          expect((asked[0]?.metadata.scientific_capability as { terms_url: string }).terms_url).toContain(
             "NVIDIA_API_Trial_Service_Terms.pdf",
           )
+          const egress = (
+            asked[0]?.metadata.scientific_capability as {
+              egress_summary: {
+                input_kinds: string[]
+                sequences: { count: number; lengths: number[]; sha256: string }
+              }
+            }
+          ).egress_summary
+          expect(egress.input_kinds).toContain("biological sequence")
+          expect(egress.sequences).toMatchObject({ count: 1, lengths: [20] })
+          expect(egress.sequences.sha256).toMatch(/^[a-f0-9]{64}$/)
+          expect(JSON.stringify(egress)).not.toContain("MVLTIYPDELVQIVSDKKQQ")
+          expect(JSON.stringify(asked[0]?.metadata)).not.toContain("nvapi-hosted-test-secret")
+          expect(asked[0]?.metadata.scientific_capability).not.toHaveProperty("model_version")
+        },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("requires another one-time approval before one POST retry after an initial NVIDIA auth rejection", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const originalFetch = globalThis.fetch
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const credentials = CredentialsRoutes()
+          await credentials.request("/nvidia", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ fields: { api_key: "nvapi-expired-approval-secret" } }),
+          })
+          const tool = await ScientificCapabilityTool.init()
+          const session = await executionSession()
+          const asked: Array<{ permission: string; patterns: string[]; always: string[] }> = []
+          let posts = 0
+          globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+            posts++
+            expect(init?.method).toBe("POST")
+            const authorization = new Headers(init?.headers).get("authorization")
+            if (posts === 1) {
+              expect(authorization).toBe("Bearer nvapi-expired-approval-secret")
+              return new Response(JSON.stringify({ detail: "expired nvapi-expired-approval-secret" }), {
+                status: 401,
+                headers: { "content-type": "application/json" },
+              })
+            }
+            expect(authorization).toBe("Bearer nvapi-refreshed-approval-secret")
+            return new Response(JSON.stringify({ status: "success", molecules: [{ smiles: "CCO", score: 0.7 }] }), {
+              headers: { "content-type": "application/json", "nvcf-status": "fulfilled" },
+            })
+          }) as unknown as typeof fetch
+          const input = { action: "start" as const, id: "genmol", payload: { smiles: "CCO" } }
+          const approvedContext = {
+            ...context,
+            sessionID: session.id,
+            async ask(request: unknown) {
+              asked.push(request as never)
+            },
+          }
+
+          await expect(tool.execute(input, approvedContext)).rejects.toThrow("another one-time approval")
+          expect(posts).toBe(1)
+          expect(asked).toHaveLength(1)
+          const durableAfterRejection = await Bun.file(
+            `${Global.Path.data}/scientific-capability-hosted-dispatches.json`,
+          ).text()
+          expect(durableAfterRejection).not.toContain("nvapi-expired-approval-secret")
+
+          await credentials.request("/nvidia", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ fields: { api_key: "nvapi-refreshed-approval-secret" } }),
+          })
+          const completed = await tool.execute(input, approvedContext)
+          expect(JSON.parse(completed.output)).toMatchObject({ capability: "genmol", provider: "nvidia" })
+          expect(posts).toBe(2)
+          expect(asked).toHaveLength(2)
+          expect(asked.every((request) => request.permission === "remote_compute")).toBe(true)
+          expect(asked.every((request) => request.always.length === 0)).toBe(true)
+          expect(asked[1]?.patterns).toEqual(asked[0]?.patterns)
         },
       })
     } finally {

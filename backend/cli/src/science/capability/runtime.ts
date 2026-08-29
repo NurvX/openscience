@@ -1,21 +1,40 @@
 import { ManagedEnvironments } from "@/science/kernel/environment-manager"
+import { condaLockSha256 } from "./conda-locks"
 import { CapabilityEvidence } from "./evidence"
-import { capabilityPlatform } from "./pack"
+import { capabilityCondaPlatform, capabilityPlatform, coreScienceCondaLocks } from "./pack"
 import type { CapabilityManifest, CapabilityRuntime as Runtime } from "./schema"
 
 const same = (left: readonly string[] | undefined, right: readonly string[]) =>
   JSON.stringify([...(left ?? [])].toSorted()) === JSON.stringify([...right].toSorted())
-const localReady = (runtime: Runtime, state: Awaited<ReturnType<typeof ManagedEnvironments.inspect>>) =>
-  Boolean(
-    state.ready &&
+const localLock = (runtime: Runtime) => {
+  const current = capabilityPlatform()
+  return current ? runtime.local_locks[current] : undefined
+}
+const condaLock = () => {
+  const current = capabilityCondaPlatform()
+  return current ? coreScienceCondaLocks()[current] : undefined
+}
+const localReady = (runtime: Runtime, state: Awaited<ReturnType<typeof ManagedEnvironments.inspect>>) => {
+  const lock = localLock(runtime)
+  return Boolean(
+    lock &&
+      state.ready &&
       state.manifest &&
       state.manifest.spec === runtime.lock_digest &&
+      state.manifest.conda_lock_sha256 === lock &&
       same(state.manifest.packages, [`python=${runtime.python}`, "pip=25.1.1"]) &&
       same(state.manifest.pip_packages, runtime.packages),
   )
+}
 const localSupported = (runtime: Runtime) => {
   const current = capabilityPlatform()
-  return Boolean(current && runtime.local_platforms.includes(current))
+  const lock = condaLock()
+  return Boolean(
+    current &&
+      lock &&
+      runtime.local_platforms.includes(current) &&
+      runtime.local_locks[current] === condaLockSha256(lock),
+  )
 }
 async function modal(runtime: Runtime) {
   if (!runtime.targets.includes("modal")) return { state: "not_applicable" as const, configured: false, enabled: false }
@@ -46,7 +65,7 @@ async function versions(binary: string, pins: readonly string[]) {
   return JSON.parse(stdout) as { python: string; packages: Record<string, string> }
 }
 export namespace CapabilityRuntime {
-  export async function doctor(manifest: CapabilityManifest) {
+  export async function doctor(manifest: CapabilityManifest, options: { verification?: "full" | "status" } = {}) {
     const evidence = await CapabilityEvidence.forCapability(manifest.id)
     if (!manifest.runtime)
       return {
@@ -59,29 +78,48 @@ export namespace CapabilityRuntime {
         blocker: manifest.blocker ?? null,
         evidence,
       }
-    const state = await ManagedEnvironments.inspect(manifest.runtime.pack_id),
-      supported = manifest.runtime.targets.includes("local") && localSupported(manifest.runtime),
-      ready = supported && localReady(manifest.runtime, state),
+    const supported = manifest.runtime.targets.includes("local") && localSupported(manifest.runtime)
+    const state = supported
+        ? await ManagedEnvironments.inspect(
+            manifest.runtime.pack_id,
+            {
+              conda_lock: condaLock(),
+              lock_digest: manifest.runtime.lock_digest,
+              pip_packages: manifest.runtime.packages,
+              pip_requirements: manifest.runtime.pip_requirements,
+              python: manifest.runtime.python,
+            },
+            { verification: options.verification ?? "full" },
+          )
+        : null,
+      ready = Boolean(supported && state && localReady(manifest.runtime, state)),
       hosted = await modal(manifest.runtime)
+    const localState = supported
+      ? ready
+        ? options.verification === "status"
+          ? ("configured" as const)
+          : ("ready" as const)
+        : ("setup_needed" as const)
+      : ("unavailable" as const)
     return {
       capability: manifest.id,
       maturity: manifest.maturity,
       availability: {
-        local: manifest.runtime.targets.includes("local")
-          ? supported
-            ? ready
-              ? "ready"
-              : "setup_needed"
-            : "unavailable"
-          : "not_applicable",
+        local: manifest.runtime.targets.includes("local") ? localState : "not_applicable",
         hosted: hosted.state,
       },
       local: {
-        state: supported ? (ready ? "ready" : "setup_needed") : "unavailable",
+        state: localState,
         platform: capabilityPlatform() ?? `${process.platform}-${process.arch}`,
         environment: manifest.runtime.pack_id,
-        path: state.path,
-        manifest: state.manifest,
+        lock_sha256: localLock(manifest.runtime) ?? null,
+        path: state?.path ?? null,
+        manifest: state?.manifest ?? null,
+        integrity: state?.integrity ?? {
+          state: "unavailable",
+          verified_at: null,
+          verification_required_before_execution: true,
+        },
       },
       hosted,
       runtime: {
@@ -103,9 +141,16 @@ export namespace CapabilityRuntime {
       throw new Error(
         `${manifest.name} has no release-locked local wheel set for ${capabilityPlatform() ?? `${process.platform}-${process.arch}`}; use its hosted target`,
       )
+    const platform = capabilityPlatform()!
+    const conda = capabilityCondaPlatform()!
+    const locks = coreScienceCondaLocks()
+    if (condaLockSha256(locks[conda]) !== runtime.local_locks[platform]) {
+      throw new Error(`${runtime.pack_id} exact Conda lock does not match its public ${platform} lock SHA`)
+    }
     await ManagedEnvironments.ensureTask(runtime.pack_id, {
       channels: ["conda-forge"],
       packages: [`python=${runtime.python}`, "pip=25.1.1"],
+      conda_locks: locks,
       pip_packages: [...runtime.packages],
       pip_requirements: runtime.pip_requirements,
       lock_digest: runtime.lock_digest,
@@ -129,6 +174,7 @@ export namespace CapabilityRuntime {
       python: installed.python,
       packages: installed.packages,
       lock_digest: runtime.lock_digest,
+      conda_lock_sha256: runtime.local_locks[platform],
     }
   }
 }

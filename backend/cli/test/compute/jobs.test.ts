@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -13,6 +13,7 @@ import { Sandbox } from "../../src/sandbox/sandbox"
 import { ExecutionAuthority } from "../../src/project/execution"
 import { ArtifactStore } from "../../src/artifact/store"
 import { CredentialProcessLedger } from "../../src/credentials/process-ledger"
+import { CapabilityRegistry } from "../../src/science/capability/registry"
 import { sandboxedExecution, tmpdir, trustProject } from "../fixture/fixture"
 
 type StartOptions = NonNullable<Parameters<typeof ComputeJobs.start>[1]>
@@ -646,9 +647,12 @@ describe("ComputeJobs local lifecycle", () => {
   test("persists an internal capability binding in the job and provenance envelope", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "state")
+    const workspace = path.join(tmp.path, "project")
     const runtime = path.join(tmp.path, "runtime")
+    await fs.mkdir(workspace, { recursive: true })
     await fs.mkdir(runtime, { recursive: true })
-    await fs.writeFile(path.join(runtime, "lock-marker"), "verified")
+    const marker = path.join(runtime, "lock-marker")
+    await fs.writeFile(marker, "verified")
     const capability = ComputeJobs.CapabilityBinding.parse({
       id: "scipy",
       version: "2.0.0",
@@ -663,48 +667,125 @@ describe("ComputeJobs local lifecycle", () => {
       runtime_binary: path.join(runtime, "bin", "python"),
       runtime_root: runtime,
     })
-    if (!Sandbox.available()) {
+    const reattest = spyOn(CapabilityRegistry, "reattest").mockImplementation(async (binding, execution) => ({
+      binding,
+      execution,
+    }))
+    try {
+      if (!Sandbox.available()) {
+        await expect(
+          start(
+            {
+              name: "capability provenance",
+              command: `test "$(cat '${path.join(runtime, "lock-marker")}')" = verified`,
+              target: { kind: "local" },
+              capability,
+              capability_execution: capabilityExecution,
+            },
+            { root, workspace },
+          ),
+        ).rejects.toThrow("requires an enforced host sandbox")
+        return
+      }
+      const job = await start(
+        {
+          name: "capability provenance",
+          command: [
+            `test "$(cat ${JSON.stringify(marker)})" = verified`,
+            `if (printf tampered > ${JSON.stringify(marker)}) 2>/dev/null; then exit 17; fi`,
+            `test "$(cat ${JSON.stringify(marker)})" = verified`,
+          ].join("; "),
+          target: { kind: "local" },
+          capability,
+          capability_execution: capabilityExecution,
+        },
+        { root, workspace },
+      )
+      const finished = await ComputeJobs.wait(job.id, { root, workspace, timeout: 5_000 })
+      const restarted = await ComputeJobs.get(job.id, { root, workspace })
+      const log = await ComputeJobs.log(job.id, { root, workspace })
+
+      expect({ status: finished.status, error: finished.error, log }).toEqual({
+        status: "succeeded",
+        error: undefined,
+        log: "",
+      })
+      expect(await Bun.file(marker).text()).toBe("verified")
+      expect(reattest).toHaveBeenCalledTimes(2)
+      expect(finished.sandbox).toMatchObject({ requested: true, enforced: true, network: "deny" })
+      expect(restarted?.capability).toEqual(capability)
+      expect(restarted?.capability_execution).toEqual(capabilityExecution)
+      expect(restarted?.provenance?.scientific_capability).toEqual({
+        ...capability,
+        execution_network: "none",
+        lock_digest: capabilityExecution.lock_digest,
+      })
+
+      const nestedRuntime = path.join(workspace, ".data", "conda", "envs", "exact")
+      const nestedMarker = path.join(nestedRuntime, "lock-marker")
+      const spawned = path.join(workspace, "unsafe-spawned")
+      await fs.mkdir(nestedRuntime, { recursive: true })
+      await fs.writeFile(nestedMarker, "verified")
+      const nestedExecution = ComputeJobs.CapabilityExecution.parse({
+        ...capabilityExecution,
+        runtime_binary: path.join(nestedRuntime, "bin", "python"),
+        runtime_root: nestedRuntime,
+      })
       await expect(
         start(
           {
-            name: "capability provenance",
-            command: `test "$(cat '${path.join(runtime, "lock-marker")}')" = verified`,
+            name: "nested capability runtime",
+            command: `touch ${JSON.stringify(spawned)}`,
             target: { kind: "local" },
             capability,
-            capability_execution: capabilityExecution,
+            capability_execution: nestedExecution,
           },
-          { root, workspace: tmp.path },
+          { root, workspace },
         ),
-      ).rejects.toThrow("requires an enforced host sandbox")
-      return
-    }
-    const job = await start(
-      {
-        name: "capability provenance",
-        command: `test "$(cat '${path.join(runtime, "lock-marker")}')" = verified`,
-        target: { kind: "local" },
-        capability,
-        capability_execution: capabilityExecution,
-      },
-      { root, workspace: tmp.path },
-    )
-    const finished = await ComputeJobs.wait(job.id, { root, workspace: tmp.path, timeout: 5_000 })
-    const restarted = await ComputeJobs.get(job.id, { root, workspace: tmp.path })
-    const log = await ComputeJobs.log(job.id, { root, workspace: tmp.path })
+      ).rejects.toThrow("must be outside every writable sandbox root")
+      expect(await Bun.file(nestedMarker).text()).toBe("verified")
+      expect(await Bun.file(spawned).exists()).toBe(false)
 
-    expect({ status: finished.status, error: finished.error, log }).toEqual({
-      status: "succeeded",
-      error: undefined,
-      log: "",
-    })
-    expect(finished.sandbox).toMatchObject({ requested: true, enforced: true, network: "deny" })
-    expect(restarted?.capability).toEqual(capability)
-    expect(restarted?.capability_execution).toEqual(capabilityExecution)
-    expect(restarted?.provenance?.scientific_capability).toEqual({
-      ...capability,
-      execution_network: "none",
-      lock_digest: capabilityExecution.lock_digest,
-    })
+      const policyRoot = path.join(tmp.path, "machine-writable")
+      const policyRuntime = path.join(policyRoot, "conda", "envs", "exact")
+      const policyMarker = path.join(policyRuntime, "lock-marker")
+      const policySpawned = path.join(workspace, "policy-unsafe-spawned")
+      await fs.mkdir(policyRuntime, { recursive: true })
+      await fs.writeFile(policyMarker, "verified")
+      const policyExecution = ComputeJobs.CapabilityExecution.parse({
+        ...capabilityExecution,
+        runtime_binary: path.join(policyRuntime, "bin", "python"),
+        runtime_root: policyRuntime,
+      })
+      const originalRequire = ExecutionAuthority.require
+      const authority = spyOn(ExecutionAuthority, "require").mockImplementation(async (input) => {
+        const decision = await originalRequire(input)
+        return ExecutionAuthority.Decision.parse({
+          ...decision,
+          sandbox: { ...decision.sandbox, allowWrite: [policyRoot] },
+        })
+      })
+      try {
+        await expect(
+          start(
+            {
+              name: "policy-nested capability runtime",
+              command: `touch ${JSON.stringify(policySpawned)}`,
+              target: { kind: "local" },
+              capability,
+              capability_execution: policyExecution,
+            },
+            { root, workspace },
+          ),
+        ).rejects.toThrow("must be outside every writable sandbox root")
+      } finally {
+        authority.mockRestore()
+      }
+      expect(await Bun.file(policyMarker).text()).toBe("verified")
+      expect(await Bun.file(policySpawned).exists()).toBe(false)
+    } finally {
+      reattest.mockRestore()
+    }
   })
 
   test("rejects capability identity without its execution policy", () => {

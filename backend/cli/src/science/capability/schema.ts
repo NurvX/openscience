@@ -78,6 +78,7 @@ export const CapabilityRuntime = z
       .min(1)
       .max(2),
     local_platforms: z.array(z.enum(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64"])).max(5),
+    local_locks: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
     image: z.string().regex(/^[^\s@]+@sha256:[a-f0-9]{64}$/, "Capability images must use an immutable sha256 digest"),
     lock_digest: z.string().regex(/^[a-f0-9]{64}$/),
     packages: CapabilityPackagePin.array().min(1).max(100),
@@ -94,14 +95,47 @@ export const CapabilityRuntime = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    const supportedPlatforms = new Set(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64"])
+    for (const key of Object.keys(value.local_locks)) {
+      if (supportedPlatforms.has(key)) continue
+      ctx.addIssue({
+        code: "custom",
+        path: ["local_locks", key],
+        message: "Local lock platform is not supported",
+      })
+    }
     if (value.targets.includes("local") && value.local_platforms.length === 0) {
       ctx.addIssue({ code: "custom", path: ["local_platforms"], message: "Local runtimes require a platform lock" })
+    }
+    if (value.targets.includes("local") && Object.keys(value.local_locks).length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["local_locks"],
+        message: "Local runtimes require immutable per-platform locks",
+      })
     }
     if (!value.targets.includes("local") && value.local_platforms.length > 0) {
       ctx.addIssue({
         code: "custom",
         path: ["local_platforms"],
         message: "Hosted-only runtimes cannot advertise local platforms",
+      })
+    }
+    if (!value.targets.includes("local") && Object.keys(value.local_locks).length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["local_locks"],
+        message: "Hosted-only runtimes cannot advertise local lockfiles",
+      })
+    }
+    if (
+      JSON.stringify(Object.keys(value.local_locks).toSorted()) !==
+      JSON.stringify([...value.local_platforms].toSorted())
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["local_locks"],
+        message: "Local lock platforms must match the advertised local platforms exactly",
       })
     }
     const locked = new Set(
@@ -129,7 +163,18 @@ export type CapabilityRuntime = z.infer<typeof CapabilityRuntime>
 export const CapabilityHosted = z
   .object({
     kind: z.literal("nvidia_nim"),
-    adapter_id: z.enum(["boltz2", "diffdock", "proteinmpnn", "rfdiffusion"]),
+    adapter_id: z.enum([
+      "boltz2",
+      "diffdock",
+      "evo2",
+      "genmol",
+      "molmim",
+      "msa-search",
+      "openfold2",
+      "openfold3",
+      "proteinmpnn",
+      "rfdiffusion",
+    ]),
     credential: z.literal("nvidia_nim"),
     docs_url: z.string().url(),
     terms_url: z.string().url(),

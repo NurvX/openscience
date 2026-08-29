@@ -93,7 +93,9 @@ async function currentAvailability(manifest: Manifest) {
   let current = { ...manifest.availability }
   if (manifest.runtime) {
     try {
-      current = CapabilityAvailability.parse((await CapabilityRuntime.doctor(manifest)).availability)
+      current = CapabilityAvailability.parse(
+        (await CapabilityRuntime.doctor(manifest, { verification: "status" })).availability,
+      )
     } catch {
       if (manifest.runtime.targets.includes("local")) current.local = "degraded"
       if (manifest.runtime.targets.includes("modal")) current.hosted = "degraded"

@@ -39,6 +39,39 @@ const filepath = () => path.join(Global.Path.data, "scientific-capability-eviden
 const key = (id: string, target: "local" | "modal") => `${id}:${target}`
 
 export namespace CapabilityEvidence {
+  export function releaseSource(
+    input: {
+      artifactSource?: string
+      artifactVersion?: string
+      declaredSource?: string
+      githubSource?: string
+    } = {},
+  ) {
+    const artifactSource = input.artifactSource ?? Installation.ARTIFACT_SOURCE
+    const artifactVersion = input.artifactVersion ?? Installation.VERSION
+    const declared = [input.declaredSource, input.githubSource].filter(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    )
+    if (artifactSource && !/^[a-f0-9]{40}$/.test(artifactSource)) {
+      throw new Error(`Embedded scientific capability artifact source is invalid: ${artifactSource}`)
+    }
+    for (const value of declared) {
+      if (!/^[a-f0-9]{40}$/.test(value)) {
+        throw new Error(`Scientific capability release source is not an exact lowercase Git SHA: ${value}`)
+      }
+    }
+    if (!artifactSource && declared.length > 0) {
+      if (artifactVersion === "local") return undefined
+      throw new Error(`This OpenScience artifact does not embed a release source; refusing to mint release evidence`)
+    }
+    for (const value of declared) {
+      if (value !== artifactSource) {
+        throw new Error(`Scientific capability release source mismatch: artifact=${artifactSource} runtime=${value}`)
+      }
+    }
+    return artifactSource
+  }
+
   export async function list() {
     const data = await JsonStore.read(filepath())
     return Object.fromEntries(
@@ -66,7 +99,10 @@ export namespace CapabilityEvidence {
     metrics: Record<string, string | number | boolean>
     artifacts: Array<{ path: string; size: number; sha256: string }>
   }) {
-    const release = process.env.OPENSCIENCE_RELEASE_SHA || process.env.GITHUB_SHA
+    const release = releaseSource({
+      declaredSource: process.env.OPENSCIENCE_RELEASE_SHA,
+      githubSource: process.env.GITHUB_SHA,
+    })
     const value = CapabilityEvidenceRecord.parse({
       schema_version: 1,
       capability: {
@@ -79,7 +115,7 @@ export namespace CapabilityEvidence {
       target: input.target,
       job_id: input.job_id,
       app_version: Installation.VERSION,
-      release_sha: release && /^[a-f0-9]{40}$/.test(release) ? release : undefined,
+      release_sha: release,
       verified_at: new Date().toISOString(),
       metrics: input.metrics,
       artifacts: input.artifacts,
