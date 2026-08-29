@@ -86,6 +86,9 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Fixed
 
+- Made runtime restart transfer a cancelled startup's durable lease without a
+  closing-handle race, so the replacement incarnation cannot fail or be reaped
+  by the superseded boot.
 - Made PDF.js use one dev- and production-safe worker URL, added responsive page
   thumbnails and better use of available preview space, and prevented the
   `Invalid workerSrc type` failure seen in local development.
