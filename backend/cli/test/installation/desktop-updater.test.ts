@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/prom
 import os from "node:os"
 import path from "node:path"
 import {
+  assertTransactionClean,
   canonical,
   packagedUpdateCache,
   stopSuccessfulApp,
@@ -132,6 +133,41 @@ describe("desktop update release contract", () => {
         },
       }),
     ).rejects.toThrow("ps unavailable")
+  })
+
+  test("waits for renamed purge and health-write residue before declaring updater cleanup settled", async () => {
+    const cache = await mkdtemp(path.join(os.tmpdir(), "openscience-update-residue-"))
+    roots.push(cache)
+    const token = "a".repeat(48)
+    const info = {
+      incoming: path.join(cache, "missing-incoming"),
+      root: path.join(cache, `pending-${token}`),
+      health: path.join(cache, `health-${token}.json`),
+      runtime: path.join(cache, `runtime-${token}.json`),
+      handoff: path.join(cache, `handoff-${token}.json`),
+      ready: path.join(cache, `helper-${token}.json`),
+      journal: path.join(cache, `transaction-${token}.json`),
+    }
+    const tomb = path.join(cache, ".openscience-purge-test")
+    const healthTemporary = `${info.health}.tmp-123`
+    await Promise.all([
+      mkdir(tomb),
+      Bun.write(healthTemporary, "partial"),
+      Bun.write(path.join(cache, "last-result.json"), "{}\n"),
+      Bun.write(path.join(cache, "update.log"), "settled\n"),
+    ])
+
+    let settled = false
+    const waiting = assertTransactionClean(info, 1_000).then(() => {
+      settled = true
+    })
+    await Bun.sleep(10)
+    expect(settled).toBe(false)
+    await Promise.all([rm(tomb, { recursive: true }), rm(healthTemporary)])
+    await waiting
+
+    await Bun.write(path.join(cache, "stuck-entry"), "stuck")
+    await expect(assertTransactionClean(info, 1)).rejects.toThrow("cache:")
   })
 
   test("accepts only a strictly newer stable version", () => {

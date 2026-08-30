@@ -157,22 +157,30 @@ async function missing(file) {
   )
 }
 
-async function assertTransactionClean(info) {
+async function transactionResidue(info) {
   const owned = ["incoming", "root", "health", "runtime", "handoff", "ready", "journal"]
-  const deadline = Date.now() + 30_000
-  while (Date.now() < deadline) {
-    const retained = []
-    for (const key of owned) {
-      if (!(await missing(info[key]))) retained.push(key)
-    }
-    if (!retained.length) return
-    await sleep(100)
-  }
   const retained = []
   for (const key of owned) {
     if (!(await missing(info[key]))) retained.push(`${key}: ${info[key]}`)
   }
-  throw new Error(`Updater lifecycle did not clean its transaction: ${retained.join(", ")}`)
+  const cache = path.dirname(info.health)
+  const allowed = new Set(["last-result.json", "update.log"])
+  const entries = await readdir(cache).catch((error) => {
+    if (error?.code === "ENOENT") return []
+    throw error
+  })
+  const unexpected = entries.filter((entry) => !allowed.has(entry)).map((entry) => `cache: ${path.join(cache, entry)}`)
+  return [...retained, ...unexpected]
+}
+
+export async function assertTransactionClean(info, timeout = 120_000) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (!(await transactionResidue(info)).length) return
+    await sleep(100)
+  }
+  const residue = await transactionResidue(info)
+  throw new Error(`Updater lifecycle did not clean its transaction: ${residue.join(", ")}`)
 }
 
 async function observed(identity) {
