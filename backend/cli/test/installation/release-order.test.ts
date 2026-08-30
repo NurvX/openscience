@@ -398,6 +398,7 @@ test("desktop packaging keeps local ad-hoc builds separate from signed stable ma
   expect(lifecycle).toContain('OPENSCIENCE_UPDATE_TEST_HEALTH_FAILURE: "after-healthy"')
   expect(lifecycle).toContain('OPENSCIENCE_UPDATE_TEST_SKIP_FALLBACK: "1"')
   expect(lifecycle).toContain("const workspace = await canonical(arch)")
+  expect(lifecycle).toContain("const cache = packagedUpdateCache()")
   expect(lifecycle).toContain("service_health")
   expect(lifecycle).toContain("assertTransactionClean")
   expect(updateHelper).toContain("startupHealth = await waitForHealth(payload)")

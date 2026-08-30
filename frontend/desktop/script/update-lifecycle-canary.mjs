@@ -8,6 +8,7 @@ import { apply, asset, checksum, launch, newer, stage, verify } from "../src/upd
 
 const execute = promisify(execFile)
 const script = fileURLToPath(import.meta.url)
+const desktopPackage = JSON.parse(await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"))
 const sleep = (duration) => new Promise((resolve) => setTimeout(resolve, duration))
 
 function argumentsMap(argv) {
@@ -269,6 +270,23 @@ export async function canonical(arch) {
   return realpath(await mkdtemp(path.join(os.tmpdir(), `openscience-update-lifecycle-${arch}-`)))
 }
 
+export function packagedUpdateCache(home = os.homedir(), metadata = desktopPackage) {
+  const name = metadata?.productName || metadata?.name
+  const segments = typeof name === "string" ? name.split("/") : []
+  if (
+    !path.isAbsolute(home) ||
+    path.normalize(home) !== home ||
+    !segments.length ||
+    segments.some((segment) => !segment || segment === "." || segment === ".." || segment.includes("\\"))
+  ) {
+    throw new Error("The packaged desktop user-data path is invalid")
+  }
+  // Electron derives app.getPath("userData") from the packaged package name,
+  // not from electron-builder's bundle display name. Keep the synthetic
+  // transaction in the exact cache the launched app will authenticate.
+  return path.join(home, "Library", "Application Support", ...segments, "updates")
+}
+
 async function main() {
   const input = argumentsMap(process.argv.slice(2))
   const archive = path.resolve(required(input, "zip"))
@@ -288,7 +306,7 @@ async function main() {
   await Promise.all([realArchive(archive, asset(arch)), realArchive(previousArchive, asset(arch))])
 
   const workspace = await canonical(arch)
-  const cache = path.join(os.homedir(), "Library", "Application Support", "OpenScience", "updates")
+  const cache = packagedUpdateCache()
   const target = path.join(workspace, "Applications", "OpenScience.app")
   try {
     await mkdir(cache, { recursive: true, mode: 0o700 })

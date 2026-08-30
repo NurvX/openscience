@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { chmod, lstat, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { canonical } from "../../../../frontend/desktop/script/update-lifecycle-canary.mjs"
+import { canonical, packagedUpdateCache } from "../../../../frontend/desktop/script/update-lifecycle-canary.mjs"
 import {
   apply,
   asset,
@@ -30,6 +30,15 @@ describe("desktop update release contract", () => {
     const root = await canonical(process.arch)
     roots.push(root)
     expect(root).toBe(await realpath(root))
+  })
+
+  test("uses the packaged Electron user-data cache for lifecycle health receipts", () => {
+    expect(packagedUpdateCache("/Users/release-runner")).toBe(
+      "/Users/release-runner/Library/Application Support/@synsci/desktop/updates",
+    )
+    expect(() => packagedUpdateCache("/Users/release-runner", { name: "../escape" })).toThrow(
+      "The packaged desktop user-data path is invalid",
+    )
   })
 
   test("accepts only a strictly newer stable version", () => {
