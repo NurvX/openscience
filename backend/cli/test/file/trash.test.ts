@@ -12,6 +12,32 @@ import { SessionFilesystem } from "../../src/session/filesystem"
 import { executionSession, tmpdir } from "../fixture/fixture"
 
 describe("recoverable source file trash", () => {
+  test("uses the 64-bit directory ABI for Intel macOS trash traversal", () => {
+    expect(SafeTrashIO.directorySymbolsForTests("darwin", "x64")).toEqual({
+      fdopendir: "fdopendir$INODE64",
+      readdir: "readdir$INODE64",
+    })
+    expect(SafeTrashIO.directorySymbolsForTests("darwin", "arm64")).toEqual({
+      fdopendir: "fdopendir",
+      readdir: "readdir",
+    })
+    expect(SafeTrashIO.directorySymbolsForTests("linux", "x64")).toEqual({
+      fdopendir: "fdopendir",
+      readdir: "readdir",
+    })
+
+    const inode64 = Buffer.alloc(32)
+    inode64.writeUInt16LE(32, 16)
+    inode64.writeUInt16LE(8, 18)
+    inode64.write("Contents", 21)
+    expect(SafeTrashIO.decodeDirectoryRecordForTests(inode64, "darwin")).toBe("Contents")
+
+    const legacy = Buffer.alloc(264)
+    legacy.writeUInt16LE(12, 4)
+    legacy.write("Contents", 8)
+    expect(() => SafeTrashIO.decodeDirectoryRecordForTests(legacy, "darwin")).toThrow("does not match the selected ABI")
+  })
+
   test("encodes the complete 64-bit FILE_RENAME_INFO layout", () => {
     const name = "result.txt"
     const encoded = Buffer.from(name, "utf16le")

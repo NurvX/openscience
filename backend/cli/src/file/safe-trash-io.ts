@@ -63,6 +63,41 @@ export namespace SafeTrashIO {
   const O_CLOEXEC = process.platform === "darwin" ? 0x01000000 : 0x00080000
   const natives = { value: undefined as Native | undefined }
 
+  function directorySymbols(platform: string, arch: string) {
+    // Intel macOS keeps the unsuffixed directory APIs on the legacy dirent ABI.
+    // Pair both functions with the 64-bit inode ABI that decode() implements.
+    const suffix = platform === "darwin" && arch === "x64" ? "$INODE64" : ""
+    return {
+      fdopendir: `fdopendir${suffix}`,
+      readdir: `readdir${suffix}`,
+    }
+  }
+
+  export const directorySymbolsForTests = directorySymbols
+
+  function decodeDirectoryRecord(bytes: Uint8Array, platform: string) {
+    const offset = platform === "darwin" ? 21 : 19
+    const maximum = platform === "darwin" ? 1048 : 280
+    if (bytes.byteLength < offset + 1) throw new Error("Directory record header is truncated")
+    const record = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const length = record.readUInt16LE(16)
+    if (length <= offset || length > maximum || length > record.byteLength) {
+      throw new Error("Directory record length does not match the selected ABI")
+    }
+    if (platform === "darwin") {
+      const nameLength = record.readUInt16LE(18)
+      if (nameLength > 1023 || offset + nameLength >= length || record[offset + nameLength] !== 0) {
+        throw new Error("Directory record name does not match the selected ABI")
+      }
+      return record.subarray(offset, offset + nameLength).toString("utf8")
+    }
+    const end = record.indexOf(0, offset)
+    if (end < 0 || end >= length) throw new Error("Directory record name is not terminated")
+    return record.subarray(offset, end).toString("utf8")
+  }
+
+  export const decodeDirectoryRecordForTests = decodeDirectoryRecord
+
   function libraries() {
     if (process.platform === "darwin") return ["/usr/lib/libSystem.B.dylib"]
     if (process.arch === "arm64") {
@@ -78,6 +113,7 @@ export namespace SafeTrashIO {
     if (natives.value) return natives.value
     const symbol = process.platform === "darwin" ? "__error" : "__errno_location"
     const exclusive = process.platform === "darwin" ? "renameatx_np" : "renameat2"
+    const directory = directorySymbols(process.platform, process.arch)
     const loaded = { library: undefined as ReturnType<typeof dlopen> | undefined, error: undefined as unknown }
     for (const candidate of libraries()) {
       try {
@@ -110,11 +146,11 @@ export namespace SafeTrashIO {
             args: [FFIType.i32],
             returns: FFIType.i32,
           },
-          fdopendir: {
+          [directory.fdopendir]: {
             args: [FFIType.i32],
             returns: FFIType.ptr,
           },
-          readdir: {
+          [directory.readdir]: {
             args: [FFIType.ptr],
             returns: FFIType.ptr,
           },
@@ -159,8 +195,8 @@ export namespace SafeTrashIO {
         rename(fromDir, from, toDir, to, process.platform === "darwin" ? 0x4 : 0x1),
       unlinkat: symbols.unlinkat as Native["unlinkat"],
       dup: symbols.dup as Native["dup"],
-      fdopendir: symbols.fdopendir as Native["fdopendir"],
-      readdir: symbols.readdir as Native["readdir"],
+      fdopendir: symbols[directory.fdopendir] as Native["fdopendir"],
+      readdir: symbols[directory.readdir] as Native["readdir"],
       closedir: symbols.closedir as Native["closedir"],
       errno,
     }
@@ -721,10 +757,13 @@ export namespace SafeTrashIO {
 
   function decode(pointer: number | bigint) {
     const offset = process.platform === "darwin" ? 21 : 19
-    const bytes = new Uint8Array(toArrayBuffer(pointer as Pointer, 0, process.platform === "darwin" ? 1045 : 275))
-    const end = bytes.indexOf(0, offset)
-    const stop = end < 0 ? bytes.byteLength : end
-    return Buffer.from(bytes.subarray(offset, stop)).toString("utf8")
+    const header = new Uint8Array(toArrayBuffer(pointer as Pointer, 0, offset))
+    const length = Buffer.from(header.buffer, header.byteOffset, header.byteLength).readUInt16LE(16)
+    const maximum = process.platform === "darwin" ? 1048 : 280
+    if (length <= offset || length > maximum) {
+      throw new Error("Directory record length does not match the selected ABI")
+    }
+    return decodeDirectoryRecord(new Uint8Array(toArrayBuffer(pointer as Pointer, 0, length)), process.platform)
   }
 
   async function entries(fd: number) {
@@ -859,9 +898,6 @@ export namespace SafeTrashIO {
       } finally {
         await close(final.fd)
       }
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false
-      throw cause
     } finally {
       await target.parent.close()
     }
