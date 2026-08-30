@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { chmod, lstat, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { canonical, packagedUpdateCache } from "../../../../frontend/desktop/script/update-lifecycle-canary.mjs"
+import {
+  canonical,
+  packagedUpdateCache,
+  stopSuccessfulApp,
+} from "../../../../frontend/desktop/script/update-lifecycle-canary.mjs"
 import {
   apply,
   asset,
@@ -39,6 +43,95 @@ describe("desktop update release contract", () => {
     expect(() => packagedUpdateCache("/Users/release-runner", { name: "../escape" })).toThrow(
       "The packaged desktop user-data path is invalid",
     )
+  })
+
+  test("requires the authenticated runtime pair to remain usable until exact canary shutdown", async () => {
+    const desktop = { pid: 101, started: "desktop-start", command: "/Applications/OpenScience" }
+    const service = { pid: 202, started: "service-start", command: "/Applications/OpenScience serve" }
+    const health = { process_identity: desktop, service_identity: service }
+    const signaled: number[] = []
+    const waited: number[] = []
+    let observing = 0
+    let concurrentObservations = 0
+
+    await stopSuccessfulApp(health, {
+      observe: async (identity: typeof desktop) => {
+        observing++
+        concurrentObservations = Math.max(concurrentObservations, observing)
+        await Promise.resolve()
+        observing--
+        return identity
+      },
+      signal: (identity: typeof desktop) => signaled.push(identity.pid),
+      waitForExit: async (identity: typeof desktop) => {
+        waited.push(identity.pid)
+        return true
+      },
+    })
+    expect(signaled).toEqual([desktop.pid])
+    expect(waited).toEqual([desktop.pid, service.pid])
+    expect(concurrentObservations).toBe(2)
+
+    signaled.length = 0
+    await expect(
+      stopSuccessfulApp(health, {
+        observe: async () => undefined,
+        signal: (identity: typeof desktop) => signaled.push(identity.pid),
+        waitForExit: async () => true,
+      }),
+    ).rejects.toThrow("main exited; sidecar exited")
+    expect(signaled).toEqual([])
+
+    await expect(
+      stopSuccessfulApp(health, {
+        observe: async (identity: typeof desktop) => (identity.pid === desktop.pid ? undefined : identity),
+        signal: (identity: typeof desktop) => signaled.push(identity.pid),
+        waitForExit: async () => true,
+      }),
+    ).rejects.toThrow("main exited")
+    expect(signaled).toEqual([service.pid])
+
+    await expect(
+      stopSuccessfulApp(health, {
+        observe: async (identity: typeof desktop) => (identity.pid === desktop.pid ? undefined : identity),
+        signal: () => {
+          throw Object.assign(new Error("already exited"), { code: "ESRCH" })
+        },
+        waitForExit: async () => true,
+      }),
+    ).rejects.toThrow("main exited")
+
+    await expect(
+      stopSuccessfulApp(health, {
+        observe: async (identity: typeof desktop) => (identity.pid === desktop.pid ? undefined : identity),
+        signal: () => {
+          throw Object.assign(new Error("signal denied"), { code: "EPERM" })
+        },
+        waitForExit: async () => true,
+      }),
+    ).rejects.toThrow("signal denied")
+
+    signaled.length = 0
+    await expect(
+      stopSuccessfulApp(health, {
+        observe: async (identity: typeof desktop) =>
+          identity.pid === desktop.pid ? { ...identity, command: "/unrelated/reused-pid" } : identity,
+        signal: (identity: typeof desktop) => signaled.push(identity.pid),
+        waitForExit: async () => true,
+      }),
+    ).rejects.toThrow("main identity changed")
+    expect(signaled).toEqual([service.pid])
+
+    await expect(
+      stopSuccessfulApp(health, {
+        observe: async () => {
+          throw new Error("ps unavailable")
+        },
+        signal: () => {
+          throw new Error("must not signal without exact identity evidence")
+        },
+      }),
+    ).rejects.toThrow("ps unavailable")
   })
 
   test("accepts only a strictly newer stable version", () => {

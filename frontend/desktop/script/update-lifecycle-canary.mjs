@@ -176,54 +176,110 @@ async function assertTransactionClean(info) {
 }
 
 async function observed(identity) {
-  const [started, command] = await Promise.all([
-    execute("/bin/ps", ["-p", String(identity.pid), "-o", "lstart="], { timeout: 2_000 }).catch(() => undefined),
-    execute("/bin/ps", ["-ww", "-p", String(identity.pid), "-o", "command="], { timeout: 2_000 }).catch(
-      () => undefined,
-    ),
-  ])
-  if (!started?.stdout.trim() || !command?.stdout.trim()) return
-  return { started: started.stdout.trim(), command: command.stdout.trim() }
+  let result
+  try {
+    result = await execute("/bin/ps", ["-ww", "-p", String(identity.pid), "-o", "lstart=", "-o", "command="], {
+      timeout: 2_000,
+    })
+  } catch (error) {
+    try {
+      process.kill(identity.pid, 0)
+    } catch (probe) {
+      if (probe?.code === "ESRCH") return
+      throw new Error(`Could not prove whether packaged process ${identity.pid} exited`, { cause: probe })
+    }
+    throw new Error(`Could not inspect packaged process ${identity.pid}`, { cause: error })
+  }
+  const output = result.stdout.trim()
+  if (!output) {
+    try {
+      process.kill(identity.pid, 0)
+    } catch (probe) {
+      if (probe?.code === "ESRCH") return
+      throw new Error(`Could not prove whether packaged process ${identity.pid} exited`, { cause: probe })
+    }
+    throw new Error(`Packaged process ${identity.pid} was alive but ps returned no identity`)
+  }
+  if (!output.startsWith(`${identity.started} `)) return { started: "", command: output }
+  return { started: identity.started, command: output.slice(identity.started.length).trimStart() }
 }
 
 function sameProcess(value, identity) {
   return Boolean(value && value.started === identity.started && value.command === identity.command)
 }
 
-async function waitForExit(identity, timeout) {
+async function waitForExit(identity, timeout, inspect = observed) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
-    if (!sameProcess(await observed(identity), identity)) return true
+    if (!sameProcess(await inspect(identity), identity)) return true
     await sleep(100)
   }
   return false
 }
 
-async function stopSuccessfulApp(health) {
+function signalExact(identity, signal) {
+  try {
+    signal(identity)
+    return true
+  } catch (error) {
+    // The exact process may finish between its identity inspection and the
+    // signal. Only ESRCH proves that narrow race; every other signal failure
+    // remains a canary instrumentation error.
+    if (error?.code === "ESRCH") return false
+    throw error
+  }
+}
+
+export async function stopSuccessfulApp(health, operations = {}) {
   const desktop = health?.process_identity
   const service = health?.service_identity
   if (
     !Number.isSafeInteger(desktop?.pid) ||
+    desktop.pid <= 1 ||
+    typeof desktop.started !== "string" ||
     !desktop.started ||
+    typeof desktop.command !== "string" ||
     !desktop.command ||
     !Number.isSafeInteger(service?.pid) ||
+    service.pid <= 1 ||
+    typeof service.started !== "string" ||
     !service.started ||
+    typeof service.command !== "string" ||
     !service.command
   ) {
     throw new Error("The successful lifecycle result omitted exact packaged process identities")
   }
-  if (!sameProcess(await observed(desktop), desktop) || !sameProcess(await observed(service), service)) {
-    throw new Error("The packaged main or sidecar exited before lifecycle evidence was inspected")
+  const inspect = operations.observe ?? observed
+  const signal = operations.signal ?? ((identity) => process.kill(identity.pid, "SIGTERM"))
+  const awaitExit = operations.waitForExit ?? ((identity, timeout) => waitForExit(identity, timeout, inspect))
+  const [desktopProcess, serviceProcess] = await Promise.all([inspect(desktop), inspect(service)])
+  const desktopExact = sameProcess(desktopProcess, desktop)
+  const serviceExact = sameProcess(serviceProcess, service)
+  if (!desktopExact || !serviceExact) {
+    // Never signal a reused PID. Do stop an exact survivor so a failed canary
+    // cannot leave either half of the packaged runtime behind.
+    const survivors = [desktopExact ? desktop : undefined, serviceExact ? service : undefined].filter(Boolean)
+    await Promise.all(
+      survivors.map(async (identity) => {
+        signalExact(identity, signal)
+        await awaitExit(identity, 10_000)
+      }),
+    )
+    const missing = [
+      !desktopExact ? (desktopProcess ? "main identity changed" : "main exited") : undefined,
+      !serviceExact ? (serviceProcess ? "sidecar identity changed" : "sidecar exited") : undefined,
+    ].filter(Boolean)
+    throw new Error(`The packaged lifecycle ended before canary shutdown: ${missing.join("; ")}`)
   }
-  process.kill(desktop.pid, "SIGTERM")
-  if (!(await waitForExit(desktop, 30_000))) {
+  signalExact(desktop, signal)
+  if (!(await awaitExit(desktop, 30_000))) {
     throw new Error("The packaged OpenScience main did not stop after its lifecycle canary")
   }
-  if (!(await waitForExit(service, 30_000))) {
+  if (!(await awaitExit(service, 30_000))) {
     // Clean up only the exact sidecar identity whose receipt was authenticated,
     // then fail the canary because the desktop did not drain it itself.
-    if (sameProcess(await observed(service), service)) process.kill(service.pid, "SIGTERM")
-    await waitForExit(service, 10_000)
+    if (sameProcess(await inspect(service), service)) signalExact(service, signal)
+    await awaitExit(service, 10_000)
     throw new Error("The packaged OpenScience sidecar outlived its desktop lifecycle canary")
   }
 }
@@ -342,10 +398,10 @@ async function main() {
     ) {
       throw new Error("Packaged updater success omitted authenticated new-main/sidecar health")
     }
-    const installedTrust = await verify(target, version, { trusted: true, current: target })
-    if (installedTrust?.team !== team) throw new Error("Activated update does not belong to the configured Apple team")
     await assertTransactionClean(success.info)
     await stopSuccessfulApp(success.result.health)
+    const installedTrust = await verify(target, version, { trusted: true, current: target })
+    if (installedTrust?.team !== team) throw new Error("Activated update does not belong to the configured Apple team")
 
     await clearSettledCache(cache)
     await copyPrevious(previous, target)

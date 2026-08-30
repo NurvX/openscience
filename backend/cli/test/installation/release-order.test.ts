@@ -155,9 +155,21 @@ test("exact-version resumes keep artifacts pinned while allowing guarded release
   expect(version).toContain("git merge-base --is-ancestor ${source} ${checkout}")
   expect(version).toContain("git diff --name-only ${source}..${checkout}")
   expect(version).toContain('".github/workflows/publish.yml"')
+  expect(version).toContain('"backend/cli/test/installation/desktop-updater.test.ts"')
   expect(version).toContain('"backend/cli/test/installation/release-order.test.ts"')
+  expect(version).toContain('"frontend/desktop/script/update-lifecycle-canary.mjs"')
   expect(version).toContain('"tooling/repo/version.ts"')
   expect(version).toContain("changes files outside guarded release infrastructure")
+
+  const updater = workflow.slice(
+    workflow.indexOf("\n  verify-desktop-updater:"),
+    workflow.indexOf("\n  verify-native-cli:"),
+  )
+  expect(updater).toContain("- version")
+  expect(updater).toContain("ref: ${{ github.sha }}")
+  expect(updater).not.toContain("ref: ${{ needs.version.outputs.source }}")
+  expect(updater).toContain("OPENSCIENCE_VERSION: ${{ needs.version.outputs.version }}")
+  expect(updater).toContain("OPENSCIENCE_TAG: ${{ needs.version.outputs.tag }}")
 })
 
 test("production release caches exact builds and packed npm artifacts by version", async () => {
@@ -401,6 +413,12 @@ test("desktop packaging keeps local ad-hoc builds separate from signed stable ma
   expect(lifecycle).toContain("const cache = packagedUpdateCache()")
   expect(lifecycle).toContain("service_health")
   expect(lifecycle).toContain("assertTransactionClean")
+  expect(lifecycle.indexOf("await assertTransactionClean(success.info)")).toBeLessThan(
+    lifecycle.indexOf("await stopSuccessfulApp(success.result.health)"),
+  )
+  expect(lifecycle.indexOf("await stopSuccessfulApp(success.result.health)")).toBeLessThan(
+    lifecycle.indexOf("const installedTrust = await verify(target"),
+  )
   expect(updateHelper).toContain("startupHealth = await waitForHealth(payload)")
   expect(updateHelper.match(/health: startupHealth/g)?.length).toBe(2)
 })
