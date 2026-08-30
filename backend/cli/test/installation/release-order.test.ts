@@ -38,6 +38,15 @@ test("publish source gates normalize GitHub's case-insensitive repository slug",
   expect(release).not.toContain('[[ "$GITHUB_REPOSITORY" != "synthetic-sciences/OpenScience"')
 })
 
+test("the shared Bun cache never restores binaries from another runner architecture", async () => {
+  const action = await Bun.file(path.join(import.meta.dir, "../../../../.github/actions/setup-bun/action.yml")).text()
+
+  expect(action).toContain("key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}")
+  expect(action).toContain("restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-")
+  expect(action).not.toContain("key: ${{ runner.os }}-bun-")
+  expect(action).not.toContain("restore-keys: ${{ runner.os }}-bun-")
+})
+
 test("production publish requires a complete exact-source npm rehearsal before release mutation", async () => {
   const workflow = await Bun.file(path.join(import.meta.dir, "../../../../.github/workflows/publish.yml")).text()
   const gate = workflow.slice(workflow.indexOf("\n  npm-test-gate:"), workflow.indexOf("\n  npm-preflight:"))
