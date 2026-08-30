@@ -8,6 +8,7 @@ import { GlobalBus } from "@/bus/global"
 import { lazy } from "@/util/lazy"
 import { GlobalDisposedEvent } from "./global"
 import { openUrl } from "@/util/open-url"
+import { isWorkspaceKey } from "@/credentials/managed-key"
 
 const Device = z.object({
   key_id: z.string(),
@@ -30,10 +31,10 @@ const FundingOrganization = z.object({
   organization_id: z.string(),
   name: z.string(),
   slug: z.string(),
+  is_personal: z.boolean(),
   status: z.string(),
   role: z.string(),
   membership_status: z.string(),
-  seat_assigned: z.boolean(),
   funding_available: z.boolean(),
   effective_permissions: z.array(z.string()),
 })
@@ -45,6 +46,20 @@ const FundingContext = z.object({
   locked: z.boolean(),
   organizations: z.array(FundingOrganization),
 })
+
+const Credential = z.object({
+  type: z.enum(["personal", "organization"]),
+  legacy: z.boolean(),
+})
+
+function credential(session: { api_key: string; organization_id?: string; workspace_locked?: boolean } | null) {
+  if (!session) return null
+  const organization = !!session.organization_id || isWorkspaceKey(session.api_key)
+  return {
+    type: organization ? ("organization" as const) : ("personal" as const),
+    legacy: !isWorkspaceKey(session.api_key),
+  }
+}
 
 function emitDisposed() {
   GlobalBus.emit("event", {
@@ -96,6 +111,7 @@ export const AccountRoutes = lazy(() =>
                     balance_usd: z.number().nullable(),
                     billing_mode: BillingMode.nullable(),
                     funding_context: FundingContext,
+                    credential: Credential.nullable(),
                   }),
                 ),
               },
@@ -116,6 +132,7 @@ export const AccountRoutes = lazy(() =>
             session: true,
             balance_usd: null,
             billing_mode: null,
+            credential: credential(await OpenScience.getSession()),
             funding_context: {
               type: "personal" as const,
               available: false,
@@ -129,6 +146,7 @@ export const AccountRoutes = lazy(() =>
             session: false,
             balance_usd: null,
             billing_mode: null,
+            credential: null,
             funding_context: {
               type: "personal" as const,
               available: true,
@@ -148,6 +166,7 @@ export const AccountRoutes = lazy(() =>
           balance_usd: credits?.balanceUsd ?? null,
           billing_mode: billing,
           funding_context: state.context,
+          credential: credential(state.snapshot),
         })
       },
     )
@@ -155,8 +174,7 @@ export const AccountRoutes = lazy(() =>
       "/funding-context",
       describeRoute({
         summary: "Get the local funding account selection",
-        description:
-          "List available Synthetic Sciences organizations and the Personal or organization context used by managed operations.",
+        description: "List available Synthetic Sciences workspaces and the workspace used by managed operations.",
         operationId: "account.fundingContext.get",
         responses: {
           200: {
@@ -311,7 +329,7 @@ export const AccountRoutes = lazy(() =>
       }),
       validator("json", z.object({ key: z.string() })),
       async (c) => {
-        // Browser-side Atlas sign-in: validate + persist the pasted `thk_` key,
+        // Browser-side Atlas sign-in: validate and persist the pasted workspace key,
         // then resync managed services and rebuild the provider cache so managed
         // models light up without a terminal. A rejected key is a 200
         // { ok:false } (an expected user error, not a server fault).
