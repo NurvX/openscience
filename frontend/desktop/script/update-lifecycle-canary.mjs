@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process"
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -186,10 +186,55 @@ async function transactionResidue(info) {
     throw error
   })
   const unexpected = entries.filter((entry) => !allowed.has(entry)).map((entry) => `cache: ${path.join(cache, entry)}`)
-  return [...retained, ...unexpected]
+  const applications = path.dirname(info.incoming)
+  const purges = await readdir(applications)
+    .then((values) =>
+      values
+        .filter((entry) => entry.startsWith(".openscience-purge-"))
+        .map((entry) => `applications: ${path.join(applications, entry)}`),
+    )
+    .catch((error) => {
+      if (error?.code === "ENOENT") return []
+      throw error
+    })
+  return [...retained, ...unexpected, ...purges]
 }
 
 export const updaterSettlementTimeout = 10 * 60_000
+
+async function logTail(file, limit = 8 * 1024) {
+  const handle = await open(file, "r").catch((error) => {
+    if (error?.code === "ENOENT") return
+    throw error
+  })
+  if (!handle) return ""
+  try {
+    const stats = await handle.stat()
+    const length = Math.min(limit, stats.size)
+    const content = Buffer.alloc(length)
+    const start = Math.max(0, stats.size - length)
+    let offset = 0
+    while (offset < length) {
+      const { bytesRead } = await handle.read(content, offset, length - offset, start + offset)
+      if (!bytesRead) break
+      offset += bytesRead
+    }
+    return content.subarray(0, offset).toString("utf8")
+  } finally {
+    await handle.close()
+  }
+}
+
+async function settlementDiagnostics(info) {
+  const cache = path.dirname(info.result)
+  const [residue, updateLog] = await Promise.all([
+    transactionResidue(info).catch((error) => [`diagnostic error: ${error instanceof Error ? error.message : error}`]),
+    logTail(path.join(cache, "update.log")).catch(
+      (error) => `diagnostic error: ${error instanceof Error ? error.message : error}`,
+    ),
+  ])
+  return { residue, update_log_tail: updateLog || undefined }
+}
 
 export async function assertTransactionClean(info, timeout = updaterSettlementTimeout) {
   const deadline = Date.now() + timeout
@@ -276,20 +321,31 @@ export async function settleTransaction(info, expected, operations = {}) {
   const deadline = Date.now() + timeout
   const helperExited = await awaitExit(helper, timeout)
   if (!helperExited) throw new Error("The exact updater helper did not exit after lifecycle settlement")
-  await assertClean(info, Math.max(1, deadline - Date.now()))
-
-  const result = await readResult(info.result)
-  const expectedError = Object.hasOwn(expected, "error") ? expected.error : undefined
-  if (
-    result?.status !== expected.status ||
-    result?.version !== expected.version ||
-    result.cleanup_error ||
-    result.recovery_error ||
-    (Object.hasOwn(expected, "error") && result.error !== expectedError)
-  ) {
-    throw new Error(`Updater lifecycle final state did not match its contract: ${JSON.stringify(result)}`)
+  const validateResult = async () => {
+    const result = await readResult(info.result)
+    const expectedError = Object.hasOwn(expected, "error") ? expected.error : undefined
+    if (
+      result?.status !== expected.status ||
+      result?.version !== expected.version ||
+      result.cleanup_error ||
+      result.recovery_error ||
+      (Object.hasOwn(expected, "error") && result.error !== expectedError)
+    ) {
+      throw new Error(`Updater lifecycle final state did not match its contract: ${JSON.stringify(result)}`)
+    }
+    return result
   }
-  return result
+  try {
+    await validateResult()
+  } catch (error) {
+    const diagnostics = await settlementDiagnostics(info)
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; helper diagnostics: ${JSON.stringify(diagnostics)}`,
+      { cause: error },
+    )
+  }
+  await assertClean(info, Math.max(1, deadline - Date.now()))
+  return validateResult()
 }
 
 function signalExact(identity, signal) {

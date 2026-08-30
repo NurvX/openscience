@@ -139,11 +139,14 @@ describe("desktop update release contract", () => {
 
   test("waits for renamed purge and health-write residue before declaring updater cleanup settled", async () => {
     expect(updaterSettlementTimeout).toBe(10 * 60_000)
-    const cache = await mkdtemp(path.join(os.tmpdir(), "openscience-update-residue-"))
-    roots.push(cache)
+    const root = await mkdtemp(path.join(os.tmpdir(), "openscience-update-residue-"))
+    roots.push(root)
+    const cache = path.join(root, "cache")
+    const applications = path.join(root, "Applications")
+    await Promise.all([mkdir(cache), mkdir(applications)])
     const token = "a".repeat(48)
     const info = {
-      incoming: path.join(cache, "missing-incoming"),
+      incoming: path.join(applications, "missing-incoming"),
       root: path.join(cache, `pending-${token}`),
       health: path.join(cache, `health-${token}.json`),
       runtime: path.join(cache, `runtime-${token}.json`),
@@ -151,7 +154,7 @@ describe("desktop update release contract", () => {
       ready: path.join(cache, `helper-${token}.json`),
       journal: path.join(cache, `transaction-${token}.json`),
     }
-    const tomb = path.join(cache, ".openscience-purge-test")
+    const tomb = path.join(applications, ".openscience-purge-test")
     const healthTemporary = `${info.health}.tmp-123`
     await Promise.all([
       mkdir(tomb),
@@ -159,6 +162,7 @@ describe("desktop update release contract", () => {
       Bun.write(path.join(cache, "last-result.json"), "{}\n"),
       Bun.write(path.join(cache, "update.log"), "settled\n"),
     ])
+    await expect(assertTransactionClean(info, 1)).rejects.toThrow("applications:")
 
     let settled = false
     const waiting = assertTransactionClean(info, 1_000).then(() => {
@@ -175,8 +179,25 @@ describe("desktop update release contract", () => {
 
   test("accepts only the reread final result after exact helper and cache settlement", async () => {
     const helper = { pid: 303, started: "helper-start", command: "/Applications/OpenScience helper" }
-    const info = { helper_identity: helper, result: "/updates/last-result.json" }
+    const root = await mkdtemp(path.join(os.tmpdir(), "openscience-update-final-result-"))
+    roots.push(root)
+    const cache = path.join(root, "cache")
+    const applications = path.join(root, "Applications")
+    await Promise.all([mkdir(cache), mkdir(applications)])
+    const token = "f".repeat(48)
+    const info = {
+      helper_identity: helper,
+      result: path.join(cache, "last-result.json"),
+      incoming: path.join(applications, "missing-incoming"),
+      root: path.join(cache, `pending-${token}`),
+      health: path.join(cache, `health-${token}.json`),
+      runtime: path.join(cache, `runtime-${token}.json`),
+      handoff: path.join(cache, `handoff-${token}.json`),
+      ready: path.join(cache, `helper-${token}.json`),
+      journal: path.join(cache, `transaction-${token}.json`),
+    }
     const events: string[] = []
+    let reads = 0
     const final = { status: "succeeded", version: "3.2.1", recovered: true }
 
     expect(
@@ -196,14 +217,45 @@ describe("desktop update release contract", () => {
           },
           readResult: async (file: string) => {
             events.push("final-result")
+            reads++
             expect(file).toBe(info.result)
             return final
           },
         },
       ),
     ).toEqual(final)
-    expect(events).toEqual(["helper-exit", "cache-clean", "final-result"])
+    expect(reads).toBe(2)
+    expect(events).toEqual(["helper-exit", "final-result", "cache-clean", "final-result"])
 
+    const tomb = path.join(applications, ".openscience-purge-exact-cleanup")
+    await Promise.all([
+      mkdir(tomb),
+      Bun.write(path.join(cache, "update.log"), `must-not-appear\n${"x".repeat(9 * 1024)}\nexact purge timed out\n`),
+    ])
+    let cleanAfterHelperFailure = false
+    const helperFailure = settleTransaction(
+      info,
+      { status: "succeeded", version: "3.2.1" },
+      {
+        waitForExit: async () => true,
+        assertClean: async () => {
+          cleanAfterHelperFailure = true
+        },
+        readResult: async () => ({ ...final, cleanup_error: "purge failed" }),
+      },
+    )
+    const diagnostic = await helperFailure.then(
+      () => undefined,
+      (error) => error as Error,
+    )
+    expect(diagnostic).toBeInstanceOf(Error)
+    expect(diagnostic?.message).toContain("purge failed")
+    expect(diagnostic?.message).toContain(".openscience-purge-exact-cleanup")
+    expect(diagnostic?.message).toContain("exact purge timed out")
+    expect(diagnostic?.message).not.toContain("must-not-appear")
+    expect(cleanAfterHelperFailure).toBe(false)
+    await rm(tomb, { recursive: true })
+    let lateReads = 0
     await expect(
       settleTransaction(
         info,
@@ -211,10 +263,10 @@ describe("desktop update release contract", () => {
         {
           waitForExit: async () => true,
           assertClean: async () => undefined,
-          readResult: async () => ({ ...final, cleanup_error: "purge failed" }),
+          readResult: async () => (++lateReads === 1 ? final : { ...final, cleanup_error: "late purge failure" }),
         },
       ),
-    ).rejects.toThrow("final state did not match")
+    ).rejects.toThrow("late purge failure")
     await expect(
       settleTransaction(
         info,
