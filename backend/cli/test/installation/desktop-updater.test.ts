@@ -6,6 +6,7 @@ import {
   assertTransactionClean,
   canonical,
   packagedUpdateCache,
+  settleTransaction,
   stopSuccessfulApp,
   updaterSettlementTimeout,
 } from "../../../../frontend/desktop/script/update-lifecycle-canary.mjs"
@@ -170,6 +171,52 @@ describe("desktop update release contract", () => {
 
     await Bun.write(path.join(cache, "stuck-entry"), "stuck")
     await expect(assertTransactionClean(info, 1)).rejects.toThrow("cache:")
+  })
+
+  test("accepts only the reread final result after exact helper and cache settlement", async () => {
+    const helper = { pid: 303, started: "helper-start", command: "/Applications/OpenScience helper" }
+    const info = { helper_identity: helper, result: "/updates/last-result.json" }
+    const events: string[] = []
+    const final = { status: "succeeded", version: "3.2.1", recovered: true }
+
+    expect(
+      await settleTransaction(info, { status: "succeeded", version: "3.2.1" }, {
+        timeout: 1,
+        waitForExit: async (identity: typeof helper) => {
+          events.push("helper-exit")
+          expect(identity).toEqual(helper)
+          return true
+        },
+        assertClean: async (value: typeof info) => {
+          events.push("cache-clean")
+          expect(value).toBe(info)
+        },
+        readResult: async (file: string) => {
+          events.push("final-result")
+          expect(file).toBe(info.result)
+          return final
+        },
+      }),
+    ).toEqual(final)
+    expect(events).toEqual(["helper-exit", "cache-clean", "final-result"])
+
+    await expect(
+      settleTransaction(info, { status: "succeeded", version: "3.2.1" }, {
+        waitForExit: async () => true,
+        assertClean: async () => undefined,
+        readResult: async () => ({ ...final, cleanup_error: "purge failed" }),
+      }),
+    ).rejects.toThrow("final state did not match")
+    await expect(
+      settleTransaction(info, { status: "succeeded", version: "3.2.1" }, {
+        waitForExit: async () => true,
+        assertClean: async () => undefined,
+        readResult: async () => ({ ...final, status: "failed" }),
+      }),
+    ).rejects.toThrow("final state did not match")
+    await expect(
+      settleTransaction({ ...info, helper_identity: undefined }, { status: "succeeded", version: "3.2.1" }),
+    ).rejects.toThrow("omitted its exact helper identity")
   })
 
   test("accepts only a strictly newer stable version", () => {

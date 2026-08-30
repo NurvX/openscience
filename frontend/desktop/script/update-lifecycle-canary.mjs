@@ -69,6 +69,17 @@ function decodePrepared(prepared) {
   }
 }
 
+async function bindProcessIdentity(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("The updater helper process identity is invalid")
+  const [started, command] = await Promise.all([
+    execute("/bin/ps", ["-p", String(pid), "-o", "lstart="], { timeout: 2_000 }),
+    execute("/bin/ps", ["-ww", "-p", String(pid), "-o", "command="], { timeout: 2_000 }),
+  ])
+  const identity = { pid, started: started.stdout.trim(), command: command.stdout.trim() }
+  if (!identity.started || !identity.command) throw new Error("The updater helper process identity is incomplete")
+  return identity
+}
+
 async function driver(configFile) {
   const config = JSON.parse(await readFile(configFile, "utf8"))
   const archiveInfo = await realArchive(config.archive, asset(config.arch))
@@ -111,8 +122,13 @@ async function driver(configFile) {
       trusted: true,
       executable: process.execPath,
     })
-    await writeFile(config.handoffInfo, `${JSON.stringify(decodePrepared(prepared))}\n`, { mode: 0o600 })
-    await launch(prepared)
+    const launched = await launch(prepared)
+    const helperIdentity = await bindProcessIdentity(launched.helper_pid)
+    await writeFile(
+      config.handoffInfo,
+      `${JSON.stringify({ ...decodePrepared(prepared), helper_identity: helperIdentity })}\n`,
+      { mode: 0o600 },
+    )
   } finally {
     server?.stop(true)
   }
@@ -229,6 +245,51 @@ async function waitForExit(identity, timeout, inspect = observed) {
     await sleep(100)
   }
   return false
+}
+
+function validExactIdentity(identity) {
+  return Boolean(
+    Number.isSafeInteger(identity?.pid) &&
+      identity.pid > 1 &&
+      typeof identity.started === "string" &&
+      identity.started &&
+      typeof identity.command === "string" &&
+      identity.command,
+  )
+}
+
+export async function settleTransaction(info, expected, operations = {}) {
+  const helper = info?.helper_identity
+  if (!validExactIdentity(helper)) throw new Error("The updater lifecycle handoff omitted its exact helper identity")
+  if (
+    (expected?.status !== "succeeded" && expected?.status !== "failed") ||
+    typeof expected?.version !== "string" ||
+    !expected.version
+  ) {
+    throw new Error("The updater lifecycle expected final state is invalid")
+  }
+  const timeout = operations.timeout ?? updaterSettlementTimeout
+  const inspect = operations.observe ?? observed
+  const awaitExit = operations.waitForExit ?? ((identity, duration) => waitForExit(identity, duration, inspect))
+  const assertClean = operations.assertClean ?? assertTransactionClean
+  const readResult = operations.readResult ?? readJson
+  const deadline = Date.now() + timeout
+  const helperExited = await awaitExit(helper, timeout)
+  if (!helperExited) throw new Error("The exact updater helper did not exit after lifecycle settlement")
+  await assertClean(info, Math.max(1, deadline - Date.now()))
+
+  const result = await readResult(info.result)
+  const expectedError = Object.hasOwn(expected, "error") ? expected.error : undefined
+  if (
+    result?.status !== expected.status ||
+    result?.version !== expected.version ||
+    result.cleanup_error ||
+    result.recovery_error ||
+    (Object.hasOwn(expected, "error") && result.error !== expectedError)
+  ) {
+    throw new Error(`Updater lifecycle final state did not match its contract: ${JSON.stringify(result)}`)
+  }
+  return result
 }
 
 function signalExact(identity, signal) {
@@ -412,7 +473,7 @@ async function main() {
     ) {
       throw new Error("Packaged updater success omitted authenticated new-main/sidecar health")
     }
-    await assertTransactionClean(success.info)
+    await settleTransaction(success.info, { status: "succeeded", version })
     await stopSuccessfulApp(success.result.health)
     const installedTrust = await verify(target, version, { trusted: true, current: target })
     if (installedTrust?.team !== team) throw new Error("Activated update does not belong to the configured Apple team")
@@ -436,17 +497,13 @@ async function main() {
         OPENSCIENCE_UPDATE_TEST_HEALTH_FAILURE: "after-healthy",
       },
     )
-    if (
-      failure.result.status !== "failed" ||
-      failure.result.version !== version ||
-      failure.result.error !== "Injected desktop update health failure after packaged health" ||
-      failure.result.recovery_error
-    ) {
-      throw new Error(`Injected packaged updater rollback did not settle cleanly: ${JSON.stringify(failure.result)}`)
-    }
+    await settleTransaction(failure.info, {
+      status: "failed",
+      version,
+      error: "Injected desktop update health failure after packaged health",
+    })
     const restoredTrust = await verify(target, previousVersion, { trusted: true, current: target })
     if (restoredTrust?.team !== team) throw new Error("Rollback did not restore the previous signed publisher")
-    await assertTransactionClean(failure.info)
     console.log(
       `verified native ${arch} packaged lifecycle ${previousVersion} -> ${version}, cleanup, and safe rollback`,
     )
