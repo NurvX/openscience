@@ -44,3 +44,21 @@ test("wires the packaged macOS shell to the authenticated desktop updater", asyn
   expect(install).toContain("stageDesktopUpdate(target)")
   expect(install).toContain('{ action: "apply", version: target }')
 })
+
+test("publishes terminal update health only after supervised startup reconciliation", async () => {
+  const source = await Bun.file(new URL("../../../../frontend/desktop/src/main.mjs", import.meta.url)).text()
+  const acknowledge = source.slice(
+    source.indexOf("async function acknowledgeUpdateHealth()"),
+    source.indexOf("async function acknowledgeUpdatePending()"),
+  )
+  const startup = source.slice(source.indexOf("      await start()"), source.indexOf("      splash.destroy()"))
+
+  expect(acknowledge.indexOf("await proveServiceHealth()")).toBeLessThan(
+    acknowledge.indexOf("await reconcileCurrentUpdate(true)"),
+  )
+  expect(acknowledge.indexOf("await reconcileCurrentUpdate(true)")).toBeLessThan(
+    acknowledge.indexOf("await writeUpdateHealth("),
+  )
+  expect(startup).toContain("await acknowledgeUpdateHealth()")
+  expect(startup).not.toContain("await reconcileCurrentUpdate(true)")
+})

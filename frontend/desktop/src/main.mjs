@@ -254,6 +254,10 @@ async function writeUpdateHealth(value) {
 
 async function acknowledgeUpdateHealth() {
   const service = await proveServiceHealth()
+  // Keep the helper supervising this exact startup until recovery has settled.
+  // Publishing terminal health first lets the helper clean its journal while
+  // this main is still reconciling the same transaction.
+  await reconcileCurrentUpdate(true)
   const request = await writeUpdateHealth({
     healthy: true,
     pid: process.pid,
@@ -927,7 +931,6 @@ app
       await start()
       await createWindow()
       await acknowledgeUpdateHealth()
-      await reconcileCurrentUpdate(true)
       splash.destroy()
     } catch (error) {
       if (state.updateRelaunch) {
