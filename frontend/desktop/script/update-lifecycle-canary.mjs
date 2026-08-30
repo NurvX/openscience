@@ -175,11 +175,15 @@ async function transactionResidue(info) {
 
 export async function assertTransactionClean(info, timeout = 120_000) {
   const deadline = Date.now() + timeout
+  let previouslyClean = false
   while (Date.now() < deadline) {
-    if (!(await transactionResidue(info)).length) return
+    const clean = !(await transactionResidue(info)).length
+    if (clean && previouslyClean) return
+    previouslyClean = clean
     await sleep(100)
   }
   const residue = await transactionResidue(info)
+  if (!residue.length) throw new Error("Updater lifecycle cache did not remain settled before its timeout")
   throw new Error(`Updater lifecycle did not clean its transaction: ${residue.join(", ")}`)
 }
 
