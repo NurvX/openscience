@@ -13,13 +13,11 @@ import {
   type JSX,
 } from "solid-js"
 import { uiStore, type ContextTab, type WorkTab } from "@/atlas/store/ui"
-import { AtlasCanvas } from "@/atlas/AtlasCanvas"
 import { ComputeSurface } from "@/atlas/ComputeSurface"
 import { ExternalFileAccess } from "@/atlas/FileExplorer"
 import { FilesPane } from "@/atlas/FilesPane"
 import { FileView } from "@/atlas/FilePreview"
 import { TerminalSurface } from "@/atlas/TerminalSurface"
-import { SessionTraceSurface } from "@/atlas/SessionTraceSurface"
 import { useDialog } from "@synsci/ui/context/dialog"
 import { FileIcon } from "@synsci/ui/file-icon"
 import { StoredArtifactView } from "@/artifacts/StoredArtifactView"
@@ -27,7 +25,6 @@ import { confirmDialog } from "@/atlas/dialogs"
 import { discardFileDraft } from "@/atlas/file-drafts"
 import { AsciiSpinner } from "@/atlas/shared/AsciiSpinner"
 import {
-  IconActivity,
   IconArchive,
   IconArtifact,
   IconChevronLeft,
@@ -35,7 +32,6 @@ import {
   IconCpu,
   IconExpand,
   IconFolder,
-  IconNetwork,
   IconSplit,
   IconTerminal,
   IconX,
@@ -575,14 +571,8 @@ export function RightPane(
               <Match when={context() === "files" && uiStore.saved()}>
                 {(current) => <StoredArtifactView artifact={current()} />}
               </Match>
-              <Match when={context() === "canvas"}>
-                <AtlasCanvas />
-              </Match>
               <Match when={context() === "kernels"}>
                 <ComputeSurface />
-              </Match>
-              <Match when={context() === "trace"}>
-                <SessionTraceSurface session={session()} />
               </Match>
             </Switch>
           </Suspense>
@@ -607,8 +597,6 @@ function workTabIcon(tab: WorkTab): JSX.Element {
   if (tab.context === "files") return <IconFolder size={16} strokeWidth={1.5} />
   if (tab.context === "terminal") return <IconTerminal size={16} strokeWidth={1.5} />
   if (tab.context === "kernels") return <IconCpu size={16} strokeWidth={1.5} />
-  if (tab.context === "canvas") return <IconNetwork size={16} strokeWidth={1.5} />
-  if (tab.context === "trace") return <IconActivity size={16} strokeWidth={1.5} />
   return <IconArtifact size={16} strokeWidth={1.5} />
 }
 

@@ -550,7 +550,7 @@ export default function Page(): JSX.Element {
   onMount(() => {
     const onOpenContext = (event: Event) => {
       const context = (event as CustomEvent).detail?.context
-      if (!(["files", "terminal", "canvas", "kernels", "trace"] as SessionContext[]).includes(context)) return
+      if (!(["files", "terminal", "kernels", "trace"] as SessionContext[]).includes(context)) return
       openContext(context)
     }
     document.addEventListener("openscience:open-context", onOpenContext)
@@ -726,9 +726,9 @@ export default function Page(): JSX.Element {
       {
         id: "documentation.open",
         title: "Open documentation",
-        description: "Read the Synthetic Sciences documentation",
+        description: "Read the OpenScience documentation",
         category: "Help",
-        onSelect: () => platform.openLink(URLS.site),
+        onSelect: () => platform.openLink(URLS.docs),
       },
       {
         id: "terminal.toggle",

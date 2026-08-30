@@ -268,7 +268,7 @@ export function generatedImageAttachments(input: {
   ]
 }
 
-function requestError(status: number, body: OpenRouterImage | undefined, raw: string, managed: boolean) {
+function requestError(status: number, body: OpenRouterImage | undefined, raw: string) {
   const reported =
     typeof body?.error === "string"
       ? body.error
@@ -276,27 +276,18 @@ function requestError(status: number, body: OpenRouterImage | undefined, raw: st
         ? body.error.message
         : body?.message
   const detail = (reported?.trim() || raw.trim()).replace(/\s+/g, " ").slice(0, 500)
-  if (status === 402 && managed) {
-    return new Error(
-      "Your Ace balance does not have enough credits for this Nano Banana request. Add credits at app.syntheticsciences.ai/billing, or connect OpenRouter in Settings → Models.",
-    )
-  }
   if (status === 402) {
     return new Error("Your connected OpenRouter account does not have enough credit for this image request.")
   }
   if (status === 401 || status === 403) {
-    return new Error(
-      managed
-        ? "OpenScience could not authorize the wallet-backed image request. Reconnect your OpenScience account and retry."
-        : "OpenRouter rejected the connected key. Reconnect it in Settings → Models and retry.",
-    )
+    return new Error("OpenRouter rejected the connected key. Reconnect it in Customize → Models and retry.")
   }
   return new Error(`Nano Banana request failed (${status})${detail ? `: ${detail}` : "."}`)
 }
 
 export const GenerateImageTool = Tool.define("generate_image", {
   description:
-    "Generate or edit an image with the pinned Gemini 3 Pro Image model. Uses the user's Gemini key first, then OpenRouter, then a funded workspace Wallet fallback. Saves the image directly in the connected workspace.",
+    "Generate or edit an image with Gemini 3 Pro Image using the user's connected Gemini or OpenRouter account. Saves the image directly in the connected workspace.",
   parameters: z.object({
     prompt: z.string().trim().min(1).max(20_000).describe("Detailed description or editing instruction"),
     output_path: z
@@ -423,59 +414,13 @@ export const GenerateImageTool = Tool.define("generate_image", {
             },
           ]
         : []),
-      ...(openrouterKey && OpenScience.isManagedKeyValue(openrouterKey)
-        ? [
-            {
-              kind: "managed" as const,
-              key: openrouterKey,
-              base: openrouterBase,
-              label: "OpenScience wallet Credits",
-              rank: ambient(openrouterKey, ["OPENROUTER_API_KEY"]) ? 1 : 2,
-            },
-          ]
-        : []),
-      ...(Env.get("OPENSCIENCE_IMAGE_API_KEY") && Env.get("OPENSCIENCE_IMAGE_BASE_URL")
-        ? [
-            {
-              kind: "managed" as const,
-              key: Env.get("OPENSCIENCE_IMAGE_API_KEY")!,
-              base: Env.get("OPENSCIENCE_IMAGE_BASE_URL")!.replace(/\/+$/, ""),
-              label: "OpenScience wallet Credits",
-              rank: 0,
-            },
-          ]
-        : []),
     ]
     const route = candidates.sort((a, b) => b.rank - a.rank)[0]
     if (!route) {
-      throw new Error(
-        "Nano Banana is unavailable. Connect Gemini or OpenRouter in Settings → Credentials, or sign in to use a funded workspace Wallet.",
-      )
+      throw new Error("Nano Banana is unavailable. Connect your Gemini or OpenRouter account in Customize → Models.")
     }
     if (route.kind === "gemini" && extension !== ".png") {
       throw new Error("Gemini image generation returns PNG. Use an output_path ending in .png.")
-    }
-
-    const managed = route.kind === "managed"
-    if (managed && (!OpenScience.isManagedKeyValue(route.key) || !Provider.isAtlasProxyBaseURL(route.base))) {
-      throw new Error(
-        "OpenScience refused to send the wallet credential outside its managed image proxy. Run openscience sync and retry.",
-      )
-    }
-    if (!managed && Provider.isAtlasProxyBaseURL(route.base)) {
-      throw new Error(
-        "OpenScience refused to send your connected provider key to the managed wallet proxy. Reconnect the credential and retry.",
-      )
-    }
-    const funding = managed ? await OpenScience.managedRequestSnapshot(route.key) : undefined
-    if (managed) {
-      const balance = await OpenScience.getBalance(funding).catch(() => null)
-      if (balance !== null && balance <= 0) {
-        OpenScience.invalidateBalance()
-        throw new Error(
-          "Your Ace balance has no available credits for Nano Banana. Add credits at app.syntheticsciences.ai/billing, or connect OpenRouter in Settings → Models.",
-        )
-      }
     }
 
     await ctx.ask({
@@ -503,33 +448,21 @@ export const GenerateImageTool = Tool.define("generate_image", {
         : {
             Authorization: `Bearer ${route.key}`,
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://syntheticsciences.ai",
+            "HTTP-Referer": "https://github.com/synthetic-sciences/OpenScience",
             "X-Title": "OpenScience",
-            ...(funding ? OpenScience.fundingHeaders(funding) : {}),
           }
     const request = async (url: string, payload: Record<string, unknown>) => {
       const text = JSON.stringify(payload)
-      const idempotency = managed
-        ? Provider.managedIdempotencyKey({
-            endpoint: url,
-            body: text,
-            sessionID: ctx.sessionID,
-            messageID: ctx.messageID,
-            operation: "generate-image",
-          })
-        : undefined
       const requestHeaders = new Headers()
       for (const [name, value] of Object.entries(headers)) {
         if (value) requestHeaders.set(name, value)
       }
-      if (idempotency) requestHeaders.set("Idempotency-Key", idempotency)
       const response = await fetch(url, {
         method: "POST",
         signal: AbortSignal.any([ctx.abort, AbortSignal.timeout(120_000)]),
         headers: requestHeaders,
         body: text,
       })
-      if (funding) await OpenScience.validateFundingResponse(response, funding)
       const raw = (
         await readBoundedImageResponse(response, response.ok ? MAX_IMAGE_RESPONSE_BYTES : MAX_IMAGE_ERROR_BYTES)
       ).toString("utf8")
@@ -578,7 +511,7 @@ export const GenerateImageTool = Tool.define("generate_image", {
                 }
               : {}),
           })
-    if (!direct.response.ok) throw requestError(direct.response.status, direct.body, direct.raw, managed)
+    if (!direct.response.ok) throw requestError(direct.response.status, direct.body, direct.raw)
     if (!direct.body) throw new Error("Nano Banana returned an unreadable response.")
     const approvedHosts = new Set<string>()
     const image = await materializeImage(direct.body, ctx.abort, async (input) => {
@@ -598,8 +531,6 @@ export const GenerateImageTool = Tool.define("generate_image", {
     })
     await Bus.publish(File.Event.Edited, { file: output })
     await Bus.publish(FileWatcher.Event.Updated, { file: output, event: approved ? "change" : "add" })
-    if (managed) OpenScience.invalidateBalance()
-
     const attachments = generatedImageAttachments({
       bytes: image.bytes,
       mime: image.mime,
