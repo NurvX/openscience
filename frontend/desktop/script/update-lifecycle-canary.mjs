@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process"
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -261,6 +261,14 @@ async function runTransaction(config, environment = {}) {
   return { info, result: await waitForResult(info.result) }
 }
 
+export async function canonical(arch) {
+  // macOS exposes its temporary directory through /var, while realpath resolves
+  // it through /private/var. The production swap intentionally rejects paths
+  // whose spelling is not canonical, so the synthetic install root must obey
+  // the same contract as a real /Applications target.
+  return realpath(await mkdtemp(path.join(os.tmpdir(), `openscience-update-lifecycle-${arch}-`)))
+}
+
 async function main() {
   const input = argumentsMap(process.argv.slice(2))
   const archive = path.resolve(required(input, "zip"))
@@ -279,7 +287,7 @@ async function main() {
   }
   await Promise.all([realArchive(archive, asset(arch)), realArchive(previousArchive, asset(arch))])
 
-  const workspace = await mkdtemp(path.join(os.tmpdir(), `openscience-update-lifecycle-${arch}-`))
+  const workspace = await canonical(arch)
   const cache = path.join(os.homedir(), "Library", "Application Support", "OpenScience", "updates")
   const target = path.join(workspace, "Applications", "OpenScience.app")
   try {
@@ -360,5 +368,7 @@ async function main() {
   }
 }
 
-if (process.argv[2] === "--driver") await driver(path.resolve(process.argv[3] ?? ""))
-else await main()
+if (import.meta.main) {
+  if (process.argv[2] === "--driver") await driver(path.resolve(process.argv[3] ?? ""))
+  else await main()
+}

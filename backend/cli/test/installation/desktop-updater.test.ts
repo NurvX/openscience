@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { chmod, lstat, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { canonical } from "../../../../frontend/desktop/script/update-lifecycle-canary.mjs"
 import {
   apply,
   asset,
@@ -25,6 +26,12 @@ afterEach(async () => {
 })
 
 describe("desktop update release contract", () => {
+  test("canonicalizes the synthetic install root before the handle-safe swap", async () => {
+    const root = await canonical(process.arch)
+    roots.push(root)
+    expect(root).toBe(await realpath(root))
+  })
+
   test("accepts only a strictly newer stable version", () => {
     expect(newer("2.0.53", "2.0.54")).toBe(true)
     expect(newer("2.0.54", "2.0.54")).toBe(false)
