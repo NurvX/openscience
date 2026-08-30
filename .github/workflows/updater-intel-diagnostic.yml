@@ -1,0 +1,56 @@
+name: updater Intel diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Download and verify immutable Intel updater archives
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/previous"
+          gh release download v2.0.55 --pattern OpenScience-mac-x64.zip
+          gh release download v2.0.54 --pattern OpenScience-mac-x64.zip --dir "$RUNNER_TEMP/previous"
+          for spec in \
+            "v2.0.55:OpenScience-mac-x64.zip" \
+            "v2.0.54:$RUNNER_TEMP/previous/OpenScience-mac-x64.zip"; do
+            tag="${spec%%:*}"
+            file="${spec#*:}"
+            expected="$(gh release view "$tag" --json assets --jq '.assets[] | select(.name == "OpenScience-mac-x64.zip") | .digest')"
+            actual="sha256:$(shasum -a 256 "$file" | awk '{print $1}')"
+            [[ "$expected" =~ ^sha256:[0-9a-f]{64}$ && "$actual" == "$expected" ]] || {
+              echo "::error::$tag Intel updater ZIP digest mismatch"
+              exit 1
+            }
+          done
+
+      - name: Expose exact Intel updater cleanup failure
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "x86_64" ]]
+          [[ -n "$APPLE_TEAM_ID" ]]
+          bun frontend/desktop/script/update-lifecycle-canary.mjs \
+            --zip OpenScience-mac-x64.zip \
+            --previous-zip "$RUNNER_TEMP/previous/OpenScience-mac-x64.zip" \
+            --version 2.0.55 \
+            --previous-version 2.0.54 \
+            --arch x64 \
+            --team "$APPLE_TEAM_ID"
