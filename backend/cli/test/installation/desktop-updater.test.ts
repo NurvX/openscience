@@ -7,6 +7,7 @@ import {
   canonical,
   packagedUpdateCache,
   stopSuccessfulApp,
+  updaterSettlementTimeout,
 } from "../../../../frontend/desktop/script/update-lifecycle-canary.mjs"
 import {
   apply,
@@ -136,6 +137,7 @@ describe("desktop update release contract", () => {
   })
 
   test("waits for renamed purge and health-write residue before declaring updater cleanup settled", async () => {
+    expect(updaterSettlementTimeout).toBe(10 * 60_000)
     const cache = await mkdtemp(path.join(os.tmpdir(), "openscience-update-residue-"))
     roots.push(cache)
     const token = "a".repeat(48)

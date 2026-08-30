@@ -173,7 +173,9 @@ async function transactionResidue(info) {
   return [...retained, ...unexpected]
 }
 
-export async function assertTransactionClean(info, timeout = 120_000) {
+export const updaterSettlementTimeout = 10 * 60_000
+
+export async function assertTransactionClean(info, timeout = updaterSettlementTimeout) {
   const deadline = Date.now() + timeout
   let previouslyClean = false
   while (Date.now() < deadline) {
