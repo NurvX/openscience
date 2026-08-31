@@ -250,6 +250,21 @@ jobs:
           OPENSCIENCE_VERSION: ${{ needs.version.outputs.version }}
           OPENSCIENCE_RELEASE: ${{ needs.version.outputs.release }}
           GH_TOKEN: ${{ github.token }}
+      - name: Bind desktop sidecar digests
+        id: sidecars
+        env:
+          OPENSCIENCE_VERSION: ${{ needs.version.outputs.version }}
+          OPENSCIENCE_ARTIFACT_SOURCE: ${{ needs.version.outputs.artifact_source }}
+        run: |
+          bun -e '
+            const lines = (await Bun.file("backend/cli/dist/checksums.txt").text()).trim().split(/\r?\n/);
+            if (lines.length !== 11 || lines.some(line => !/^[0-9a-f]{64}  openscience-[a-z0-9-]+\.(zip|tar\.gz)$/.test(line))) throw new Error("Invalid signed CLI checksum manifest");
+            const checksums = Object.fromEntries(lines.map(line => [line.slice(66), line.slice(0, 64)]));
+            if (Object.keys(checksums).length !== 11) throw new Error("Duplicate CLI checksum entries");
+            const manifest = { source: process.env.OPENSCIENCE_ARTIFACT_SOURCE, version: process.env.OPENSCIENCE_VERSION, checksums };
+            const { appendFileSync } = await import("node:fs");
+            appendFileSync(process.env.GITHUB_OUTPUT, `manifest=${JSON.stringify(manifest)}\n`);
+          '
       - name: Disclose unsigned Windows installer
         shell: bash
         env:
@@ -269,13 +284,15 @@ jobs:
           fi
     outputs:
       cache_key: cli-signed-${{ needs.version.outputs.version }}-${{ needs.version.outputs.artifact_source }}
+      sidecar_manifest: ${{ steps.sidecars.outputs.manifest }}
 
   prepare-npm:
-    name: Pack npm release
+    name: Pack and stage npm release
     needs: [version, sign-macos-cli]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
+      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -289,13 +306,14 @@ jobs:
           WORKFLOW_SOURCE: ${{ needs.version.outputs.workflow_source }}
         run: |
           set -euo pipefail
-          for file in tooling/repo/npm-release.ts tooling/repo/prepare-npm.ts; do
+          for file in tooling/repo/npm-release.ts tooling/repo/prepare-npm.ts tooling/repo/publish.ts; do
             git show "$WORKFLOW_SOURCE:$file" > "$file"
           done
       - uses: ./.github/actions/setup-bun
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
+          registry-url: "https://registry.npmjs.org"
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -328,6 +346,20 @@ jobs:
         with:
           path: .release/npm/${{ needs.version.outputs.version }}
           key: npm-release-${{ needs.version.outputs.version }}-${{ needs.version.outputs.artifact_source }}
+
+      # npm's registry visibility wait overlaps desktop packaging. This phase
+      # never promotes latest or makes the draft GitHub release public.
+      - name: Stage immutable npm packages
+        run: ./tooling/repo/publish.ts --stage-only
+        env:
+          OPENSCIENCE_VERSION: ${{ needs.version.outputs.version }}
+          OPENSCIENCE_RELEASE: ${{ needs.version.outputs.release }}
+          OPENSCIENCE_RELEASE_SOURCE: ${{ needs.version.outputs.source }}
+          OPENSCIENCE_ARTIFACT_SOURCE: ${{ needs.version.outputs.artifact_source }}
+          OPENSCIENCE_NPM_ARTIFACT_DIR: .release/npm/${{ needs.version.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+          OPENSCIENCE_REQUIRE_LAUNCHER_PUBLISH: "true"
 
   build-desktop:
     name: Desktop (${{ matrix.target }}-${{ matrix.arch }})
@@ -478,15 +510,31 @@ jobs:
         if: steps.existing.outputs.found != 'true'
         with:
           node-version: "24"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Download source-bound desktop sidecar
         if: steps.existing.outputs.found != 'true'
-        with:
-          path: |
-            backend/cli/dist
-            frontend/workspace/dist/version.json
-          key: ${{ needs.sign-macos-cli.outputs.cache_key }}
-          enableCrossOsArchive: ${{ runner.os == 'Windows' }}
-          fail-on-cache-miss: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENSCIENCE_DESKTOP_SIDECAR: ${{ matrix.sidecar }}
+          OPENSCIENCE_VERSION: ${{ needs.version.outputs.version }}
+          OPENSCIENCE_ARTIFACT_SOURCE: ${{ needs.version.outputs.artifact_source }}
+          OPENSCIENCE_SIDECAR_MANIFEST: ${{ needs.sign-macos-cli.outputs.sidecar_manifest }}
+          RELEASE_SOURCE: ${{ needs.version.outputs.source }}
+          WORKFLOW_SOURCE: ${{ needs.version.outputs.workflow_source }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ "$WORKFLOW_SOURCE" != "$RELEASE_SOURCE" ]]; then
+            git fetch origin "$WORKFLOW_SOURCE" --depth=1
+            git show "$WORKFLOW_SOURCE:tooling/repo/desktop-sidecar.ts" > tooling/repo/desktop-sidecar.ts
+          fi
+          bun tooling/repo/desktop-sidecar.ts
+          if [[ "${{ matrix.signing }}" == "mac" ]]; then
+            codesign --verify --strict --verbose=2 "$OPENSCIENCE_DESKTOP_SIDECAR"
+            details="$(codesign -dv --verbose=4 "$OPENSCIENCE_DESKTOP_SIDECAR" 2>&1)"
+            grep -Fxq 'Identifier=ai.syntheticsciences.openscience' <<<"$details"
+            grep -Fxq "TeamIdentifier=$APPLE_TEAM_ID" <<<"$details"
+          fi
       - name: Detect Windows signing
         id: windows
         if: steps.existing.outputs.found != 'true' && matrix.signing == 'windows'
