@@ -40,6 +40,15 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Changed
 
+- Replaced the generic "Considering next steps" status with the request's real
+  phase (connecting, waiting for the first token, receiving, waiting on the
+  gateway, or retrying) and its elapsed time, so a stalled turn is visible as
+  such.
+- Showed the live context size in the session header with a warning once the
+  conversation passes `compaction.warn_tokens` (default 120000), a one-click
+  "Compact now" notice above the composer, and Customize → General rows for
+  the auto-compact threshold and the warning threshold, backed by
+  `/settings/preferences`.
 - Made the workspace event stream non-blocking: each browser connection drains
   its own bounded queue, so a stalled tab can no longer back-pressure the agent
   loop, and per-request and per-event logging moved to debug.
@@ -108,6 +117,18 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Fixed
 
+- Made title and summary generation single-flight with a bounded number of
+  attempts per message, so a slow first turn no longer fans out into duplicate
+  title requests.
+- Stopped retrying managed gateway conflicts in a loop: idempotency keys are
+  scoped to the request attempt, a stream the gateway already sealed ends the
+  attempt and is re-dispatched exactly once under a fresh key, and an unknown
+  provider outcome is never sent again.
+- Attributed request timing logs to the model named in the request body and
+  the agent that issued it, instead of whichever model first created the
+  shared SDK instance.
+- Logged a duplicate-skill warning once per process per pair instead of on
+  every catalog rebuild.
 - Made the batch tool honor the same tool gating and plugin hooks as direct
   calls, so a child session or a config-disabled tool cannot be reached by
   batching.

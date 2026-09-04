@@ -8,6 +8,7 @@ import { SessionSummary } from "./summary"
 import { Bus } from "@/bus"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
+import { SessionTelemetry } from "./telemetry"
 import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
 import { LLM } from "./llm"
@@ -169,6 +170,14 @@ export namespace SessionProcessor {
       if (toolStarted) return { type: "drain" as const, message }
       return { type: "retry-idle" as const, message }
     }
+    // The gateway sealed this attempt before any output reached the client;
+    // the next attempt number yields a fresh idempotency key, so one
+    // re-dispatch is safe. It is never part of the transient retry budget.
+    const redispatch = SessionRetry.redispatchable(normalized)
+    if (redispatch !== undefined) {
+      if (toolStarted) return { type: "drain" as const, message: redispatch }
+      return { type: "redispatch" as const, message: redispatch }
+    }
     const message = retryableProviderError(error, normalized)
     if (message === undefined) return { type: "terminal" as const }
     if (toolStarted) return { type: "drain" as const, message }
@@ -179,15 +188,21 @@ export namespace SessionProcessor {
     attempt: number
     transientRetries: number
     idleRetryUsed: boolean
+    redispatchUsed: boolean
   }
 
-  /** Keep the one safe idle replay independent from ordinary transport
-   * retries. A preceding ECONNRESET must not silently consume the only replay
-   * available for a later, side-effect-free idle expiry. */
+  /** Keep the one safe idle replay and the one managed re-dispatch independent
+   * from ordinary transport retries. A preceding ECONNRESET must not silently
+   * consume the only replay available for a later, side-effect-free idle
+   * expiry, and a sealed gateway attempt is re-dispatched exactly once. */
   export function consumeProviderRetry(
-    type: "retry" | "retry-idle",
+    type: "retry" | "retry-idle" | "redispatch",
     state: ProviderRetryState,
   ): ProviderRetryState | undefined {
+    if (type === "redispatch") {
+      if (state.redispatchUsed) return
+      return { ...state, attempt: state.attempt + 1, redispatchUsed: true }
+    }
     if (type === "retry-idle") {
       if (state.idleRetryUsed) return
       return { ...state, attempt: state.attempt + 1, idleRetryUsed: true }
@@ -514,6 +529,7 @@ export namespace SessionProcessor {
     let attempt = 0
     let transientRetries = 0
     let idleRetryUsed = false
+    let redispatchUsed = false
     let needsCompaction = false
     let overflow = false
 
@@ -564,6 +580,16 @@ export namespace SessionProcessor {
         const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
         shouldBreakOnDeny = shouldBreak
         let traceRoute = "custom"
+        const progress = (phase: SessionTelemetry.RequestPhase) =>
+          SessionTelemetry.recordProgress({
+            sessionID: input.sessionID,
+            messageID: input.assistantMessage.id,
+            attempt: attempt + 1,
+            agent: input.assistantMessage.agent,
+            providerID: input.model.providerID,
+            modelID: input.model.id,
+            phase,
+          })
         while (true) {
           try {
             traceRoute = accessRoute(credentialSource, input.model)
@@ -592,6 +618,8 @@ export namespace SessionProcessor {
               sessionID: input.sessionID,
               messageID: input.assistantMessage.id,
               attempt: attempt + 1,
+              agent: streamInput.agent.name,
+              modelID: input.model.id,
               ...(credentialSource === "managed" && funding ? { funding } : {}),
             }
             // The conversation-first Research agent does not create or require
@@ -627,11 +655,13 @@ export namespace SessionProcessor {
                   ],
                 }
               : streamInput
+            progress("connecting")
             const stream = await Provider.withRequestContext(requestContext, () =>
               LLM.stream({
                 ...request,
                 route: traceRoute,
                 trace: { messageID: input.assistantMessage.id, attempt: attempt + 1 },
+                onResponse: () => progress("waiting_first_token"),
                 onReasoningEffortResolved: async (effort) => {
                   if (input.assistantMessage.reasoningEffort === effort) return
                   input.assistantMessage.reasoningEffort = effort
@@ -644,6 +674,16 @@ export namespace SessionProcessor {
 
             for await (const value of Provider.withRequestContextIterable(requestContext, stream.fullStream)) {
               input.abort.throwIfAborted()
+              // First content is the honest first-output timestamp. A role-only
+              // delta or an SSE keepalive comment never reaches this branch, and
+              // the record ignores the repeat on every later delta.
+              if (
+                ((value.type === "text-delta" || value.type === "reasoning-delta") && value.text.length > 0) ||
+                value.type === "tool-input-start" ||
+                value.type === "tool-call"
+              ) {
+                progress("streaming")
+              }
               switch (value.type) {
                 case "start":
                   SessionStatus.set(input.sessionID, { type: input.busyStatus ?? "busy" })
@@ -965,14 +1005,23 @@ export namespace SessionProcessor {
               // terminal, actionable outcome; other transient failures retain
               // the existing retry policy.
               const action = providerFailureAction(e, error, toolOutcomes.started())
-              if (action.type === "retry" || action.type === "retry-idle") {
-                const retry = consumeProviderRetry(action.type, { attempt, transientRetries, idleRetryUsed })
+              if (action.type === "retry" || action.type === "retry-idle" || action.type === "redispatch") {
+                const retry = consumeProviderRetry(action.type, {
+                  attempt,
+                  transientRetries,
+                  idleRetryUsed,
+                  redispatchUsed,
+                })
                 if (retry) {
                   attempt = retry.attempt
                   transientRetries = retry.transientRetries
                   idleRetryUsed = retry.idleRetryUsed
+                  redispatchUsed = retry.redispatchUsed
+                  // An idle replay and a sealed-attempt re-dispatch go out at
+                  // once: nothing is rate-limiting them and the new attempt
+                  // number already makes the request distinct.
                   const delay =
-                    action.type === "retry-idle"
+                    action.type === "retry-idle" || action.type === "redispatch"
                       ? 0
                       : SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
                   if (action.type === "retry-idle") {
@@ -1085,6 +1134,7 @@ export namespace SessionProcessor {
           }
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
+          progress(input.assistantMessage.error ? "error" : "done")
           if (overflow) return "overflow"
           if (needsCompaction) return "compact"
           if (blocked) return "stop"

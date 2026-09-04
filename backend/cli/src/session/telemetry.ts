@@ -1,6 +1,7 @@
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
 import { Log } from "@/util/log"
+import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
 import z from "zod"
 
@@ -25,6 +26,70 @@ export namespace SessionTelemetry {
   }
   const latest = new Map<string, ContextSnapshot>()
   const LATEST_LIMIT = 256
+
+  export const RequestPhase = z.enum([
+    "connecting",
+    "waiting_first_token",
+    "streaming",
+    "conflict_wait",
+    "retry_wait",
+    "done",
+    "error",
+  ])
+  export type RequestPhase = z.infer<typeof RequestPhase>
+
+  // Live phase of the provider request behind one assistant message. `since` is
+  // when the current phase began; `elapsedMs` is how long the attempt had been
+  // running at that moment, so a client can render a skew-free elapsed clock as
+  // `elapsedMs + (now - since)`. `firstOutputMs` and `stalls` accumulate across
+  // the message so a later trace can show time-to-first-output.
+  export const RequestProgress = z
+    .object({
+      sessionID: z.string(),
+      messageID: z.string(),
+      attempt: z.number(),
+      agent: z.string(),
+      providerID: z.string(),
+      modelID: z.string(),
+      phase: RequestPhase,
+      since: z.number(),
+      elapsedMs: z.number(),
+      retryAfterMs: z.number().optional(),
+      detail: z.string().optional(),
+      firstOutputMs: z.number().optional(),
+      stalls: z.number(),
+    })
+    .meta({ ref: "SessionRequestProgress" })
+  export type RequestProgress = z.infer<typeof RequestProgress>
+
+  const requests = new Map<string, RequestProgress & { started: number }>()
+
+  // A managed-gateway conflict is waited out inside the provider fetch, below
+  // the processor, so it reaches the request record through the provider's
+  // timing hook. The hook is attached on the first recorded phase rather than
+  // at module load: provider -> plugin -> session imports this module, so at
+  // load time the Provider namespace may not be initialised yet.
+  let hooked = false
+  function hook() {
+    if (hooked) return
+    hooked = true
+    Provider.onTiming((timing) => {
+      if (timing.outcome !== "conflict_wait" || !timing.conflict) return
+      // Only the message that is currently in flight for the session is
+      // attributable; a background title request waiting on the gateway must
+      // not replace the visible turn's phase.
+      const current = requests.get(timing.sessionID)
+      if (!current || current.messageID !== timing.messageID) return
+      recordProgress({
+        sessionID: timing.sessionID,
+        messageID: timing.messageID,
+        attempt: timing.attempt,
+        phase: "conflict_wait",
+        retryAfterMs: timing.conflict.delayMs,
+        detail: timing.conflict.code,
+      })
+    })
+  }
 
   export const Event = {
     // Per-turn breakdown of the working context by content type, emitted right before the
@@ -70,6 +135,11 @@ export namespace SessionTelemetry {
         reclaimed: z.number(),
       }),
     ),
+    // Request-phase telemetry for the status line: connecting -> waiting for
+    // the first token -> streaming, plus gateway-conflict and retry waits.
+    // "streaming" is set by the processor on the first content delta, not on
+    // the first body chunk, because a keepalive comment is not output.
+    Progress: BusEvent.define("session.request.progress", RequestProgress),
   }
 
   export function recordContext(input: {
@@ -117,6 +187,90 @@ export namespace SessionTelemetry {
   /** Last exact safe-input preflight recorded immediately before a provider call. */
   export function context(sessionID: string) {
     return latest.get(sessionID)
+  }
+
+  /** Publish a request-phase transition. Identity fields omitted by the caller
+   * are inherited from the session's current record, so a layer that only knows
+   * the session (the retry status, a provider fetch hook) can still report a
+   * phase. A repeat of the same phase for the same attempt is a no-op. */
+  export function recordProgress(input: {
+    sessionID: string
+    messageID: string
+    attempt: number
+    phase: RequestPhase
+    agent?: string
+    providerID?: string
+    modelID?: string
+    retryAfterMs?: number
+    detail?: string
+  }) {
+    hook()
+    const prior = requests.get(input.sessionID)
+    const same = prior?.messageID === input.messageID ? prior : undefined
+    // Cheap enough to call on every stream delta: a repeat returns before the
+    // clock is read.
+    if (same && same.phase === input.phase && same.attempt === input.attempt) return same
+    const now = Date.now()
+    const started = input.phase === "connecting" || !same ? now : same.started
+    const stall = input.phase === "conflict_wait" || input.phase === "retry_wait" ? 1 : 0
+    const elapsedMs = now - started
+    const first = same?.firstOutputMs ?? (input.phase === "streaming" ? elapsedMs : undefined)
+    const item = {
+      sessionID: input.sessionID,
+      messageID: input.messageID,
+      attempt: input.attempt,
+      agent: input.agent ?? same?.agent ?? "unknown",
+      providerID: input.providerID ?? same?.providerID ?? "unknown",
+      modelID: input.modelID ?? same?.modelID ?? "unknown",
+      phase: input.phase,
+      since: now,
+      elapsedMs,
+      ...(input.retryAfterMs !== undefined && { retryAfterMs: Math.max(0, input.retryAfterMs) }),
+      ...(input.detail && { detail: input.detail }),
+      ...(first !== undefined && { firstOutputMs: first }),
+      stalls: (same?.stalls ?? 0) + stall,
+    } satisfies RequestProgress
+    if (!prior) trim()
+    // Delete first so the map is ordered by last update rather than first
+    // insertion: a long-lived session is never the eviction candidate just
+    // because it started before 256 newer ones.
+    requests.delete(input.sessionID)
+    requests.set(input.sessionID, { ...item, started })
+    log.debug("request progress", {
+      sessionID: item.sessionID,
+      messageID: item.messageID,
+      attempt: item.attempt,
+      phase: item.phase,
+      elapsedMs: item.elapsedMs,
+      retryAfterMs: item.retryAfterMs,
+      firstOutputMs: item.firstOutputMs,
+      stalls: item.stalls,
+    })
+    void Bus.publish(Event.Progress, item).catch((error) =>
+      log.debug("request progress publish failed", { error: `${error}` }),
+    )
+    return item
+  }
+
+  /** Make room for one more request record: a finished request goes first,
+   * then the least recently updated one. */
+  function trim() {
+    if (requests.size < LATEST_LIMIT) return
+    for (const [key, item] of requests) {
+      if (item.phase !== "done" && item.phase !== "error") continue
+      requests.delete(key)
+      return
+    }
+    const oldest = requests.keys().next()
+    if (!oldest.done) requests.delete(oldest.value)
+  }
+
+  /** Latest request-phase record for a session, including time-to-first-output. */
+  export function progress(sessionID: string): RequestProgress | undefined {
+    const item = requests.get(sessionID)
+    if (!item) return
+    const { started: _, ...rest } = item
+    return rest
   }
 
   export function recordCompaction(input: {

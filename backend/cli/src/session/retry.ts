@@ -147,7 +147,10 @@ export namespace SessionRetry {
           (typeof json.code === "number" ? json.code : undefined),
       )
       if (!statusCode && Number.isFinite(nestedStatus)) statusCode = nestedStatus
-      code = asString(err.code) || asString(json.code) || code
+      // The managed gateway's idempotency guard answers with a bare
+      // {"error":"operation_in_progress"} token rather than an error object.
+      const token = typeof json.error === "string" && /^[a-z0-9_]+$/.test(json.error) ? json.error : ""
+      code = asString(err.code) || asString(json.code) || token || code
       type =
         asString(err.type) ||
         asString(json.type) ||
@@ -183,12 +186,44 @@ export namespace SessionRetry {
     return false
   }
 
+  // Managed idempotency verdicts the gateway answers identically for this key.
+  // The provider fetch wrapper already waited out a live original request, so a
+  // step-level redispatch of the same body can only reproduce the verdict.
+  const MANAGED_TERMINAL_CODES = new Set([
+    "managed_outcome_unknown",
+    "managed_conflict_timeout",
+    "operation_in_progress",
+    "idempotency_conflict",
+    "idempotent_stream_already_started",
+    "idempotent_response_not_replayable",
+  ])
+
+  // The gateway already dispatched this attempt's body once and cannot replay
+  // its output (a sealed stream: 409 with the replay header from older
+  // gateways, 410 from current ones). The attempt is over, but the next attempt
+  // carries a fresh idempotency key, so one session-level re-dispatch is safe.
+  // managed_outcome_unknown is deliberately absent: the provider may have
+  // accepted that body, so it is never sent again.
+  const MANAGED_REDISPATCH_CODES = new Set(["idempotent_stream_already_started", "idempotent_response_not_replayable"])
+  export const MANAGED_REDISPATCH_MESSAGE =
+    "The gateway already dispatched this attempt and its output is no longer available; re-dispatching once."
+
+  /** Status message for a managed verdict that earns exactly one re-dispatch
+   * under the next attempt number; undefined for every other error. Kept
+   * apart from `retryable` so the ordinary transient loop can never pick it
+   * up: the processor consumes it once and then stops. */
+  export function redispatchable(error: ReturnType<NamedError["toObject"]>) {
+    const { code } = normalizeProviderError(error)
+    return MANAGED_REDISPATCH_CODES.has(code) ? MANAGED_REDISPATCH_MESSAGE : undefined
+  }
+
   export function retryable(error: ReturnType<NamedError["toObject"]>) {
     if (isContextOverflow(error)) return undefined
     const normalized = normalizeProviderError(error)
-    // The gateway cannot prove whether the provider accepted this request.
-    // Never redispatch it, even if the SDK's generic classification allows it.
-    if (normalized.code === "managed_outcome_unknown") return undefined
+    // The gateway cannot prove whether the provider accepted this request, or
+    // has sealed its answer. Never redispatch it, even if the SDK's generic
+    // status-code classification allows it.
+    if (MANAGED_TERMINAL_CODES.has(normalized.code)) return undefined
     if (MessageV2.APIError.isInstance(error)) {
       if (!error.data.isRetryable) return undefined
       return error.data.message.includes("Overloaded") ? "Provider is overloaded" : error.data.message
