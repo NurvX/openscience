@@ -174,6 +174,10 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Fixed
 
+- `openscience <directory>` and `openscience web <directory>` open the workspace
+  in that directory again. The project argument was declared only on the
+  default-command alias, which yargs ignores, so every directory argument was
+  rejected with the usage text.
 - Renewed synchronized workspace credentials every 90 seconds instead of every
   4 minutes against their 5-minute grant, and retried a failed refresh with
   short backoff (5 s, 15 s, 30 s) inside that grant, logging the HTTP status
