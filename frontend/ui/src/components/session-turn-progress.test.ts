@@ -67,6 +67,26 @@ describe("request phase status copy", () => {
     expect(progressStatus(at("error"), since + 10)).toBeUndefined()
   })
 
+  test("preflight is distinct from dispatch and silence after output stays visible", () => {
+    expect(progressStatus(at("preparing"), since + 500)?.key).toBe("ui.sessionTurn.progress.preparing")
+    expect(progressStatus(at("preparing"), since + 35_000)).toEqual({
+      key: "ui.sessionTurn.progress.preparing",
+      params: { model: base.modelID, seconds: 35 },
+      hint: "ui.sessionTurn.progress.preparingHint",
+    })
+    const receiving = at("streaming", { lastOutputAt: since + 1_000 })
+    expect(progressStatus(receiving, since + 30_999)?.key).toBe("ui.sessionTurn.progress.streaming")
+    expect(progressStatus(receiving, since + 1_141_000)).toEqual({
+      key: "ui.sessionTurn.progress.stalled",
+      params: { model: base.modelID, seconds: 1140 },
+      hint: "ui.sessionTurn.progress.stalledHint",
+    })
+    expect(progressStatus({ ...receiving, lastOutputAt: since + 1_141_000 }, since + 1_141_001)?.key).toBe(
+      "ui.sessionTurn.progress.streaming",
+    )
+    expect(progressStatus(at("streaming"), since + 1_141_000)?.key).toBe("ui.sessionTurn.progress.streaming")
+  })
+
   test("the still-open hint appears only after 30 s without a response", () => {
     for (const phase of ["connecting", "waiting_first_token"] as const) {
       const early = progressStatus(at(phase), since + PROGRESS_HINT_MS - 1)
@@ -113,8 +133,4 @@ describe("request phase status copy", () => {
       }
     }
   })
-})
-
-describe("session turn wiring", () => {
-  const source = Bun.file(new URL("./session-turn.tsx", import.meta.url)).text()
 })

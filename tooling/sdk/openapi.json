@@ -473,6 +473,22 @@
                     "session": {
                       "type": "boolean"
                     },
+                    "refreshing": {
+                      "type": "boolean"
+                    },
+                    "refreshed_at": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
                     "user": {},
                     "balance_usd": {
                       "anyOf": [
@@ -631,6 +647,8 @@
                   },
                   "required": [
                     "session",
+                    "refreshing",
+                    "refreshed_at",
                     "balance_usd",
                     "billing_mode",
                     "funding_context",
@@ -23519,6 +23537,22 @@
                           "createdAt"
                         ]
                       }
+                    },
+                    "refreshing": {
+                      "type": "boolean"
+                    },
+                    "refreshedAt": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -23530,7 +23564,9 @@
                     "aceEnabled",
                     "aceContract",
                     "lifetimeSpentUsd",
-                    "transactions"
+                    "transactions",
+                    "refreshing",
+                    "refreshedAt"
                   ]
                 }
               }
@@ -52280,6 +52316,30 @@
           "properties"
         ]
       },
+      "Event.account.updated": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "account.updated"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "refreshed_at": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "refreshed_at"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ]
+      },
       "Event.lsp.client.diagnostics": {
         "type": "object",
         "properties": {
@@ -54700,6 +54760,7 @@
           "phase": {
             "type": "string",
             "enum": [
+              "preparing",
               "connecting",
               "waiting_first_token",
               "streaming",
@@ -54722,6 +54783,9 @@
             "type": "string"
           },
           "firstOutputMs": {
+            "type": "number"
+          },
+          "lastOutputAt": {
             "type": "number"
           },
           "stalls": {
@@ -55975,6 +56039,9 @@
             "$ref": "#/components/schemas/Event.project.trust.changed"
           },
           {
+            "$ref": "#/components/schemas/Event.account.updated"
+          },
+          {
             "$ref": "#/components/schemas/Event.lsp.client.diagnostics"
           },
           {
@@ -57222,7 +57289,7 @@
                 "type": "boolean"
               },
               "timeout": {
-                "description": "Optional total wall-clock timeout in milliseconds for a provider request. No total timeout is applied by default. Use idleTimeout to bound silent connections without cutting off active generations.",
+                "description": "Optional total wall-clock timeout in milliseconds for a provider request. No total timeout is applied by default. Use connectTimeout, idleTimeout, and outputIdleTimeout to bound stalled requests without capping active generations.",
                 "anyOf": [
                   {
                     "description": "Optional total wall-clock timeout in milliseconds for a provider request. No total timeout is applied by default; active long-running generations are allowed to finish.",
@@ -57238,16 +57305,44 @@
                 ]
               },
               "idleTimeout": {
-                "description": "Optional maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Disabled by default; when configured it resets on each body chunk and does not cap total generation time.",
+                "description": "Maximum provider response-body inactivity in milliseconds. Defaults to 300000 (5 minutes). Set false to disable; this does not cap total generation time.",
                 "anyOf": [
                   {
-                    "description": "Optional maximum provider inactivity in milliseconds while connecting or waiting for the next response-body chunk. Disabled by default and resets on every body chunk when configured.",
+                    "description": "Maximum provider response-body inactivity in milliseconds. Defaults to 300000 (5 minutes); resets on every body chunk, including keepalives.",
                     "type": "integer",
                     "exclusiveMinimum": 0,
                     "maximum": 2147483647
                   },
                   {
                     "description": "Disable the provider inactivity watchdog.",
+                    "type": "boolean",
+                    "const": false
+                  }
+                ]
+              },
+              "connectTimeout": {
+                "description": "Maximum wait for provider response headers in milliseconds, including connection setup and upstream admission. Defaults to 120000 (2 minutes). Set false to disable.",
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 2147483647
+                  },
+                  {
+                    "type": "boolean",
+                    "const": false
+                  }
+                ]
+              },
+              "outputIdleTimeout": {
+                "description": "Maximum wait for new readable model output or tool-call activity in milliseconds. Defaults to 600000 (10 minutes); transport keepalives do not reset it. Suspended during tool execution and local processing. Set false to disable.",
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 2147483647
+                  },
+                  {
                     "type": "boolean",
                     "const": false
                   }

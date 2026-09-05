@@ -32,6 +32,7 @@ import { ProjectAccess } from "@/project/access"
 import { Instance } from "@/project/instance"
 import { CredentialRevocation } from "@/credentials/revocation"
 import { abortedToolPart } from "./tool-outcome"
+import { outputWatchdog, watchOutput } from "./output-watchdog"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -41,6 +42,20 @@ export namespace SessionProcessor {
   // provider (or a permanent error arriving as JSON) looped forever.
   const MAX_RETRY_ATTEMPTS = 10
   const log = Log.create({ service: "session.processor" })
+
+  /** Provider reasoning can contain a private-payload placeholder, including
+   * split across deltas. Only text that can be shown counts as output. */
+  export function readableReasoning(text: string, delta: string) {
+    const marker = "[REDACTED]"
+    const tail = text.slice(-(marker.length - 1))
+    const start = tail.lastIndexOf("[")
+    const pending = start >= 0 && marker.startsWith(tail.slice(start)) ? tail.slice(start) : ""
+    // Inspect only a possible split marker and the new delta; rescanning a
+    // growing reasoning block for every token would itself add latency.
+    const clean = (pending + delta).replaceAll(marker, "")
+    const end = clean.lastIndexOf("[")
+    return (end >= 0 && marker.startsWith(clean.slice(end)) ? clean.slice(0, end) : clean).trim().length > 0
+  }
 
   export function managedPauseError(message: string) {
     return new MessageV2.APIError({
@@ -158,11 +173,10 @@ export namespace SessionProcessor {
     return sharedPrefixLen(last[0], last[1]) >= prefix && sharedPrefixLen(last[1], last[2]) >= prefix
   }
 
-  /** An explicitly configured provider inactivity deadline is already bounded
-   * and actionable. Retrying it repeatedly at the same deadline would turn one
-   * failure into a long cascade. */
+  /** No tool execution does not mean no inference charge. A timed-out model
+   * request has an unknown upstream outcome and must never replay itself. */
   export function retryableProviderError(error: unknown, normalized: ReturnType<NamedError["toObject"]>) {
-    return Provider.isIdleTimeoutError(error) ? undefined : SessionRetry.retryable(normalized)
+    return Provider.isRequestTimeoutError(error) ? undefined : SessionRetry.retryable(normalized)
   }
 
   export function providerFailureAction(
@@ -170,11 +184,7 @@ export namespace SessionProcessor {
     normalized: ReturnType<NamedError["toObject"]>,
     toolStarted: boolean,
   ) {
-    if (Provider.isIdleTimeoutError(error)) {
-      const message = error instanceof Error ? error.message : "Provider request became idle"
-      if (toolStarted) return { type: "drain" as const, message }
-      return { type: "retry-idle" as const, message }
-    }
+    if (Provider.isRequestTimeoutError(error)) return { type: "terminal" as const }
     const message = retryableProviderError(error, normalized)
     if (message === undefined) return { type: "terminal" as const }
     if (toolStarted) return { type: "drain" as const, message }
@@ -184,24 +194,27 @@ export namespace SessionProcessor {
   export type ProviderRetryState = {
     attempt: number
     transientRetries: number
-    idleRetryUsed: boolean
   }
 
-  /** Keep the one safe idle replay independent from ordinary transport
-   * retries. A preceding ECONNRESET must not silently consume the only replay
-   * available for a later, side-effect-free idle expiry. */
-  export function consumeProviderRetry(
-    type: "retry" | "retry-idle",
-    state: ProviderRetryState,
-  ): ProviderRetryState | undefined {
-    if (type === "retry-idle") {
-      if (state.idleRetryUsed) return
-      return { ...state, attempt: state.attempt + 1, idleRetryUsed: true }
-    }
-    if (type === "retry") {
-      if (state.transientRetries >= MAX_RETRY_ATTEMPTS) return
-      return { ...state, attempt: state.attempt + 1, transientRetries: state.transientRetries + 1 }
-    }
+  export function consumeProviderRetry(state: ProviderRetryState): ProviderRetryState | undefined {
+    if (state.transientRetries >= MAX_RETRY_ATTEMPTS) return
+    return { ...state, attempt: state.attempt + 1, transientRetries: state.transientRetries + 1 }
+  }
+
+  export function timeoutError(error: unknown) {
+    const timeout = Provider.requestTimeout(error)
+    if (!timeout) return
+    return new MessageV2.APIError({
+      message: `${timeout.message} Partial output and completed tool results are kept. OpenScience stopped waiting and did not retry automatically. The provider may still bill this request; resubmitting starts a new request.`,
+      isRetryable: false,
+      metadata: {
+        code: "provider_request_timeout",
+        openscience_state: "stopped",
+        dispatch_state: "outcome_unknown",
+        action: "resubmit",
+        phase: timeout.phase,
+      },
+    }).toObject()
   }
 
   /** File snapshots protect tool side effects. A model that cannot call any
@@ -272,6 +285,7 @@ export namespace SessionProcessor {
     abort: AbortSignal
     updatePart: (part: MessageV2.ToolPart) => Promise<unknown>
     onRejected?: (error: unknown) => void
+    onActive?: (active: boolean) => void
   }) {
     const toolcalls: Record<string, MessageV2.ToolPart> = {}
     const outcomes = new Map<
@@ -468,13 +482,18 @@ export namespace SessionProcessor {
           () => undefined,
         )
         active.set(callID, drained)
+        input.onActive?.(true)
         void drained.finally(() => {
           if (active.get(callID) === drained) active.delete(callID)
+          input.onActive?.(active.size > 0)
         })
         return execution
       },
       started() {
         return executions.size > 0
+      },
+      active() {
+        return active.size > 0
       },
       async drain() {
         const pending = [...active.values()]
@@ -519,13 +538,14 @@ export namespace SessionProcessor {
     let shouldBreakOnDeny = true
     let attempt = 0
     let transientRetries = 0
-    let idleRetryUsed = false
+    let output: ReturnType<typeof outputWatchdog> | undefined
     let needsCompaction = false
     let overflow = false
 
     const toolOutcomes = createToolOutcomeCoordinator({
       abort: input.abort,
       updatePart: Session.updatePart,
+      onActive: (active) => output?.pause(active),
       onRejected(error) {
         if (error instanceof InvalidCall.RepeatedError) {
           blocked = true
@@ -558,18 +578,6 @@ export namespace SessionProcessor {
       },
       async process(streamInput: LLM.StreamInput) {
         log.info("process")
-        // Resolve the transport before touching Atlas. BYOK and subscription
-        // turns must stay independent from an unrelated saved Ace session.
-        const credentialSource = await resolveCredentialSource(input.model.providerID, input.model.id)
-        // One immutable funding choice spans preflight and every retry/step in
-        // this provider operation. A settings change applies to the next turn.
-        const funding = await fundingSnapshot(credentialSource)
-        const tracking = tracks({ tools: streamInput.tools, toolcall: input.model.capabilities.toolcall })
-        needsCompaction = false
-        overflow = false
-        const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
-        shouldBreakOnDeny = shouldBreak
-        let traceRoute = "custom"
         const progress = (phase: SessionTelemetry.RequestPhase) =>
           SessionTelemetry.recordProgress({
             sessionID: input.sessionID,
@@ -580,8 +588,32 @@ export namespace SessionProcessor {
             modelID: input.model.id,
             phase,
           })
+        progress("preparing")
+        const prepared = await (async () => {
+          // Resolve the transport before touching Atlas. BYOK and subscription
+          // turns stay independent from an unrelated saved Ace session.
+          const source = await resolveCredentialSource(input.model.providerID, input.model.id)
+          // One immutable funding choice spans preflight and every retry/step.
+          const funding = await fundingSnapshot(source)
+          const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
+          return { source, funding, shouldBreak }
+        })().catch((error) => {
+          progress("error")
+          throw error
+        })
+        const credentialSource = prepared.source
+        const funding = prepared.funding
+        const tracking = tracks({ tools: streamInput.tools, toolcall: input.model.capabilities.toolcall })
+        needsCompaction = false
+        overflow = false
+        shouldBreakOnDeny = prepared.shouldBreak
+        let traceRoute = "custom"
         while (true) {
+          // This signal cancels only the provider transport. Tools already
+          // executing retain their original user-controlled abort signal.
+          const transport = new AbortController()
           try {
+            progress("preparing")
             traceRoute = accessRoute(credentialSource, input.model)
 
             if (requiresWalletBalance(credentialSource)) {
@@ -604,12 +636,26 @@ export namespace SessionProcessor {
               }
             }
 
+            const provider = await Provider.getProvider(input.model.providerID)
+            const deadline = Provider.resolveOutputIdleTimeout(provider.options.outputIdleTimeout)
+            output = outputWatchdog({
+              timeout: deadline,
+              signal: input.abort,
+              expire: () => new Provider.RequestTimeoutError("output", deadline || 0),
+              onTimeout: (error) => transport.abort(error),
+            })
+            output.pause(toolOutcomes.active())
             const requestContext = {
               sessionID: input.sessionID,
               messageID: input.assistantMessage.id,
               attempt: attempt + 1,
               agent: streamInput.agent.name,
               modelID: input.model.id,
+              abort: transport.signal,
+              onRequest: () => {
+                output?.start()
+                progress("connecting")
+              },
               ...(credentialSource === "managed" && funding ? { funding } : {}),
             }
             // The conversation-first Research agent does not create or require
@@ -645,7 +691,6 @@ export namespace SessionProcessor {
                   ],
                 }
               : streamInput
-            progress("connecting")
             const stream = await Provider.withRequestContext(requestContext, () =>
               LLM.stream({
                 ...request,
@@ -662,16 +707,22 @@ export namespace SessionProcessor {
             let currentText: MessageV2.TextPart | undefined
             let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}
 
-            for await (const value of Provider.withRequestContextIterable(requestContext, stream.fullStream)) {
+            for await (const value of watchOutput(
+              output,
+              Provider.withRequestContextIterable(requestContext, stream.fullStream),
+            )) {
               input.abort.throwIfAborted()
               // First content is the honest first-output timestamp. A role-only
               // delta or an SSE keepalive comment never reaches this branch, and
-              // the record ignores the repeat on every later delta.
+              // later content refreshes the throttled activity timestamp.
               if (
-                ((value.type === "text-delta" || value.type === "reasoning-delta") && value.text.length > 0) ||
-                value.type === "tool-input-start" ||
+                (value.type === "text-delta" && value.text.trim().length > 0) ||
+                (value.type === "reasoning-delta" &&
+                  readableReasoning(reasoningMap[value.id]?.text ?? "", value.text)) ||
+                (value.type === "tool-input-delta" && value.delta.trim().length > 0) ||
                 value.type === "tool-call"
               ) {
+                output.progress()
                 progress("streaming")
               }
               switch (value.type) {
@@ -958,6 +1009,7 @@ export namespace SessionProcessor {
               }
               if (needsCompaction || overflow) break
             }
+            transport.signal.throwIfAborted()
 
             const filtered = emptyContentFilterError(
               input.assistantMessage.finish,
@@ -976,13 +1028,13 @@ export namespace SessionProcessor {
             // on the controller. Record that cause, not the SDK's generic
             // "operation was aborted", but only when `e` is that abort: an
             // unrelated failure thrown after the abort keeps its own identity.
-            const cause = CredentialRevocation.cancelled(e, input.abort) ?? e
+            const cause = CredentialRevocation.cancelled(e, input.abort) ?? transport.signal.reason ?? e
             log.error("process", {
               error: cause,
               ...(cause !== e ? { thrown: e } : {}),
               stack: JSON.stringify(e.stack),
             })
-            const error = MessageV2.fromError(cause, { providerID: input.model.providerID })
+            const error = timeoutError(cause) ?? MessageV2.fromError(cause, { providerID: input.model.providerID })
             // A context-window overflow is deterministic — retrying the same
             // oversized input can only fail again. Signal the outer loop (via the
             // "overflow" return below) to compact + resume instead of burning
@@ -1000,57 +1052,16 @@ export namespace SessionProcessor {
               // recreates the original 50-minute failure. Idle expiry is a
               // terminal, actionable outcome; other transient failures retain
               // the existing retry policy.
-              const action = providerFailureAction(e, error, toolOutcomes.started())
-              if (action.type === "retry" || action.type === "retry-idle") {
-                const retry = consumeProviderRetry(action.type, {
+              const action = providerFailureAction(cause, error, toolOutcomes.started())
+              if (action.type === "retry") {
+                const retry = consumeProviderRetry({
                   attempt,
                   transientRetries,
-                  idleRetryUsed,
                 })
                 if (retry) {
                   attempt = retry.attempt
                   transientRetries = retry.transientRetries
-                  idleRetryUsed = retry.idleRetryUsed
-                  // An idle replay goes out at once: nothing is rate-limiting it.
-                  const delay =
-                    action.type === "retry-idle"
-                      ? 0
-                      : SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
-                  if (action.type === "retry-idle") {
-                    // Nothing crossed the tool-execution boundary, so replay is
-                    // safe. Retire partial provider output before retrying and
-                    // persist an explicit boundary for crash recovery and audit.
-                    const parts = await MessageV2.parts(input.assistantMessage.id)
-                    for (const part of parts) {
-                      if (part.type === "text" && !part.synthetic && !part.ignored) {
-                        await Session.updatePart({ ...part, ignored: true, time: finishTime(part.time) })
-                        continue
-                      }
-                      if (part.type !== "tool" || part.state.status === "completed" || part.state.status === "error") {
-                        continue
-                      }
-                      await Session.updatePart({
-                        ...part,
-                        state: {
-                          ...part.state,
-                          status: "error",
-                          error: "Provider became idle before tool execution started; no action was taken.",
-                          time: finishTime("time" in part.state ? part.state.time : undefined),
-                        },
-                      })
-                      toolOutcomes.abandon(part.callID)
-                    }
-                    await Session.updatePart({
-                      id: Identifier.ascending("part"),
-                      messageID: input.assistantMessage.id,
-                      sessionID: input.sessionID,
-                      type: "text",
-                      synthetic: true,
-                      ignored: true,
-                      text: "Provider idle recovery boundary: partial output was retired before one automatic side-effect-free retry.",
-                      time: { start: Date.now(), end: Date.now() },
-                    } satisfies MessageV2.TextPart)
-                  }
+                  const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
                   await SessionTraceStore.recordRetry({
                     sessionID: input.sessionID,
                     messageID: input.assistantMessage.id,
@@ -1084,6 +1095,10 @@ export namespace SessionProcessor {
                 })
               }
             }
+          } finally {
+            output?.dispose()
+            output = undefined
+            transport.abort(new DOMException("Provider stream closed", "AbortError"))
           }
           // `fullStream` can close without a terminal tool-result even though
           // the SDK already started execute(). Do not publish a completed
@@ -1103,9 +1118,15 @@ export namespace SessionProcessor {
             }
             snapshot = undefined
           }
+          await Session.flushPendingParts(input.sessionID)
           const p = await MessageV2.parts(input.assistantMessage.id)
           const interruption = CredentialRevocation.interruption(input.abort.reason)
           for (const part of p) {
+            // A terminated stream may omit text/reasoning end events. Preserve
+            // the exact partial bytes, but stop every live duration clock.
+            if ((part.type === "reasoning" || part.type === "text") && part.time && !part.time.end) {
+              await Session.updatePart({ ...part, time: finishTime(part.time) })
+            }
             if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
               if (await toolOutcomes.reconcile(part)) continue
               await Session.updatePart(
